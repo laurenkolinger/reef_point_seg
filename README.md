@@ -7,7 +7,7 @@
 This is a pared-down, reproducible snapshot of the CVR-CLIP coral
 segmentation pipeline, organized for git version-control (code + configs)
 with data artifacts excluded. It is the staging ground for eventual
-integration as a VICARIUS module (`modules/cvr_clip_segmentation/`).
+integration as a VICARIUS module (`modules/reef_point_seg/`).
 
 ---
 
@@ -146,7 +146,7 @@ VICARIUS event stream (`/mnt/rip/vicarius_drive/vicarius/_logging/db/vicarius_ev
 Query with `vicarius story --days 1` or the SQLite views.
 
 `config/module.yaml` is the drop-in contract for the day this directory is
-copied under `vicarius/modules/cvr_clip_segmentation/github_repo/`.
+copied under `vicarius/modules/reef_point_seg/github_repo/`.
 
 Ten Commandments compliance:
 - **I** Raw data sacred: `supporting_data/TCRMP_CVR/` + Dropbox clips are never written to.

@@ -3,23 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Reef Point Seg</title>
-    <!-- VICARIUS-aligned typography: Inter body, Space Mono code,
-         Syne / Space Grotesk headings, Silkscreen wordmark accent only. -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Syne:wght@500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
+    <title>TCRMP Pipeline Orchestrator</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 
 <!-- ── Top Bar ──────────────────────────────────────────────── -->
 <div class="topbar">
-    <div style="display:flex;align-items:center;gap:12px">
-        <h1>REEF POINT SEG</h1>
-        <span style="font-family:'Space Mono',monospace;font-size:11px;color:var(--text-dim);letter-spacing:0.08em">
-            CVR -> CLIP -> SAM3 -> YOLO11
-        </span>
+    <div style="display:flex;align-items:center">
+        <h1>TCRMP CVR-CLIP Pipeline</h1>
         <span class="project-name" id="topbar-project-name"></span>
     </div>
     <div class="topbar-actions" id="topbar-actions" style="display:none">
@@ -31,8 +23,8 @@
 <!-- ── Setup Screen (no project loaded) ────────────────────── -->
 <div id="setup-screen" class="setup-container">
     <div class="logo">
-        <h1>REEF POINT SEG</h1>
-        <p>CVR &rarr; CLIP &rarr; SAM3 &rarr; YOLO11</p>
+        <h1>Pipeline Orchestrator</h1>
+        <p>TCRMP Coral Video Review &rarr; CLIP &rarr; Segmentation</p>
     </div>
 
     <!-- Resume banner (only shown when server already has a project loaded) -->
@@ -56,7 +48,7 @@
         </div>
         <div class="form-group">
             <label>Base Directory</label>
-            <input type="text" id="new-basedir" placeholder="/path/to/projects/" value="{{ projects_dir }}">
+            <input type="text" id="new-basedir" placeholder="/path/to/projects/" value="/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/projects">
         </div>
         <div class="btn-group">
             <button class="btn btn-magenta" onclick="createProject()">Create Project</button>
@@ -168,11 +160,11 @@
                 <p style="color:var(--text-dim);font-size:13px;margin-bottom:8px">Already have all_points.csv from a previous run? Paste the path to skip re-parsing.</p>
                 <div class="form-group">
                     <label>Existing all_points.csv</label>
-                    <input type="text" id="s1-existing-ap" placeholder="e.g. /path/to/all_points.csv" value="{{ all_points_csv }}">
+                    <input type="text" id="s1-existing-ap" placeholder="e.g. /path/to/all_points.csv" value="/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/projects/demo_try1/demo_20260415_70590d/step1_makeAllPoints/all_points_20260415.csv">
                 </div>
                 <div class="form-group">
                     <label>Existing master_codes.csv</label>
-                    <input type="text" id="s1-existing-mc" placeholder="e.g. /path/to/master_codes.csv" value="{{ master_codes_csv }}">
+                    <input type="text" id="s1-existing-mc" placeholder="e.g. /path/to/master_codes.csv" value="/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/projects/demo_try1/demo_20260415_70590d/step1_makeAllPoints/master_codes.csv">
                 </div>
                 <div class="btn-group">
                     <button class="btn btn-outline" onclick="linkExistingStep1()">Link Existing &amp; Skip to Step 2</button>
@@ -206,7 +198,7 @@
                     <label>Remap Log File</label>
                     <div style="display:flex;gap:8px">
                         <input type="text" id="s2-remap-path" style="flex:1"
-                            value=""
+                            value="/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/TCRMPcvr_recodeSpecies/output/remap_log_20260331_215126.json"
                             placeholder="Click Browse to find remap logs...">
                         <button class="btn btn-outline btn-sm" onclick="browseRemaps()">Browse</button>
                     </div>
@@ -564,7 +556,7 @@
                     </label>
                     <input type="text" id="s6-run-name" placeholder="leave blank for auto-timestamped">
                     <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
-                        Unit: string. Names the run folder under <code>runs/</code>. Blank -> auto-stamped
+                        Unit: string. Names the run folder under <code>runs/</code>. Blank → auto-stamped
                         <code>&lt;project_name&gt;_YYYYMMDD_HHMMSS</code>.
                     </div>
                 </div>
@@ -592,7 +584,7 @@
                             </optgroup>
                         </select>
                         <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
-                            Size n->x = ~4× more params, ~4× wall time. For ~hundreds of frames, m is the sweet spot.
+                            Size n→x = ~4× more params, ~4× wall time. For ~hundreds of frames, m is the sweet spot.
                             YOLO26 is newer/better in theory but has open ONNX/TensorRT export bugs as of 2026-04.
                         </div>
                     </div>
@@ -689,7 +681,7 @@
                         <div class="form-group">
                             <label>
                                 Device
-                                <span style="color:#f0a500;font-size:10px">★★ minor -> ★★★ major</span>
+                                <span style="color:#f0a500;font-size:10px">★★ minor → ★★★ major</span>
                             </label>
                             <select id="s6-device-preset" onchange="onStep6DeviceChange()">
                                 <option value="0" selected>Single GPU — cuda:0 (default)</option>
@@ -778,7 +770,7 @@
                                 <input type="number" id="s6-hsv-v" value="0.3" step="0.05" min="0" max="1">
                             </div>
                             <div class="form-group">
-                                <label>P(BGR<->RGB swap)<br><span style="font-size:10px;color:#666">range 0–1 · leave 0 unless mixing conventions</span></label>
+                                <label>P(BGR↔RGB swap)<br><span style="font-size:10px;color:#666">range 0–1 · leave 0 unless mixing conventions</span></label>
                                 <input type="number" id="s6-bgr" value="0.0" step="0.1" min="0" max="1">
                             </div>
                         </div>
@@ -1049,7 +1041,7 @@
                         <label>Confidence threshold</label>
                         <input type="number" id="s7-conf" value="0.25" step="0.05" min="0" max="1">
                         <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
-                            Drop predictions below this confidence. Lower -> more predictions
+                            Drop predictions below this confidence. Lower → more predictions
                             (higher recall, lower precision). <code>0.25</code> is the
                             ultralytics default.
                         </div>
@@ -1123,7 +1115,7 @@
                     <input type="text" id="s8-run-name" placeholder="leave blank for auto-timestamped">
                     <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
                         Output folder = <code>{step8_dir}/&lt;run_name&gt;_YYYYMMDD_HHMMSS/</code>.
-                        Blank -> <code>infer_YYYYMMDD_HHMMSS</code>.
+                        Blank → <code>infer_YYYYMMDD_HHMMSS</code>.
                     </div>
                 </div>
 

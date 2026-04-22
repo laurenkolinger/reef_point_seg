@@ -4,7 +4,7 @@ paths:
   scripts_dir: ${repo_root}/scripts
   config_dir: ${repo_root}/config
   supporting_data_dir: /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data
-  projects_dir: /mnt/rip/vicarius_drive/vicarius/modules/cvr_clip_segmentation/inprocess
+  projects_dir: /mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/inprocess
   unified_env_python: ${repo_root}/env/bin/python
   all_points_csv: /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/all_points.csv
   master_codes_csv: /mnt/rip/vicarius_drive/vicarius/_METADATA/library/definitions/tcrmp_species_codes.csv
@@ -55,7 +55,7 @@ preset_dirs:
 vicarius:
   enabled: true
   study_default: S1_historical
-  module_name: cvr_clip_segmentation
+  module_name: reef_point_seg
   event_prefix: orch
 step_defaults:
   '1':

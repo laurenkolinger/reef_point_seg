@@ -23,7 +23,7 @@ from orchestrator_config import PATHS, VICARIUS
 
 
 _log: Optional[Any] = None
-_MODULE: str = VICARIUS.get("module_name", "cvr_clip_segmentation")
+_MODULE: str = VICARIUS.get("module_name", "reef_point_seg")
 _STUDY: str = VICARIUS.get("study_default", "")
 _ENABLED: bool = bool(VICARIUS.get("enabled", False))
 

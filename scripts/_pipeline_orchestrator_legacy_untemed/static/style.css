@@ -1,0 +1,540 @@
+/* T-Mobile Magenta Dark Theme for Pipeline Orchestrator */
+
+:root {
+    --magenta: #E20074;
+    --magenta-dark: #B8005C;
+    --magenta-light: #FF2D9B;
+    --bg: #1a1a2e;
+    --surface: #16213e;
+    --surface-light: #1c2a4a;
+    --text: #e0e0e0;
+    --text-dim: #a0a0a0;
+    --success: #00c853;
+    --error: #ff5252;
+    --warning: #ffc107;
+    --input-bg: #0f3460;
+    --border: #333;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: 'Segoe UI', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+}
+
+/* ── Top Bar ──────────────────────────────────────────────── */
+
+.topbar {
+    background: linear-gradient(135deg, var(--magenta) 0%, var(--magenta-dark) 100%);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.topbar h1 {
+    font-size: 20px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: 0.5px;
+}
+
+.topbar .project-name {
+    font-size: 14px;
+    color: rgba(255,255,255,0.8);
+    margin-left: 16px;
+}
+
+.topbar-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* ── Layout ───────────────────────────────────────────────── */
+
+.app-container {
+    display: flex;
+    min-height: calc(100vh - 52px);
+}
+
+/* ── Sidebar (Step Navigation) ────────────────────────────── */
+
+.sidebar {
+    width: 260px;
+    min-width: 260px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 24px 16px;
+    display: none;
+}
+
+.sidebar.visible { display: block; }
+
+.step-nav {
+    list-style: none;
+}
+
+.step-nav li {
+    display: flex;
+    align-items: flex-start;
+    padding: 14px 12px;
+    margin-bottom: 4px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.2s;
+    position: relative;
+}
+
+.step-nav li:hover { background: var(--surface-light); }
+.step-nav li.active { background: var(--surface-light); }
+
+.step-circle {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 14px;
+    margin-right: 12px;
+    border: 2px solid var(--border);
+    color: var(--text-dim);
+    transition: all 0.3s;
+}
+
+.step-nav li.completed .step-circle {
+    background: var(--success);
+    border-color: var(--success);
+    color: #fff;
+}
+
+.step-nav li.active .step-circle,
+.step-nav li.pending .step-circle {
+    border-color: var(--magenta);
+    color: var(--magenta);
+}
+
+.step-nav li.running .step-circle {
+    border-color: var(--warning);
+    color: var(--warning);
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+.step-nav li.error .step-circle {
+    border-color: var(--error);
+    color: var(--error);
+}
+
+.step-nav li.locked .step-circle {
+    opacity: 0.4;
+}
+
+@keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255,193,7,0.4); }
+    50% { box-shadow: 0 0 0 8px rgba(255,193,7,0); }
+}
+
+.step-info {
+    flex: 1;
+}
+
+.step-info .step-title {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+
+.step-info .step-status {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* ── Main Panel ───────────────────────────────────────────── */
+
+.main-panel {
+    flex: 1;
+    padding: 32px;
+    max-width: 900px;
+}
+
+/* ── Cards ────────────────────────────────────────────────── */
+
+.card {
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+    border: 1px solid var(--border);
+}
+
+.card h2 {
+    font-size: 18px;
+    margin-bottom: 16px;
+    color: var(--magenta-light);
+}
+
+.card h3 {
+    font-size: 14px;
+    margin-bottom: 12px;
+    color: var(--text);
+}
+
+/* ── Forms ────────────────────────────────────────────────── */
+
+.form-group {
+    margin-bottom: 14px;
+}
+
+.form-group label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.form-group input[type="text"],
+.form-group input[type="number"],
+.form-group select {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 14px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    transition: border-color 0.2s;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+    outline: none;
+    border-color: var(--magenta);
+    box-shadow: 0 0 0 2px rgba(226,0,116,0.2);
+}
+
+.form-row {
+    display: flex;
+    gap: 12px;
+}
+
+.form-row .form-group { flex: 1; }
+
+.checkbox-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+
+.checkbox-group input[type="checkbox"] {
+    accent-color: var(--magenta);
+    width: 16px;
+    height: 16px;
+}
+
+.checkbox-group label {
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+}
+
+/* ── Buttons ──────────────────────────────────────────────── */
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-magenta {
+    background: var(--magenta);
+    color: #fff;
+}
+.btn-magenta:hover { background: var(--magenta-light); }
+.btn-magenta:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-outline {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+}
+.btn-outline:hover { border-color: var(--magenta); color: var(--magenta); }
+
+.btn-success {
+    background: var(--success);
+    color: #fff;
+}
+.btn-success:hover { background: #00e676; }
+
+.btn-danger {
+    background: var(--error);
+    color: #fff;
+}
+.btn-danger:hover { background: #ff6e6e; }
+
+.btn-sm {
+    padding: 6px 14px;
+    font-size: 12px;
+}
+
+.btn-group {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+}
+
+/* ── Log Output ───────────────────────────────────────────── */
+
+.log-output {
+    background: #0a0a1a;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 12px;
+    color: #b0b0b0;
+    max-height: 400px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin-top: 12px;
+}
+
+.log-output .log-line { margin-bottom: 1px; }
+
+/* ── Health Indicator ─────────────────────────────────────── */
+
+.health-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--border);
+    margin-right: 6px;
+    vertical-align: middle;
+}
+
+.health-dot.healthy { background: var(--success); }
+.health-dot.unhealthy { background: var(--error); }
+.health-dot.checking {
+    background: var(--warning);
+    animation: pulse 1s infinite;
+}
+
+/* ── Remap Table ──────────────────────────────────────────── */
+
+.remap-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-top: 8px;
+}
+
+.remap-table th {
+    text-align: left;
+    padding: 8px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 11px;
+    text-transform: uppercase;
+}
+
+.remap-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid rgba(51,51,51,0.5);
+}
+
+/* ── Step Panels ──────────────────────────────────────────── */
+
+.step-panel { display: none; }
+.step-panel.active { display: block; }
+
+/* ── Badge ────────────────────────────────────────────────── */
+
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.badge-success { background: rgba(0,200,83,0.2); color: var(--success); }
+.badge-error { background: rgba(255,82,82,0.2); color: var(--error); }
+.badge-warning { background: rgba(255,193,7,0.2); color: var(--warning); }
+.badge-info { background: rgba(226,0,116,0.2); color: var(--magenta-light); }
+
+/* ── Project Setup ────────────────────────────────────────── */
+
+.setup-container {
+    max-width: 600px;
+    margin: 60px auto;
+    padding: 0 24px;
+}
+
+.setup-container .logo {
+    text-align: center;
+    margin-bottom: 32px;
+}
+
+.setup-container .logo h1 {
+    font-size: 28px;
+    color: var(--magenta);
+    margin-bottom: 4px;
+}
+
+.setup-container .logo p {
+    color: var(--text-dim);
+    font-size: 14px;
+}
+
+.divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 24px 0;
+    color: var(--text-dim);
+    font-size: 13px;
+}
+
+.divider::before,
+.divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+}
+
+/* ── Service Link ─────────────────────────────────────────── */
+
+.service-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: var(--input-bg);
+    border-radius: 6px;
+    color: var(--magenta-light);
+    text-decoration: none;
+    font-weight: 600;
+    margin-top: 8px;
+    transition: background 0.2s;
+}
+
+.service-link:hover { background: var(--surface-light); }
+
+/* ── Responsive ───────────────────────────────────────────── */
+
+/* ── Step Descriptions ─────────────────────────────────────── */
+
+.step-description {
+    background: rgba(226,0,116,0.06);
+    border-left: 3px solid var(--magenta);
+    padding: 12px 16px;
+    border-radius: 0 6px 6px 0;
+    margin-bottom: 20px;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.step-description p {
+    margin-bottom: 6px;
+}
+
+.step-description p:last-child {
+    margin-bottom: 0;
+}
+
+.step-description code {
+    background: rgba(255,255,255,0.08);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 12px;
+}
+
+/* ── Progress Bar ─────────────────────────────────────────── */
+
+.progress-bar-container {
+    margin-top: 12px;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 6px;
+    background: var(--input-bg);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--magenta), var(--magenta-light));
+    border-radius: 3px;
+    width: 0%;
+    transition: width 0.5s ease;
+}
+
+.progress-fill.indeterminate {
+    width: 30%;
+    animation: indeterminate 1.5s ease-in-out infinite;
+}
+
+@keyframes indeterminate {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
+}
+
+.progress-text {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 4px;
+    display: flex;
+    justify-content: space-between;
+}
+
+/* ── Service Status Row ───────────────────────────────────── */
+
+.service-status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.elapsed-timer {
+    font-size: 12px;
+    color: var(--text-dim);
+    font-family: 'Consolas', 'Monaco', monospace;
+    margin-left: auto;
+}
+
+/* ── Responsive ───────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+    .sidebar { width: 60px; min-width: 60px; padding: 12px 8px; }
+    .step-info { display: none; }
+    .main-panel { padding: 16px; }
+}

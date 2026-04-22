@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the TCRMP CVR-CLIP Pipeline Orchestrator.
+# Launch the Reef Point Seg Orchestrator.
 # Lives inside seg_AI_img_full_april2026/scripts/; the unified env sits one
 # level up at seg_AI_img_full_april2026/env/.
 set -u
@@ -59,7 +59,7 @@ else
 fi
 
 echo ""
-echo "  Starting TCRMP CVR-CLIP Pipeline Orchestrator on port $PORT..."
+echo "  Starting Reef Point Seg Orchestrator on port $PORT..."
 echo "  View VICARIUS event stream any time:  vicarius story --days 1"
 echo ""
 

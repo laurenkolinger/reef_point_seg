@@ -1,9 +1,9 @@
 # VICARIUS module-interface stub for the coral-segmentation pipeline.
-# When this directory is copied into vicarius/modules/cvr_clip_segmentation/
+# When this directory is copied into vicarius/modules/reef_point_seg/
 # github_repo/, this file advertises the module to the VICARIUS UI + CLI.
 # Until then it is a self-describing contract for inputs / outputs / params.
 
-name: "cvr_clip_segmentation"
+name: "reef_point_seg"
 version: "1.0.0"
 type: "pipeline"           # multi-step; launches its own orchestrator UI
 author: "Lauren K Olinger"
@@ -97,3 +97,27 @@ parameters:
 cli:
   main_script: "scripts/run_pipeline.sh"
   interactive: true     # module opens its own browser UI at http://localhost:5050
+
+# ------------------------------------------------------------------------------
+# VICARIUS UI — launcher style
+# ------------------------------------------------------------------------------
+# This module runs as a browser-based orchestrator on its own port; the
+# VICARIUS UI should NOT render the generic input_dir/output_dir form.
+# Instead it shows a launcher: a Launch Orchestrator button + a list of
+# existing in-process projects with step-status summaries + a New Project
+# flow.
+ui:
+  style: launcher
+  launch:
+    script: "scripts/run_pipeline.sh"
+    port: 5050
+    url: "http://127.0.0.1:5050"
+    # When true, the UI spawns the launch_script via subprocess if the port
+    # isn't already bound, then opens the URL in a new tab.
+  runs:
+    # Where live projects live. Relative to the module root (parent of github_repo/).
+    dir: "inprocess"
+    # Each run dir is a directory starting with `run_` containing a project.json.
+    pattern: "run_*"
+    # Status source: parse steps.N.status from project.json
+    status_source: "project.json"

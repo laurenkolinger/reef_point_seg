@@ -3,7 +3,7 @@
 This document captures how the coral-segmentation pipeline plugs into the
 VICARIUS platform (`/mnt/rip/vicarius_drive/vicarius`). It covers the event
 stream, the UI aesthetic, the module contract, and the planned migration
-into `vicarius/modules/cvr_clip_segmentation/`.
+into `vicarius/modules/reef_point_seg/`.
 
 Read `/mnt/rip/vicarius_drive/vicarius/_DOCS/TEN_COMMANDMENTS.md` alongside
 this document — the commandments are the governing discipline.
@@ -24,7 +24,7 @@ into the platform's Python API (`vicarius_log.VICARIUSLog`).
 vicarius:
   enabled: true
   study_default: S1_historical          # default study tag on every event
-  module_name: cvr_clip_segmentation    # drives the event module prefix
+  module_name: reef_point_seg    # drives the event module prefix
   event_prefix: orch                    # recorded in metadata_json
 ```
 
@@ -36,13 +36,13 @@ absent (useful for collaborators without the platform installed).
 
 | Orchestrator action | VICARIUS event | Module tag | Notes |
 |--|--|--|--|
-| `POST /api/project/create` | `user_note` | `cvr_clip_segmentation` | `"[orch] project <name> created at <dir>"` |
-| `POST /api/project/open` | `user_note` | `cvr_clip_segmentation` | `"[orch] project <name> reopened"` |
-| `POST /api/step/<n>/run` | `process_start` | `cvr_clip_segmentation.step<n>_<name>` | `purpose` drawn from step config + project purpose; returns `event_id` for later linkage |
+| `POST /api/project/create` | `user_note` | `reef_point_seg` | `"[orch] project <name> created at <dir>"` |
+| `POST /api/project/open` | `user_note` | `reef_point_seg` | `"[orch] project <name> reopened"` |
+| `POST /api/step/<n>/run` | `process_start` | `reef_point_seg.step<n>_<name>` | `purpose` drawn from step config + project purpose; returns `event_id` for later linkage |
 | step completion | `process_end` (status=success) | same | `duration_sec` + `outputs=[step_dir]`; `parent_event_id` links to the `process_start` |
 | step error | `process_end` (status=failed) | same | `notes` contains the last ~20 log lines |
-| `POST /api/project/quit` | `user_note` | `cvr_clip_segmentation` | `"[orch] project closed"` |
-| SAM3 driver kick | `user_note` | `cvr_clip_segmentation.step5_segmentImages` | `"[orch] SAM3 driver kicked for batch <n>"` |
+| `POST /api/project/quit` | `user_note` | `reef_point_seg` | `"[orch] project closed"` |
+| SAM3 driver kick | `user_note` | `reef_point_seg.step5_segmentImages` | `"[orch] SAM3 driver kicked for batch <n>"` |
 
 ### 1.3 Query recipes
 
@@ -51,14 +51,14 @@ absent (useful for collaborators without the platform installed).
 vicarius story --days 1
 
 # All orchestrator events in the past week
-vicarius log show -t process_start -d 7 | grep cvr_clip_segmentation
+vicarius log show -t process_start -d 7 | grep reef_point_seg
 
 # All events for a specific study
 sqlite3 /mnt/rip/vicarius_drive/vicarius/_logging/db/vicarius_events.db \
   "SELECT timestamp, event_type, process_module, context_purpose
      FROM events
     WHERE context_study = 'S1_historical'
-      AND process_module LIKE 'cvr_clip_segmentation%'
+      AND process_module LIKE 'reef_point_seg%'
     ORDER BY timestamp DESC LIMIT 50;"
 
 # Duration rollup per step across all projects
@@ -67,7 +67,7 @@ sqlite3 ... \
           SUM(process_duration_sec) AS total_sec
      FROM events
     WHERE event_type = 'process_end'
-      AND process_module LIKE 'cvr_clip_segmentation.%'
+      AND process_module LIKE 'reef_point_seg.%'
     GROUP BY process_module ORDER BY total_sec DESC;"
 ```
 
@@ -130,36 +130,36 @@ See `config/module.yaml` in this repo for the full spec. Highlights:
 
 ---
 
-## 4. Migration into `vicarius/modules/cvr_clip_segmentation/`
+## 4. Migration into `vicarius/modules/reef_point_seg/`
 
 When ready to formally plug in:
 
 ```bash
 cd /mnt/rip/vicarius_drive/vicarius/modules
-mkdir -p cvr_clip_segmentation/{github_repo,inprocess,misc}
+mkdir -p reef_point_seg/{github_repo,inprocess,misc}
 
 # Copy the whole repo (code + config only; NOT supporting_data or projects)
 rsync -a --exclude='supporting_data' --exclude='projects' --exclude='env' \
       /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/ \
-      cvr_clip_segmentation/github_repo/
+      reef_point_seg/github_repo/
 
 # Symlink the data + runs so they stay outside the module's git repo
 ln -s /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data \
-      cvr_clip_segmentation/github_repo/supporting_data
+      reef_point_seg/github_repo/supporting_data
 ln -s /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/projects \
-      cvr_clip_segmentation/github_repo/projects
+      reef_point_seg/github_repo/projects
 
 # VICARIUS init_run.py / shelve_run.py are dropped into the module root
 # (not the github_repo subdir) per platform convention; copy from template:
 cp /mnt/rip/vicarius_drive/vicarius/modules/_template/github_repo/src/init_run.py \
-   cvr_clip_segmentation/github_repo/src/
+   reef_point_seg/github_repo/src/
 cp /mnt/rip/vicarius_drive/vicarius/modules/_template/github_repo/src/shelve_run.py \
-   cvr_clip_segmentation/github_repo/src/
+   reef_point_seg/github_repo/src/
 ```
 
 Then re-run `bootstrap.sh` from the new location.
 
-Post-migration, `vicarius list` should show `cvr_clip_segmentation` in its
+Post-migration, `vicarius list` should show `reef_point_seg` in its
 module table (via `module.yaml`).
 
 ---

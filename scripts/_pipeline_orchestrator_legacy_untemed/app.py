@@ -1,5 +1,5 @@
 """
-Flask application for the Reef Point Seg Orchestrator.
+Flask application for the TCRMP CVR-CLIP Pipeline Orchestrator.
 """
 
 import os
@@ -9,7 +9,6 @@ import time
 import threading
 import traceback
 from datetime import datetime
-from urllib.parse import unquote
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
@@ -17,11 +16,9 @@ from flask import Flask, render_template, request, jsonify, send_from_directory
 
 import project_manager as pm
 import remap_loader
-import vicarius_bridge as vic
 from stage_runner import StageRunner, find_free_port
 from orchestrator_config import (
     REPO_DIR, PYTHON_PATHS, ENTRY_POINTS, WORKING_DIRS, STAGE_PORTS,
-    PRESET_DIRS,
 )
 
 # ---------------------------------------------------------------------------
@@ -50,31 +47,6 @@ def _sam3_set(**kw):
     with sam3_lock:
         sam3_status.update(kw)
         sam3_status["updated_at"] = datetime.now().isoformat()
-
-
-def _vic_end_step(step, status, notes=""):
-    """Emit a VICARIUS process_end event linked to the step's process_start.
-
-    No-op when vicarius is disabled or the step was never started via the
-    orchestrator (e.g. stale state).
-    """
-    if current_project is None:
-        return
-    s = str(step)
-    st = current_project["steps"].get(s, {})
-    event_id = st.pop("_vic_event_id", None)
-    started = st.get("started_at")
-    duration = 0.0
-    if started:
-        try:
-            t0 = datetime.fromisoformat(started).timestamp()
-            duration = max(0.0, datetime.now().timestamp() - t0)
-        except Exception:
-            duration = 0.0
-    outputs = list(st.get("outputs", {}).values())
-    step_name = f"step{step}_{pm.STEP_DIRS.get(s, '').split('_', 1)[-1] or 'stage'}"
-    vic.process_end(step_name, event_id, status, duration,
-                    outputs=outputs, notes=notes)
 
 
 def _sam3_drive(port, input_dir, export_dir, categories, batch_size):
@@ -168,57 +140,9 @@ def create_app():
     # ------------------------------------------------------------------
     # Pages
     # ------------------------------------------------------------------
-    # Path prefix that any auto-open project_dir must live under. This
-    # prevents a crafted ?project_dir= URL param from pointing at arbitrary
-    # filesystem locations (e.g. /etc/passwd).
-    _AUTOOPEN_ALLOWED_ROOT = (
-        "/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/inprocess/"
-    )
-
     @app.route("/")
     def index():
-        global current_project
-        from orchestrator_config import PATHS
-
-        # Optional auto-open: /?project_dir=<abs-path>[&purpose=<text>]
-        raw = request.args.get("project_dir", "")
-        if raw:
-            try:
-                candidate = os.path.abspath(unquote(raw))
-                # Guardrails: must live under the module's inprocess/ tree
-                # and contain a project.json to be considered valid.
-                if (
-                    candidate.startswith(_AUTOOPEN_ALLOWED_ROOT)
-                    and os.path.isfile(os.path.join(candidate, "project.json"))
-                ):
-                    # Idempotent: don't reload if the same project is already open.
-                    already = (
-                        current_project is not None
-                        and current_project.get("project_dir") == candidate
-                    )
-                    if not already:
-                        current_project = pm.load_project(candidate)
-                        vic.note(
-                            f"[orch] project '{current_project['name']}' "
-                            f"opened via URL param"
-                        )
-                        raw_purpose = request.args.get("purpose", "")
-                        if raw_purpose:
-                            purpose = unquote(raw_purpose).strip()
-                            if purpose:
-                                vic.note(f"[orch] auto-open purpose: {purpose}")
-            except Exception:
-                # Never block page render on auto-open failure.
-                pass
-
-        return render_template(
-            "index.html",
-            repo_root=REPO_DIR,
-            projects_dir=PATHS.get("projects_dir", os.path.join(REPO_DIR, "projects")),
-            supporting_data_dir=PATHS.get("supporting_data_dir", ""),
-            all_points_csv=PATHS.get("all_points_csv", ""),
-            master_codes_csv=PATHS.get("master_codes_csv", ""),
-        )
+        return render_template("index.html")
 
     # ------------------------------------------------------------------
     # Project endpoints
@@ -233,8 +157,6 @@ def create_app():
             return jsonify({"error": "Name and base directory are required"}), 400
         try:
             current_project = pm.create_project(name, base_dir)
-            vic.note(f"[orch] project '{current_project['name']}' created at "
-                     f"{current_project['project_dir']}")
             return jsonify({"success": True, "state": current_project})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
@@ -248,7 +170,6 @@ def create_app():
             return jsonify({"error": "Project directory is required"}), 400
         try:
             current_project = pm.load_project(project_dir)
-            vic.note(f"[orch] project '{current_project['name']}' reopened")
             return jsonify({"success": True, "state": current_project})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
@@ -276,7 +197,6 @@ def create_app():
         global current_project
         runner.kill_all()
         if current_project:
-            vic.note(f"[orch] project '{current_project['name']}' closed")
             pm.save_project(current_project)
         current_project = None
         return jsonify({"success": True})
@@ -302,17 +222,6 @@ def create_app():
 
         st["status"] = "running"
         st["started_at"] = datetime.now().isoformat()
-
-        # VICARIUS process_start — stash event_id so step completion can link to it.
-        step_name = f"step{step}_{pm.STEP_DIRS.get(s, '').split('_', 1)[-1] or 'stage'}"
-        purpose = cfg.get("purpose") or f"{st.get('name', 'step')}" + (
-            f" (project '{current_project.get('name', '')}')"
-        )
-        event_id = vic.process_start(step_name, purpose,
-                                     inputs=[str(v) for v in cfg.values() if isinstance(v, str)],
-                                     notes="")
-        if event_id is not None:
-            st["_vic_event_id"] = event_id
         pm.save_project(current_project)
 
         try:
@@ -337,14 +246,12 @@ def create_app():
 
             if "error" in result:
                 st["status"] = "error"
-                _vic_end_step(step, "failed", notes=str(result.get("error", ""))[:500])
                 pm.save_project(current_project)
                 return jsonify(result), 500
 
             return jsonify({"success": True, **result})
         except Exception as e:
             st["status"] = "error"
-            _vic_end_step(step, "failed", notes=str(e)[:500])
             pm.save_project(current_project)
             return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
@@ -708,7 +615,7 @@ def create_app():
             # Auto-fill from the run's args.yaml; last-resort fallback 1024.
             chosen_imgsz = trained_imgsz if trained_imgsz else 1024
             warnings.append(
-                f"imgsz was blank; auto-filled from run args.yaml -> {chosen_imgsz}"
+                f"imgsz was blank; auto-filled from run args.yaml → {chosen_imgsz}"
                 if trained_imgsz else
                 "imgsz was blank and run has no args.yaml; falling back to 1024"
             )
@@ -901,13 +808,10 @@ def create_app():
             st = current_project["steps"].get(s, {})
             if st.get("status") == "running" and not status["running"]:
                 if status["exit_code"] == 0:
-                    _vic_end_step(step, "success")
                     pm.complete_step(current_project, step)
                     status["completed"] = True
                 else:
                     st["status"] = "error"
-                    _vic_end_step(step, "failed",
-                                  notes=f"exit_code={status.get('exit_code')}")
                     pm.save_project(current_project)
 
         return jsonify(status)
@@ -925,7 +829,6 @@ def create_app():
             return jsonify({"error": "No project loaded"}), 400
         # Kill the sub-app
         runner.kill(step)
-        _vic_end_step(step, "success", notes="marked done via UI")
         pm.complete_step(current_project, step)
         return jsonify({"success": True, "state": current_project})
 
@@ -937,7 +840,6 @@ def create_app():
             st = current_project["steps"].get(s, {})
             if st.get("status") == "running":
                 st["status"] = "pending"
-                _vic_end_step(step, "cancelled", notes="stopped via UI")
                 pm.save_project(current_project)
         return jsonify({"success": True})
 
@@ -1014,7 +916,7 @@ def create_app():
     @app.route("/api/step/6/presets")
     def step6_list_presets():
         """List Step 6 training presets shipped in pipeline_orchestrator/presets/."""
-        preset_dir = PRESET_DIRS.get("train", "")
+        preset_dir = os.path.join(os.path.dirname(__file__), "presets")
         out = []
         if os.path.isdir(preset_dir):
             import yaml as _y
@@ -1043,7 +945,7 @@ def create_app():
         safe_name = os.path.basename(preset_id)
         if safe_name != preset_id:
             return jsonify({"error": "invalid preset id"}), 400
-        preset_dir = PRESET_DIRS.get("train", "")
+        preset_dir = os.path.join(os.path.dirname(__file__), "presets")
         fpath = os.path.join(preset_dir, safe_name)
         if not os.path.isfile(fpath):
             return jsonify({"error": f"preset not found: {safe_name}"}), 404
@@ -1068,7 +970,7 @@ def create_app():
     @app.route("/api/step/7/presets")
     def step7_list_presets():
         """List Step 7 evaluation presets shipped in pipeline_orchestrator/eval_presets/."""
-        preset_dir = PRESET_DIRS.get("eval", "")
+        preset_dir = os.path.join(os.path.dirname(__file__), "eval_presets")
         out = []
         if os.path.isdir(preset_dir):
             import yaml as _y
@@ -1096,7 +998,7 @@ def create_app():
         safe_name = os.path.basename(preset_id)
         if safe_name != preset_id:
             return jsonify({"error": "invalid preset id"}), 400
-        preset_dir = PRESET_DIRS.get("eval", "")
+        preset_dir = os.path.join(os.path.dirname(__file__), "eval_presets")
         fpath = os.path.join(preset_dir, safe_name)
         if not os.path.isfile(fpath):
             return jsonify({"error": f"preset not found: {safe_name}"}), 404
@@ -1119,7 +1021,7 @@ def create_app():
     def step7_run_info():
         """Peek at a training run's args.yaml so the Step 7 Quick-start banner
         can auto-fill `imgsz` (among a few other useful fields). Returns the
-        subset of fields the UI needs; missing file -> 200 with empty values."""
+        subset of fields the UI needs; missing file → 200 with empty values."""
         run_dir = (request.args.get("path") or "").strip()
         if not run_dir:
             return jsonify({"error": "missing ?path=<run_dir>"}), 400

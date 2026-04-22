@@ -277,7 +277,7 @@ Each sub-tool owns a `./env/` created by its `setup_env.sh`. This isolates depen
 The current orchestrator repo will live as a **VICARIUS module** under `vicarius/modules/`. Specifically, each of the 8 sub-tools maps naturally to the template layout VICARIUS already uses:
 
 ```
-vicarius/modules/cvr_clip_segmentation/
+vicarius/modules/reef_point_seg/
 ├── github_repo/       # this repo, versioned
 ├── inprocess/         # one folder per training/inference run
 │   └── run_YYYYMMDD_<purpose>/

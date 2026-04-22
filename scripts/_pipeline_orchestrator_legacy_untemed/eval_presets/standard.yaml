@@ -1,0 +1,41 @@
+# ======================================================================
+# Step 7 evaluation preset — "Standard test-split evaluation"
+#
+# Why this preset exists:
+#   Ultralytics has several knobs that interact subtly (imgsz must match
+#   the training imgsz, conf=0.25 is the library default, iou=0.6 is the
+#   NMS merge threshold most papers report). Getting these right gives
+#   the "honest" headline metrics on held-out data.
+#
+# How to use:
+#   Step 7 panel → "Load preset" dropdown → select this file → Import.
+#   Values below overwrite the listed form fields; anything not listed
+#   is left alone. The Quick-start banner auto-fills imgsz from the run's
+#   own args.yaml, which is *more* accurate than the static 1024 below —
+#   prefer Quick-start if you've already chosen a run.
+# ======================================================================
+
+_meta:
+  name: "Standard test-split evaluation"
+  description: "Ultralytics defaults against the held-out test split. Good for 95% of cases."
+
+params:
+  split: test                 # "test" = held-out frames never seen during training (honest).
+                              # "val"  = seen as early-stop signal (slightly optimistic).
+                              # "train"= sanity check; bad numbers here mean training is broken.
+
+  imgsz: 1024                 # MUST match the run's training imgsz (check its args.yaml).
+                              # Mismatch distorts every metric. The Quick-start button
+                              # auto-detects this per run — prefer it over this static value.
+
+  conf_threshold: 0.25        # Drop predictions with conf < this. Ultralytics default.
+                              # Lower → more predictions (higher recall, lower precision).
+
+  iou_threshold: 0.6          # NMS merge threshold. Predictions overlapping more than
+                              # this on the same object get deduplicated. 0.6 is standard.
+
+  preview_count: 8            # Random images from the split, overlaid with GT + predictions
+                              # in the PDF. 8 is enough to eyeball behavior without bloat.
+
+  pdf_export_dir: ""          # Optional external copy of the PDF for sharing. Leave blank
+                              # to only keep the PDF under {step7_dir}/.

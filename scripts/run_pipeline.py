@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch the TCRMP CVR-CLIP Pipeline Orchestrator."""
+"""Launch the Reef Point Seg Orchestrator."""
 
 import os
 import sys
@@ -14,6 +14,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     app = create_app()
-    print(f"\n  TCRMP CVR-CLIP Pipeline Orchestrator")
+    print(f"\n  Reef Point Seg Orchestrator")
     print(f"  http://localhost:{args.port}\n")
     app.run(host="0.0.0.0", port=args.port, debug=False)

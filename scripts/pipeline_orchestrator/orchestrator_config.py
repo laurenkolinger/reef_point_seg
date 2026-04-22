@@ -95,7 +95,7 @@ _cfg, _scope = _load()
 REPO_DIR = str(_CONFIG_PATH.resolve().parent.parent)
 CONFIG_PATH = str(_CONFIG_PATH)
 PATHS = _scope  # dict of every resolved path variable
-PIPELINE_NAME = _cfg.get("pipeline_name", "cvr_clip_segmentation")
+PIPELINE_NAME = _cfg.get("pipeline_name", "reef_point_seg")
 
 ORCHESTRATOR_PORT = _cfg["orchestrator_port"]
 STAGE_PORTS = {int(k): v for k, v in _cfg["stage_ports"].items()}
