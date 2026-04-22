@@ -1,0 +1,99 @@
+# VICARIUS module-interface stub for the coral-segmentation pipeline.
+# When this directory is copied into vicarius/modules/cvr_clip_segmentation/
+# github_repo/, this file advertises the module to the VICARIUS UI + CLI.
+# Until then it is a self-describing contract for inputs / outputs / params.
+
+name: "cvr_clip_segmentation"
+version: "1.0.0"
+type: "pipeline"           # multi-step; launches its own orchestrator UI
+author: "Lauren K Olinger"
+description: "Eight-step TCRMP coral segmentation pipeline: CVR point data -> CPC/OCR point verification -> SAM3 masks -> YOLO11 segmentation training, evaluation, and inference."
+
+inputs:
+  - name: "tcrmp_cvr"
+    type: "directory"
+    formats: [".xls", ".xlsx"]
+    location: "${supporting_data_dir}/TCRMP_CVR"
+    description: "Raw TCRMP_CVR Excel files (step 1 input)."
+
+  - name: "tcrmp_clip"
+    type: "directory"
+    formats: [".jpg", ".jpeg"]
+    location: "${dropbox_clip_dir}"
+    description: "TCRMP video-derived clip frames. Production reads from Dropbox; override to ${tcrmp_clip_local_dir} for offline testing (2018 + 2024 years only)."
+
+  - name: "cpc_all"
+    type: "directory"
+    location: "${supporting_data_dir}/cpc_all"
+    description: "Static pre-2020 CPCe point index (67 GB) produced once by legacy TCRMPclip_cpcID. Consumed by step 4."
+
+outputs:
+  - name: "all_points_csv"
+    format: ".csv"
+    location: "${projects_dir}/<project_id>/step1_makeAllPoints/all_points.csv"
+    description: "Unified point-level CVR dataset, ~2.3M rows."
+
+  - name: "recoded_all_points"
+    format: ".csv"
+    location: "${projects_dir}/<project_id>/step2_recodeSpecies/all_points_recoded.csv"
+    description: "Post-remap species codes applied; timestamped variant."
+
+  - name: "selected_frames"
+    format: ".csv"
+    location: "${projects_dir}/<project_id>/step3_chooseImages/selected_frames.csv"
+    description: "~4,500 balanced frames selected for training."
+
+  - name: "verified_points"
+    format: ".json"
+    location: "${projects_dir}/<project_id>/step4_routeChosenImages/<year>/ids/sam_click_prompts.json"
+    description: "Per-frame (x,y,species) click prompts consumed by SAM3."
+
+  - name: "yolo_training_set"
+    format: "directory"
+    location: "${projects_dir}/<project_id>/step5_segmentImages/"
+    description: "all_images/, all_labels/, data.yaml, class_map.json — YOLO-format training set."
+
+  - name: "trained_model"
+    format: ".pt"
+    location: "${projects_dir}/<project_id>/step6_trainModel/runs/<run_name>/weights/best.pt"
+    description: "Trained YOLO11-seg weights."
+
+  - name: "evaluation_report"
+    format: ".pdf"
+    location: "${projects_dir}/<project_id>/step7_evaluateModel/report.pdf"
+    description: "Multi-page evaluation report with per-class metrics, confusion matrix, preview images."
+
+  - name: "inference_manifest"
+    format: ".json"
+    location: "${projects_dir}/<project_id>/step8_inference/manifest.json"
+    description: "Per-frame detection records for the inference run."
+
+parameters:
+  - name: "target_species"
+    type: "string"
+    default: "OFRA, PA, OA, OFAV, AL, MC, AA"
+    description: "Priority species for balanced selection (step 3) and review filtering (step 4)."
+
+  - name: "target_instances_per_species"
+    type: "integer"
+    default: 1000
+    description: "Minimum point-labels per target species before selection stops (step 3)."
+
+  - name: "epochs"
+    type: "integer"
+    default: 500
+    description: "Max training epochs (step 6)."
+
+  - name: "imgsz"
+    type: "integer"
+    default: 512
+    description: "Training / eval / inference image size in pixels."
+
+  - name: "model"
+    type: "string"
+    default: "yolo11m-seg.pt"
+    description: "Base pretrained YOLO11-seg weights (n|s|m|l|x)."
+
+cli:
+  main_script: "scripts/run_pipeline.sh"
+  interactive: true     # module opens its own browser UI at http://localhost:5050

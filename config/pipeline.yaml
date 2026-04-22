@@ -1,0 +1,157 @@
+version: 1
+pipeline_name: seg_AI_img_full_april2026
+paths:
+  scripts_dir: ${repo_root}/scripts
+  config_dir: ${repo_root}/config
+  supporting_data_dir: /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data
+  projects_dir: /mnt/rip/vicarius_drive/vicarius/modules/cvr_clip_segmentation/inprocess
+  unified_env_python: ${repo_root}/env/bin/python
+  all_points_csv: /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/all_points.csv
+  master_codes_csv: /mnt/rip/vicarius_drive/vicarius/_METADATA/library/definitions/tcrmp_species_codes.csv
+  cpc_all_dir: /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/cpc_all
+  tcrmp_cvr_dir: /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/TCRMP_CVR
+  tcrmp_clip_local_dir: ${supporting_data_dir}/TCRMP_clip
+  model_weights_dir: /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/model_weights
+  dropbox_clip_dir: /home/bizon/UVI Dropbox/SMITH LAB TEAM FOLDER/TCRMP/TCRMP_clip
+  sam3_conda_env: /home/bizon/anaconda3/envs/sam3reef
+  huggingface_cache: ~/.cache/huggingface
+  vicarius_root: /mnt/rip/vicarius_drive/vicarius
+  vicarius_logging_lib: /mnt/rip/vicarius_drive/vicarius/_logging/src
+python_paths:
+  1: ${unified_env_python}
+  2: ${unified_env_python}
+  3: ${unified_env_python}
+  4: ${unified_env_python}
+  5: ${unified_env_python}
+  6: ${unified_env_python}
+  7: ${unified_env_python}
+  8: ${unified_env_python}
+entry_points:
+  1: ${scripts_dir}/TCRMPcvr_makeAllPoints/run.py
+  2: ${scripts_dir}/TCRMPcvr_recodeSpecies/src/app.py
+  3: ${scripts_dir}/TCRMPcvr_chooseImages/src/select_images.py
+  4: ${scripts_dir}/TCRMPclip_routeChosenImages/src/app.py
+  5: ${scripts_dir}/TCRMPclip_segmentImages/src/app.py
+  6: ${scripts_dir}/TCRMPtrain_oceankindCV/run_step6.sh
+  7: ${scripts_dir}/TCRMPtrain_oceankindCV/src/evaluate_run.py
+  8: ${scripts_dir}/TCRMPtrain_oceankindCV/src/run_inference.py
+working_dirs:
+  1: ${scripts_dir}/TCRMPcvr_makeAllPoints
+  2: ${scripts_dir}/TCRMPcvr_recodeSpecies
+  3: ${scripts_dir}/TCRMPcvr_chooseImages
+  4: ${scripts_dir}/TCRMPclip_routeChosenImages
+  5: ${scripts_dir}/TCRMPclip_segmentImages
+  6: ${scripts_dir}/TCRMPtrain_oceankindCV
+  7: ${scripts_dir}/TCRMPtrain_oceankindCV
+  8: ${scripts_dir}/TCRMPtrain_oceankindCV
+orchestrator_port: 5050
+stage_ports:
+  2: 5055
+  4: 5065
+  5: 5070
+preset_dirs:
+  train: ${config_dir}/presets
+  eval: ${config_dir}/eval_presets
+vicarius:
+  enabled: true
+  study_default: S1_historical
+  module_name: cvr_clip_segmentation
+  event_prefix: orch
+step_defaults:
+  '1':
+    input_dir: ${tcrmp_cvr_dir}
+  '2':
+    port: 5055
+    remap_log_source: ''
+  '3':
+    target_species: OFRA, PA, OA, OFAV, AL, MC, AA
+    target_instances: 1000
+    min_year: 2014
+    max_year: 2025
+    category_filter: Coral
+    skip_image_check: false
+  '4':
+    port: 5065
+    clip_dir: ${dropbox_clip_dir}
+    target_species_only: true
+    auto_start_sam3: true
+    reference_mode: false
+    shuffle: false
+    review_batch_size: '10'
+  '5':
+    port: 5070
+    sam3_device_tracker: cuda:1
+    sam3_device_exemplar: cuda:0
+    confidence_threshold: 0.5
+    min_mask_area_px: 500
+    merge_distance_px: 30
+    overlap_strategy: larger_wins
+    thin_mask_ratio: 0.1
+    polygon_simplify_epsilon: 0.001
+    symlink_images: true
+    review_batch_size: '10'
+  '6':
+    valid_ratio: 0.2
+    test_ratio: 0.1
+    min_samples: 10
+    model: yolo11m-seg.pt
+    epochs: 500
+    imgsz: 512
+    batch: -1
+    patience: 50
+    optimizer: auto
+    seed: 0
+    cos_lr: false
+    close_mosaic: 10
+    lr0: 0.01
+    lrf: 0.01
+    momentum: 0.937
+    weight_decay: 0.0005
+    warmup_epochs: 3.0
+    box: 7.5
+    cls: 0.5
+    dfl: 1.5
+    label_smoothing: 0.0
+    hsv_h: 0.2
+    hsv_s: 0.3
+    hsv_v: 0.3
+    bgr: 0.0
+    degrees: 0.0
+    translate: 0.0
+    scale: 0.2
+    shear: 0.0
+    perspective: 0.0
+    flipud: 0.5
+    fliplr: 0.5
+    mosaic: 0.0
+    mixup: 0.0
+    cutmix: 0.0
+    copy_paste: 0.0
+    copy_paste_mode: flip
+    erasing: 0.0
+    auto_augment: randaugment
+    run_name: ''
+  '7':
+    run_dir: ''
+    split: test
+    imgsz: 512
+    batch: 8
+    conf_threshold: 0.25
+    iou_threshold: 0.6
+    preview_count: 8
+    pdf_export_dir: ''
+  '8':
+    source_type: unused
+    source_dir: ''
+    sample_count: 100
+    sample_mode: random
+    include_pts_variant: false
+    run_dir: ''
+    conf_threshold: 0.25
+    iou_threshold: 0.7
+    imgsz: 512
+    save_overlays: true
+    save_crops: false
+    mask_alpha: 0.45
+    draw_boxes: false
+    run_name: ''

@@ -1,0 +1,2634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TCRMP Segment Images</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; overflow: hidden; height: 100vh; }
+
+/* ── Screens ── */
+.screen { display: none; width: 100%; height: 100%; }
+.screen.active { display: flex; }
+
+/* Orchestrator loading veil — uses .screen.active visibility logic so it
+   gets hidden cleanly when showScreen() switches to processing/review. */
+#orch-loading { background: #0a0a1a; align-items: center; justify-content: center; }
+#orch-loading .orch-veil { display: flex; flex-direction: column; align-items: center; gap: 16px; max-width: 520px; padding: 40px 24px; }
+#orch-loading .orch-veil-title { color: #e94560; font-size: 20px; font-weight: 700; }
+#orch-loading .orch-veil-msg { color: #aaa; font-size: 13px; text-align: center; line-height: 1.4; }
+#orch-loading .orch-veil-hint { color: #666; font-size: 11px; margin-top: 12px; }
+
+/* ── STARTUP SCREEN ── */
+#startup { align-items: center; justify-content: center; }
+.setup-card {
+  background: #16213e; border: 1px solid #0f3460; border-radius: 8px;
+  padding: 32px 40px; width: 580px; max-height: 90vh; overflow-y: auto;
+}
+.setup-card h1 { font-size: 20px; margin-bottom: 20px; color: #e94560; }
+.setup-card h2 { font-size: 15px; margin: 16px 0 10px; color: #4ecca3; }
+.field { margin-bottom: 16px; }
+.field label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+.field input[type=text] { width: 100%; padding: 8px 12px; border: 1px solid #0f3460; border-radius: 4px; background: #1a1a2e; color: #eee; font-size: 13px; }
+.field input[type=text]:focus { border-color: #e94560; outline: none; }
+.field-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.field-row label { font-size: 13px; color: #ccc; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.field-row input[type=checkbox], .field-row input[type=radio] { accent-color: #e94560; }
+.mode-buttons { display: flex; gap: 12px; margin-bottom: 16px; }
+.mode-btn {
+  flex: 1; padding: 14px; border: 2px solid #0f3460; border-radius: 6px;
+  background: #1a1a2e; color: #ccc; cursor: pointer; text-align: center;
+  font-size: 13px; transition: all 0.2s;
+}
+.mode-btn:hover { border-color: #e94560; color: #eee; }
+.mode-btn.active { border-color: #e94560; background: rgba(233,69,96,0.1); color: #e94560; font-weight: 600; }
+.mode-btn .mode-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.mode-btn .mode-desc { font-size: 11px; color: #888; }
+.mode-btn.active .mode-desc { color: #ccc; }
+.setup-card .btn-action {
+  width: 100%; padding: 12px; border: none; border-radius: 4px;
+  background: #e94560; color: #fff; font-size: 14px; font-weight: 600;
+  cursor: pointer; margin-top: 8px;
+}
+.setup-card .btn-action:hover { background: #c73e54; }
+.setup-card .btn-action:disabled { background: #444; cursor: not-allowed; }
+.setup-error { color: #e94560; font-size: 12px; margin-top: 8px; }
+.setup-info { color: #4ecca3; font-size: 12px; margin-top: 8px; background: rgba(78,204,163,0.1); padding: 8px 10px; border-radius: 4px; display: none; }
+.setup-info.visible { display: block; }
+.setup-info .num { font-weight: 700; color: #4ecca3; }
+.cat-grid { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.cat-grid label { font-size: 13px; color: #ccc; cursor: pointer; display: flex; align-items: center; gap: 4px; min-width: 90px; }
+.cat-grid .select-all { font-size: 11px; color: #e94560; cursor: pointer; margin-left: 8px; text-decoration: underline; }
+.hidden { display: none !important; }
+
+/* ── PROCESSING SCREEN ── */
+#processing { align-items: center; justify-content: center; flex-direction: column; gap: 16px; }
+.progress-wrap { width: 550px; }
+.progress-wrap h2 { font-size: 16px; margin-bottom: 12px; }
+.progress-bar-outer { width: 100%; height: 24px; background: #0f3460; border-radius: 4px; overflow: hidden; }
+.progress-bar-inner { height: 100%; background: #e94560; transition: width 0.2s; border-radius: 4px; }
+.progress-text { font-size: 13px; color: #888; margin-top: 8px; }
+.progress-current { font-size: 12px; color: #666; margin-top: 4px; }
+.progress-eta { font-size: 12px; color: #4ecca3; margin-top: 4px; }
+
+/* ── REVIEW SCREEN ── */
+#review { flex-direction: column; }
+
+.review-topbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 12px; background: #16213e; border-bottom: 1px solid #0f3460;
+  height: 36px; user-select: none; flex-shrink: 0;
+}
+.review-topbar h1 { font-size: 14px; }
+.btn { padding: 4px 10px; border: 1px solid #0f3460; border-radius: 3px; background: #1a1a2e; color: #eee; cursor: pointer; font-size: 12px; white-space: nowrap; }
+.btn:hover { background: #0f3460; }
+.btn.primary { background: #e94560; border-color: #e94560; }
+.btn.primary:hover { background: #c73e54; }
+.btn.active { background: #0f3460; border-color: #4ecca3; color: #4ecca3; }
+.spacer { flex: 1; }
+.img-counter { font-size: 13px; font-weight: 600; color: #e94560; min-width: 70px; text-align: center; }
+.batch-info { font-size: 11px; color: #888; }
+.status { font-size: 12px; color: #888; }
+.status.flash { color: #4ecca3; }
+
+/* Toolbar row */
+.toolbar-bar {
+  display: flex; align-items: center; gap: 8px; padding: 3px 12px;
+  background: #16213e; border-bottom: 1px solid #0f3460; flex-shrink: 0;
+  font-size: 11px;
+}
+.toolbar-bar label { color: #aaa; cursor: pointer; display: flex; align-items: center; gap: 3px; }
+.toolbar-bar label:hover { color: #eee; }
+.toolbar-bar input[type=checkbox] { accent-color: #e94560; }
+.toolbar-bar input[type=range] { width: 80px; accent-color: #e94560; }
+.toolbar-bar .tool-label { color: #666; text-transform: uppercase; letter-spacing: 0.5px; font-size: 10px; margin-right: 4px; }
+.toolbar-bar .tool-val { color: #4ecca3; font-size: 10px; min-width: 30px; }
+.toolbar-bar .sep { width: 1px; height: 14px; background: #0f3460; margin: 0 4px; }
+
+.review-body { display: flex; flex: 1; overflow: hidden; }
+
+/* Canvas */
+.canvas-wrap { flex: 1; position: relative; overflow: hidden; background: #111; }
+#canvas { position: absolute; top: 0; left: 0; cursor: crosshair; }
+#canvas.add-mode { cursor: cell; }
+#canvas.refine-mode { cursor: crosshair; }
+
+/* ADD-mode visual: pink border around the canvas and a floating badge so
+   the user can't miss that a click will create a new mask. */
+.canvas-wrap.add-active {
+  box-shadow: inset 0 0 0 4px #ff3d8b, inset 0 0 24px rgba(255, 61, 139, 0.25);
+}
+.canvas-wrap.add-active::after {
+  content: 'ADD MODE — hold 1-N + click to place';
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  background: #ff3d8b; color: #fff; padding: 4px 14px;
+  font-weight: 700; font-size: 12px; letter-spacing: 0.5px;
+  border-radius: 3px; pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  z-index: 50;
+}
+
+/* DRAW-mode visual: cyan border + badge. TagLab-style freehand mask edit. */
+.canvas-wrap.draw-active {
+  box-shadow: inset 0 0 0 4px #00d4ff, inset 0 0 24px rgba(0, 212, 255, 0.25);
+}
+.canvas-wrap.draw-active::after {
+  content: 'DRAW MODE — drag across the mask to carve (inside) or add (outside)';
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  background: #00a3cc; color: #fff; padding: 4px 14px;
+  font-weight: 700; font-size: 12px; letter-spacing: 0.5px;
+  border-radius: 3px; pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  z-index: 50;
+}
+#canvas.draw-mode { cursor: crosshair; }
+
+/* Target-label button bar (same layout as step 4) */
+.quickadd-bar {
+  display: flex; align-items: center; gap: 6px; padding: 5px 12px;
+  background: #16213e; border-bottom: 1px solid #0f3460; flex-shrink: 0;
+  font-size: 12px; flex-wrap: wrap;
+}
+.quickadd-bar .qa-label { color: #888; text-transform: uppercase; letter-spacing: 0.5px; font-size: 10px; margin-right: 4px; }
+.quickadd-bar .qa-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #0f3460; border: 1px solid #1f4077;
+  color: #ddd; padding: 4px 10px; border-radius: 3px;
+  cursor: pointer; font-family: inherit; font-size: 12px;
+  transition: all 0.1s;
+}
+.quickadd-bar .qa-btn:hover { background: #163d70; color: #fff; }
+.quickadd-bar .qa-btn.active {
+  background: #ff3d8b; border-color: #ff6b7f; color: #fff;
+  box-shadow: 0 0 8px rgba(255, 61, 139, 0.5);
+}
+.quickadd-bar .qa-btn .qa-key {
+  background: rgba(0,0,0,0.35); color: #4ecca3;
+  padding: 1px 5px; border-radius: 2px; font-size: 10px; font-weight: 700;
+}
+.quickadd-bar .qa-btn .qa-name { color: #aaa; font-style: italic; font-size: 11px; }
+
+/* Loupe (magnifier) */
+#loupe {
+  position: fixed; width: 180px; height: 180px;
+  border: 2px solid #ff3d8b; border-radius: 50%;
+  pointer-events: none; display: none;
+  background: #000; overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  z-index: 250;
+}
+#loupe.visible { display: block; }
+
+/* Right panel */
+.panel {
+  width: 280px; min-width: 280px; background: #16213e;
+  border-left: 1px solid #0f3460; display: flex; flex-direction: column;
+  flex-shrink: 0;
+}
+.panel-header {
+  padding: 8px 10px; border-bottom: 1px solid #0f3460;
+  display: flex; align-items: center; gap: 8px;
+}
+.panel-header h3 { font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 1px; }
+.panel-header .summary { font-size: 11px; color: #888; margin-left: auto; }
+
+.mask-list { list-style: none; flex: 1; overflow-y: auto; padding: 2px 4px; }
+.mask-list li {
+  padding: 5px 6px; margin-bottom: 1px; border-radius: 3px;
+  font-size: 11px; cursor: pointer; display: flex; align-items: center; gap: 6px;
+  transition: background 0.1s; border: 1px solid transparent;
+}
+.mask-list li:hover { background: #1a1a2e; }
+.mask-list li.active {
+  background: linear-gradient(90deg, rgba(233,69,96,0.35) 0%, rgba(233,69,96,0.18) 60%, rgba(233,69,96,0.08) 100%);
+  border-color: #e94560;
+  box-shadow: inset 4px 0 0 0 #e94560, 0 0 8px rgba(233,69,96,0.4);
+  color: #fff;
+}
+.mask-list li.active .m-label { color: #ffff00; }
+.mask-list li.active .m-species { color: #fff; font-weight: 700; }
+.mask-list li .m-status { width: 14px; font-size: 13px; text-align: center; }
+.mask-list li .m-check { width: 16px; accent-color: #e94560; cursor: pointer; }
+.mask-list li .m-swatch {
+  width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.2);
+  display: inline-block; flex-shrink: 0;
+}
+.mask-list li .m-label { font-weight: 700; width: 24px; color: #4ecca3; font-size: 12px; }
+.mask-list li .m-species { flex: 1; color: #ccc; }
+.mask-list li .m-area { color: #666; font-size: 10px; width: 48px; text-align: right; }
+.mask-list li .m-score { color: #555; font-size: 10px; width: 36px; text-align: right; }
+
+.mask-list li.accepted .m-status { color: #4ecca3; }
+.mask-list li.rejected .m-status { color: #e94560; }
+.mask-list li.pending .m-status { color: #f0a500; }
+.mask-list li.exemplar .m-label { color: #ff69b4; }
+
+.panel-actions { padding: 8px; border-top: 1px solid #0f3460; display: flex; flex-direction: column; gap: 4px; }
+
+.help-text { padding: 6px 8px; font-size: 10px; color: #444; line-height: 1.6; border-top: 1px solid #0f3460; flex-shrink: 0; }
+.help-text kbd { background: #0f3460; padding: 1px 4px; border-radius: 2px; font-size: 9px; color: #aaa; }
+
+/* ── Overlays ── */
+.overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 200;
+}
+.overlay.visible { display: flex; }
+.overlay-card {
+  background: #16213e; border: 1px solid #0f3460; border-radius: 8px;
+  padding: 24px 32px; max-width: 500px; text-align: center;
+}
+.overlay-card h2 { color: #4ecca3; margin-bottom: 12px; }
+.overlay-card p { font-size: 13px; color: #aaa; margin-bottom: 8px; }
+.overlay-card .btn { margin-top: 12px; }
+
+/* Category popup */
+#cat-popup {
+  position: fixed; z-index: 250; display: none;
+  background: #16213e; border: 1px solid #e94560; border-radius: 6px;
+  padding: 6px 4px; font-size: 12px; pointer-events: auto;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+}
+#cat-popup.visible { display: flex; gap: 2px; flex-wrap: wrap; width: 280px; }
+#cat-popup .cat-btn {
+  padding: 4px 6px; border: 1px solid #0f3460; border-radius: 3px;
+  background: #1a1a2e; color: #ccc; cursor: pointer; font-size: 11px;
+  flex: 1; min-width: 60px; text-align: center; white-space: nowrap;
+}
+#cat-popup .cat-btn:hover { background: #0f3460; color: #fff; }
+#cat-popup .cat-btn kbd { color: #e94560; font-weight: 700; margin-right: 2px; }
+
+/* Mode indicator */
+#mode-indicator {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  font-size: 48px; font-weight: 900; color: rgba(255,255,0,0.6);
+  pointer-events: none; z-index: 300; opacity: 0; transition: opacity 0.15s;
+  text-shadow: 0 0 40px rgba(0,0,0,0.8);
+}
+#mode-indicator.show { opacity: 1; }
+
+/* Box drawing overlay */
+#box-overlay {
+  position: absolute; border: 2px dashed #ffff00; background: rgba(255,255,0,0.1);
+  display: none; pointer-events: none; z-index: 10;
+}
+</style>
+</head>
+<body>
+
+<!-- ════════════ STARTUP ════════════ -->
+{% if orchestrated %}
+<div class="screen active" id="orch-loading">
+  <div class="orch-veil">
+    <div class="orch-veil-title">TCRMP — SAM3 ready check</div>
+    <div id="orch-loading-msg" class="orch-veil-msg">
+      Waiting for SAM3 models to finish loading and the orchestrator to configure this frame set.
+      This page will auto-advance to the review screen once frames are ready.
+    </div>
+    <div class="orch-veil-hint">
+      (orchestrator-driven view — close the tab if you want to reconfigure from the Step&nbsp;5 panel)
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="screen{% if not orchestrated %} active{% endif %}" id="startup">
+  <div class="setup-card">
+    <h1>TCRMP Segment Images (SAM3)</h1>
+
+    <div class="mode-buttons">
+      <div class="mode-btn active" id="mode-new" onclick="setMode('new')">
+        <div class="mode-title">Load from routeChosenImages</div>
+        <div class="mode-desc">Import sam_click_prompts + raw images</div>
+      </div>
+      <div class="mode-btn" id="mode-resume" onclick="setMode('resume')">
+        <div class="mode-title">Continue Existing</div>
+        <div class="mode-desc">Resume from export directory</div>
+      </div>
+    </div>
+
+    <div id="new-fields">
+      <div class="field">
+        <label>Input Directory (routeChosenImages output)</label>
+        <input type="text" id="inp-input" value="{{ default_input }}">
+      </div>
+      <div class="field">
+        <label>Export Directory (YOLO output)</label>
+        <input type="text" id="inp-export" value="{{ default_export }}">
+      </div>
+      <div class="field">
+        <label>Categories to Segment (uncheck to skip)</label>
+        <div class="cat-grid" id="cat-grid">
+          {% for cat in all_categories %}
+          <label><input type="checkbox" class="cat-chk" value="{{ cat }}"
+            {{ 'checked' if cat in default_categories else '' }}> {{ cat }}</label>
+          {% endfor %}
+          <span class="select-all" onclick="toggleAllCats()">toggle all</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="resume-fields" class="hidden">
+      <div class="field">
+        <label>Export Directory (with existing segmentation data)</label>
+        <input type="text" id="inp-resume-export" placeholder="/path/to/existing/export">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Review Batch Size</label>
+      <div class="field-row">
+        <label><input type="radio" name="rbatch" value="5"> 5</label>
+        <label><input type="radio" name="rbatch" value="10" checked> 10</label>
+        <label><input type="radio" name="rbatch" value="20"> 20</label>
+        <label><input type="radio" name="rbatch" value="all"> All (no batching)</label>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>
+        <input type="checkbox" id="chk-shuffle">
+        Shuffle frames (randomize review order)
+      </label>
+      <div style="color:#888; font-size:12px; margin-top:4px; margin-left:22px">
+        Random per-session — which frames have been reviewed / exported is
+        still tracked on disk, so you can come back later and pick up the
+        unprocessed ones.
+      </div>
+    </div>
+
+    <div class="setup-info" id="setup-info"></div>
+    <button class="btn-action" id="btn-start" onclick="doStart()">Load & Start</button>
+    <div class="setup-error" id="setup-error"></div>
+  </div>
+</div>
+
+<!-- ════════════ PROCESSING ════════════ -->
+<div class="screen" id="processing">
+  <div class="progress-wrap">
+    <h2>Running SAM3 segmentation...</h2>
+    <p style="font-size:12px; color:#888; margin-bottom:12px;">Processing runs server-side. You can close the browser and come back — progress is saved.</p>
+    <div class="progress-bar-outer">
+      <div class="progress-bar-inner" id="progress-bar" style="width: 0%"></div>
+    </div>
+    <div class="progress-text" id="progress-text">0 / 0</div>
+    <div class="progress-current" id="progress-current"></div>
+    <div class="progress-eta" id="progress-eta"></div>
+    <button class="btn-action hidden" id="btn-start-review" onclick="startReviewWhileProcessing()" style="margin-top:16px; width:100%; padding:12px; background:#4ecca3; border:none; border-radius:4px; color:#fff; font-size:14px; font-weight:600; cursor:pointer;">Start Review</button>
+  </div>
+</div>
+
+<!-- ════════════ REVIEW ════════════ -->
+<div class="screen" id="review">
+  <div class="review-topbar">
+    <h1>Segment Images</h1>
+    <button class="btn" onclick="prevImage()" title="Previous (B)">&#9664; Prev</button>
+    <span class="img-counter" id="img-counter">0 / 0</span>
+    <button class="btn" onclick="nextImage()" title="Next (N)">Next &#9654;</button>
+    <span class="batch-info" id="batch-info"></span>
+    <span id="image-filename" style="color:#4ecca3; font-family:monospace; font-size:13px; margin-left:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:500px;"></span>
+    <span id="bg-processing-badge" style="font-size:10px; color:#1a1a2e; background:#4ecca3; padding:2px 6px; border-radius:3px; display:none;">Processing...</span>
+    <span class="spacer"></span>
+    <span id="frame-timer"
+          style="font-family:monospace; font-size:12px; color:#aaa; margin-right:6px"
+          title="This frame — target 15.0s. Average is the rolling mean for this session.">—</span>
+    <button class="btn" id="frame-timer-pause"
+            onclick="_timerTogglePause()" title="Pause / resume the timer (P)"
+            style="padding:2px 8px;font-size:11px;margin-right:8px">⏸</button>
+    <button class="btn" id="auto-advance-btn"
+            onclick="setAutoAdvance(!autoAdvance)"
+            style="padding:2px 8px;font-size:11px;background:#1a5c32;color:#fff;margin-right:8px">
+        Auto YES
+    </button>
+    <span class="status" id="status-text"></span>
+    <button class="btn primary" onclick="doExport()">Export Batch</button>
+  </div>
+  <div class="toolbar-bar">
+    <span class="tool-label">Opacity:</span>
+    <input type="range" id="opacity-slider" min="0" max="100" value="50" oninput="setOpacity(this.value)">
+    <span class="tool-val" id="opacity-val">50%</span>
+    <div class="sep"></div>
+    <label><input type="checkbox" id="chk-points" onchange="render()"> Show Points</label>
+    <div class="sep"></div>
+    <span class="tool-label">Edit:</span>
+    <button class="btn" id="btn-mode-refine" onclick="setInteractionMode('refine')">Refine (R)</button>
+    <button class="btn" id="btn-mode-box" onclick="setInteractionMode('box')">Box (B)</button>
+    <button class="btn" id="btn-mode-merge" onclick="setInteractionMode('merge')">Merge (M)</button>
+    <button class="btn" id="btn-mode-add" onclick="setInteractionMode('add')">Add (A)</button>
+    <button class="btn" id="btn-mode-draw" onclick="setInteractionMode('draw')">Draw (D)</button>
+  </div>
+  <div class="quickadd-bar" id="quickadd-bar">
+    <span class="qa-label">Hold number + click (Add mode):</span>
+    {% for lbl in target_labels %}
+    <button class="qa-btn" data-code="{{ lbl.code }}" data-idx="{{ loop.index0 }}"
+            onclick="toggleQuickLabel({{ loop.index0 }})"
+            title="Hold {{ loop.index }} and click on the image to add a {{ lbl.code }}{% if lbl.name %} ({{ lbl.name }}){% endif %} mask">
+      <span class="qa-key">{{ loop.index }}</span>
+      <span class="qa-code">{{ lbl.code }}</span>
+      <span class="qa-name">{{ lbl.name }}</span>
+    </button>
+    {% endfor %}
+  </div>
+  <div class="review-body">
+    <div class="canvas-wrap" id="canvas-wrap">
+      <canvas id="canvas"></canvas>
+      <div id="box-overlay"></div>
+      <div id="loupe"><canvas id="loupe-canvas" width="180" height="180"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h3>Masks</h3>
+        <span class="summary" id="panel-summary"></span>
+      </div>
+      <ul class="mask-list" id="mask-list"></ul>
+      <div class="panel-actions">
+        <button class="btn" onclick="acceptAllMasks()">Accept All Pending</button>
+        <button class="btn" onclick="undoRefine()">Undo (U)</button>
+        <button class="btn" onclick="resetMask()">Reset Mask (Ctrl+Z)</button>
+        <button class="btn" style="background:#5a1a2a;border-color:#8a2437;color:#ffbcc7"
+                onclick="scrapFrame()" title="Exclude this frame from review and export — reversible via /unscrap">
+          Scrap Frame
+        </button>
+        <div style="display:flex; gap:4px;">
+          <button class="btn" onclick="doExemplarScan('this')" style="flex:1">Scan This</button>
+          <button class="btn" onclick="doExemplarScan('all')" style="flex:1">Scan All</button>
+        </div>
+        <div style="display:flex; align-items:center; gap:4px; font-size:10px; color:#888;">
+          <span>Threshold:</span>
+          <input type="range" id="scan-threshold" min="10" max="90" value="50" style="flex:1; accent-color:#e94560;">
+          <span id="scan-threshold-val" style="color:#4ecca3; min-width:28px;">0.5</span>
+        </div>
+        <button class="btn" onclick="fitImage(); render();">Fit View (F)</button>
+      </div>
+      <div class="help-text">
+        <kbd>Space</kbd> next mask &nbsp;
+        <kbd>Enter</kbd> accept<br>
+        <kbd>X</kbd>/<kbd>Del</kbd> reject &nbsp;
+        <kbd>N</kbd> next &nbsp;
+        <kbd>B</kbd> prev<br>
+        <kbd>R</kbd> refine (L=add, R=remove)<br>
+        <kbd>A</kbd> add new mask &nbsp;
+        <kbd>M</kbd> merge<br>
+        <kbd>U</kbd> undo refine &nbsp;
+        <kbd>Ctrl+Z</kbd> reset mask<br>
+        <kbd>Shift+drag</kbd> box redraw<br>
+        <kbd>O</kbd> opacity &nbsp;
+        <kbd>P</kbd> points &nbsp;
+        <kbd>F</kbd> fit<br>
+        <kbd>Z</kbd> auto-center &nbsp;
+        <kbd>Scroll</kbd> zoom<br>
+        <kbd>Alt+drag</kbd> pan
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Species popup for new masks -->
+<div id="cat-popup">
+  <div style="width:100%; font-size:10px; color:#666; padding:2px 4px; text-transform:uppercase; letter-spacing:0.5px;">Target Species</div>
+  {% for sp in target_species %}
+  <div class="cat-btn" onclick="assignNewMaskSpecies('{{ sp }}')"><kbd>{{ loop.index }}</kbd>{{ sp }}</div>
+  {% endfor %}
+  <div style="width:100%; border-top:1px solid #0f3460; margin:2px 0;"></div>
+  <div style="width:100%; font-size:10px; color:#666; padding:2px 4px; text-transform:uppercase; letter-spacing:0.5px;">Category</div>
+  <div class="cat-btn" onclick="assignNewMaskCategory('Sponge')"><kbd>s</kbd>Sponge</div>
+  <div class="cat-btn" onclick="assignNewMaskCategory('Macroalgae')"><kbd>m</kbd>Macro</div>
+  <div class="cat-btn" onclick="assignNewMaskCategory('Gorgonian')"><kbd>g</kbd>Gorg</div>
+  <div class="cat-btn" onclick="assignNewMaskCategory('Turf')"><kbd>t</kbd>Turf</div>
+  <div class="cat-btn" onclick="assignNewMaskCategory('')"><kbd>0</kbd>Unlabel</div>
+</div>
+<div id="mode-indicator"></div>
+
+<!-- Export overlay -->
+<div class="overlay" id="export-overlay">
+  <div class="overlay-card">
+    <h2 id="export-title">Batch Exported</h2>
+    <p id="export-summary"></p>
+    <div id="export-remaining" style="margin:12px 0; font-size:14px; color:#e94560; font-weight:600;"></div>
+    <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+      <button class="btn primary" id="btn-next-review" onclick="nextReviewBatch()">Next Review Batch</button>
+      <button class="btn" onclick="closeExportOverlay()">Done</button>
+      <button class="btn" onclick="backToStartup()">Change Settings</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const wrap = document.getElementById('canvas-wrap');
+
+let currentMode = 'new';
+let scanResult = null;
+
+let images = [];        // [{filename, year, n_masks, ...}]
+let currentIdx = -1;
+let currentData = null; // {masks, image_width, image_height, ...}
+let img = null;
+
+let scale = 1, offsetX = 0, offsetY = 0;
+let selectedMask = -1;  // index into currentData.masks
+let isPanning = false, panStartX = 0, panStartY = 0;
+let autoCenter = false;
+
+// Mask opacity (0-1)
+let maskOpacity = 0.5;
+
+// Interaction modes: 'select' | 'refine' | 'merge' | 'box' | 'add'
+let interactionMode = 'select';
+let mergeFirstId = -1;
+
+// Box drawing state
+let isDrawingBox = false;
+let boxStartX = 0, boxStartY = 0, boxEndX = 0, boxEndY = 0;
+
+// Add mask state
+let aKeyDown = false;
+let pendingAddMaskIdx = -1;  // index of newly added mask awaiting category
+
+// ETA tracking
+let processStartTime = 0;
+let processTimes = [];
+
+// Refine in-flight guard
+let refineInFlight = false;
+
+// ── Category colors ──
+const CATEGORY_COLORS = {
+  'Coral':         {h: 0,   s: 80, l: 55},
+  'Sponge':        {h: 270, s: 70, l: 55},
+  'Macroalgae':    {h: 120, s: 60, l: 45},
+  'Gorgonian':     {h: 30,  s: 80, l: 50},
+  'Dca':           {h: 200, s: 50, l: 50},
+  'Turf':          {h: 80,  s: 50, l: 40},
+  'Non-living':    {h: 0,   s: 0,  l: 50},
+  'Cyanobacteria': {h: 180, s: 60, l: 45},
+  'Calcareous':    {h: 50,  s: 40, l: 60},
+};
+
+// Per-mask distinct color. mask.id is stable across saves, so each mask
+// keeps its color identity through refinement, undo, etc. 47 is a coprime
+// with 360 so successive ids step across the hue wheel without collisions.
+function maskColor(mask, alpha) {
+  const id = Number(mask && mask.id) || 0;
+  const hue = (id * 47) % 360;
+  // Slight saturation/lightness jitter so nearby ids don't look identical.
+  const sat = 70 + ((id * 13) % 20);
+  const light = 50 + ((id * 7) % 15);
+  return `hsla(${hue}, ${sat}%, ${light}%, ${alpha})`;
+}
+
+function maskStrokeColor(mask) {
+  return maskColor(mask, 0.9);
+}
+
+function getReviewBatchSize() {
+  const v = document.querySelector('input[name=rbatch]:checked').value;
+  return v === 'all' ? 999999 : parseInt(v);
+}
+
+function getShuffleFlag() {
+  const el = document.getElementById('chk-shuffle');
+  return !!(el && el.checked);
+}
+
+// ══════════════════════════════════════════════
+// SCREEN SWITCHING
+// ══════════════════════════════════════════════
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+// ══════════════════════════════════════════════
+// STARTUP
+// ══════════════════════════════════════════════
+function setMode(mode) {
+  currentMode = mode;
+  document.getElementById('mode-new').classList.toggle('active', mode === 'new');
+  document.getElementById('mode-resume').classList.toggle('active', mode === 'resume');
+  document.getElementById('new-fields').classList.toggle('hidden', mode !== 'new');
+  document.getElementById('resume-fields').classList.toggle('hidden', mode !== 'resume');
+  document.getElementById('btn-start').textContent = mode === 'new' ? 'Load & Start' : 'Continue';
+  document.getElementById('setup-info').classList.remove('visible');
+  document.getElementById('setup-error').textContent = '';
+  scanResult = null;
+}
+
+function toggleAllCats() {
+  const chks = document.querySelectorAll('.cat-chk');
+  const allChecked = Array.from(chks).every(c => c.checked);
+  chks.forEach(c => c.checked = !allChecked);
+}
+
+async function doStart() {
+  const errEl = document.getElementById('setup-error');
+  const infoEl = document.getElementById('setup-info');
+
+  if (currentMode === 'new') {
+    const inputDir = document.getElementById('inp-input').value.trim();
+    const exportDir = document.getElementById('inp-export').value.trim();
+    if (!inputDir) { errEl.textContent = 'Input directory required'; return; }
+    if (!exportDir) { errEl.textContent = 'Export directory required'; return; }
+
+    const catChks = document.querySelectorAll('.cat-chk:checked');
+    const categories = Array.from(catChks).map(c => c.value);
+    if (!categories.length) { errEl.textContent = 'Select at least one category'; return; }
+
+    errEl.textContent = '';
+    infoEl.innerHTML = 'Loading prompts...';
+    infoEl.classList.add('visible');
+
+    try {
+      const res = await fetch('/api/configure', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          input_dir: inputDir, export_dir: exportDir,
+          categories: categories, review_batch_size: getReviewBatchSize(),
+          shuffle: getShuffleFlag(),
+        }),
+      });
+      scanResult = await res.json();
+      if (scanResult.error) { errEl.textContent = scanResult.error; infoEl.classList.remove('visible'); return; }
+
+      let html = `<span class="num">${scanResult.years.length}</span> year(s) found.`;
+      html += ` <span class="num">${scanResult.to_process}</span> images to segment.`;
+      if (scanResult.already_processed > 0) {
+        html += `<br>Already processed: <span class="num">${scanResult.already_processed}</span>`;
+      }
+      html += `<br>Categories: ${scanResult.categories.join(', ')}`;
+
+      if (scanResult.phase === 'review') {
+        html += `<br><br>All processed! <span class="num">${scanResult.review_count}</span> images for review.`;
+      }
+
+      infoEl.innerHTML = html;
+      infoEl.classList.add('visible');
+    } catch (e) { errEl.textContent = 'Error: ' + e.message; return; }
+
+  } else {
+    // Resume mode
+    const exportDir = document.getElementById('inp-resume-export').value.trim();
+    if (!exportDir) { errEl.textContent = 'Export directory required'; return; }
+
+    try {
+      const res = await fetch('/api/resume', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          export_dir: exportDir, review_batch_size: getReviewBatchSize(),
+          shuffle: getShuffleFlag(),
+        }),
+      });
+      scanResult = await res.json();
+      if (scanResult.error) { errEl.textContent = scanResult.error; return; }
+
+      let html = `Loaded: <span class="num">${scanResult.total_processed}</span> images across ${scanResult.years.length} year(s).`;
+      html += `<br><span class="num">${scanResult.review_count}</span> images for review.`;
+      infoEl.innerHTML = html;
+      infoEl.classList.add('visible');
+    } catch (e) { errEl.textContent = 'Error: ' + e.message; return; }
+  }
+
+  if (!scanResult) return;
+
+  if (scanResult.phase === 'review') {
+    await loadReviewBatch();
+    showScreen('review');
+    if (images.length > 0) selectImage(0);
+    return;
+  }
+
+  const total = scanResult.to_process || 0;
+  if (total === 0) { errEl.textContent = 'Nothing to process'; return; }
+
+  showScreen('processing');
+  processStartTime = performance.now();
+  processTimes = [];
+  await runProcessing(total);
+}
+
+// ══════════════════════════════════════════════
+// PROCESSING (background — server-side)
+// ══════════════════════════════════════════════
+let processingPollTimer = null;
+
+async function runProcessing(total) {
+  const bar = document.getElementById('progress-bar');
+  const text = document.getElementById('progress-text');
+  const current = document.getElementById('progress-current');
+  const eta = document.getElementById('progress-eta');
+  const reviewBtn = document.getElementById('btn-start-review');
+
+  // Kick off background processing
+  await fetch('/api/process', { method: 'POST' });
+  processStartTime = performance.now();
+  let lastProcessed = 0;
+
+  // Poll for progress
+  async function poll() {
+    try {
+      const res = await fetch('/api/process_status');
+      const data = await res.json();
+
+      const pct = data.total > 0 ? Math.round((data.processed / data.total) * 100) : 0;
+      bar.style.width = pct + '%';
+      text.textContent = `${data.processed} / ${data.total}`;
+
+      if (data.processed > lastProcessed) {
+        current.textContent = `Processing... ${data.processed} images segmented`;
+        lastProcessed = data.processed;
+      }
+
+      // ETA based on elapsed time
+      if (data.processed > 0 && !data.done) {
+        const elapsed = (performance.now() - processStartTime) / 1000;
+        const perImage = elapsed / data.processed;
+        const remaining = perImage * (data.total - data.processed);
+        const remainMin = Math.ceil(remaining / 60);
+        eta.textContent = remainMin > 60
+          ? `ETA: ~${Math.floor(remainMin / 60)}h ${remainMin % 60}m`
+          : `ETA: ~${remainMin} min`;
+      }
+
+      // Show "Start Review" button once some images are ready
+      if (data.processed >= 1) {
+        reviewBtn.classList.remove('hidden');
+        reviewBtn.textContent = `Start Review (${data.processed} ready)`;
+      }
+
+      if (data.done) {
+        eta.textContent = 'Segmentation complete!';
+        reviewBtn.textContent = `Start Review (all ${data.total} ready)`;
+        reviewBtn.classList.remove('hidden');
+        clearInterval(processingPollTimer);
+        return;
+      }
+    } catch (e) {
+      current.textContent = 'Polling error: ' + e.message;
+    }
+  }
+
+  await poll();
+  processingPollTimer = setInterval(poll, 2000);
+}
+
+let bgPollTimer = null;
+
+async function startReviewWhileProcessing() {
+  if (processingPollTimer) clearInterval(processingPollTimer);
+  await loadReviewBatch();
+  showScreen('review');
+  if (images.length > 0) selectImage(0);
+
+  // Keep polling in review mode to update badge
+  bgPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch('/api/process_status');
+      const data = await res.json();
+      const badge = document.getElementById('bg-processing-badge');
+      if (data.running) {
+        badge.style.display = 'inline';
+        badge.textContent = `Processing ${data.processed}/${data.total}...`;
+      } else {
+        badge.style.display = 'none';
+        clearInterval(bgPollTimer);
+      }
+    } catch (e) {}
+  }, 5000);
+}
+
+// ══════════════════════════════════════════════
+// REVIEW — BATCH LOADING
+// ══════════════════════════════════════════════
+async function loadReviewBatch() {
+  const res = await fetch('/api/review_batch');
+  const data = await res.json();
+  images = data.images || [];
+  currentIdx = -1;
+
+  const infoEl = document.getElementById('batch-info');
+  if (data.total_batches > 0) {
+    const start = data.offset + 1;
+    const end = Math.min(data.offset + data.batch_size, data.total_images);
+    infoEl.textContent = `Batch ${data.batch_number}/${data.total_batches} (${start}-${end} of ${data.total_images})`;
+  } else {
+    infoEl.textContent = 'No images to review';
+  }
+  updateCounter();
+}
+
+// ══════════════════════════════════════════════
+// REVIEW — IMAGE SELECTION
+// ══════════════════════════════════════════════
+async function selectImage(idx) {
+  if (idx < 0 || idx >= images.length) return;
+
+  // Close out the previous frame's timer BEFORE saving/switching so paused
+  // time is correctly excluded from the rolling average.
+  _timerRecordPrev();
+
+  // Save current image masks before switching
+  if (currentData && currentIdx >= 0) await saveCurrentMasks();
+
+  currentIdx = idx;
+  const filename = images[idx].filename;
+
+  const res = await fetch(`/api/image/${encodeURIComponent(filename)}`);
+  currentData = await res.json();
+
+  img = new Image();
+  img.onload = () => {
+    // Always start each new frame in full view. Enter zooms to the first
+    // pending mask so the user can review each in turn.
+    fitImage();
+    render();
+  };
+  img.src = `/images/${encodeURIComponent(filename)}`;
+
+  selectedMask = -1;
+  interactionMode = 'select';
+  // Sticky Add is per-frame — don't carry it across. User can re-press A.
+  if (stickyAddMode) {
+    stickyAddMode = false;
+    _updateStickyAddIndicator();
+  }
+  // Mask checkboxes are per-frame — clear so they don't follow across frames.
+  checkedMaskIds = new Set();
+  mergeFirstId = -1;
+  updateModeButtons();
+  renderMaskList();
+  updateCounter();
+  document.getElementById('image-filename').textContent = filename;
+
+  // Kick the per-frame timer for the new frame.
+  _timerStart();
+}
+
+function prevImage() { if (currentIdx > 0) selectImage(currentIdx - 1); }
+function nextImage() { if (currentIdx < images.length - 1) selectImage(currentIdx + 1); }
+
+async function saveCurrentMasks() {
+  if (!currentData || currentIdx < 0) return;
+  const filename = images[currentIdx].filename;
+  const updates = {};
+  for (const m of currentData.masks) {
+    updates[String(m.id)] = m.status;
+  }
+  await fetch(`/api/image/${encodeURIComponent(filename)}/masks`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ updates }),
+  });
+}
+
+// Persist JUST the status for a single mask, right now. Used by
+// accept/reject so that the backend's view of which masks are rejected
+// stays in sync — otherwise Add/Refine would still clip against a
+// just-rejected mask because the backend hadn't seen the status change
+// yet (saveCurrentMasks only runs on frame change).
+async function persistMaskStatus(maskId, status) {
+  if (currentIdx < 0 || !images[currentIdx]) return;
+  const filename = images[currentIdx].filename;
+  try {
+    await fetch(`/api/image/${encodeURIComponent(filename)}/masks`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ updates: { [String(maskId)]: status } }),
+    });
+  } catch (e) {
+    // Non-fatal: next frame-change save will catch up.
+    console.warn('persistMaskStatus failed', e);
+  }
+}
+
+// ══════════════════════════════════════════════
+// OPACITY
+// ══════════════════════════════════════════════
+function setOpacity(val) {
+  maskOpacity = val / 100;
+  document.getElementById('opacity-val').textContent = val + '%';
+  localStorage.setItem('seg_opacity', val); // legacy key — kept for back-compat
+  if (typeof savePrefs === 'function') savePrefs();
+  render();
+}
+
+function cycleOpacity() {
+  const levels = [30, 60, 90];
+  const current = Math.round(maskOpacity * 100);
+  let next = levels[0];
+  for (let i = 0; i < levels.length; i++) {
+    if (current < levels[i]) { next = levels[i]; break; }
+    if (i === levels.length - 1) next = levels[0];
+  }
+  document.getElementById('opacity-slider').value = next;
+  setOpacity(next);
+}
+
+// Restore saved opacity
+(function() {
+  const saved = localStorage.getItem('seg_opacity');
+  if (saved) {
+    document.getElementById('opacity-slider').value = saved;
+    maskOpacity = parseInt(saved) / 100;
+    document.getElementById('opacity-val').textContent = saved + '%';
+  }
+})();
+
+// ══════════════════════════════════════════════
+// INTERACTION MODES
+// ══════════════════════════════════════════════
+function setInteractionMode(mode) {
+  interactionMode = mode;
+  mergeFirstId = -1;
+  if (pendingAddMaskIdx < 0) hideCatPopup();
+  updateModeButtons();
+  const labels = {refine:'REFINE', merge:'MERGE', box:'BOX', add:'ADD', draw:'DRAW'};
+  if (labels[mode]) flashMode(labels[mode]);
+  // Update cursor class
+  canvas.classList.remove('add-mode', 'refine-mode', 'draw-mode');
+  if (mode === 'add') canvas.classList.add('add-mode');
+  else if (mode === 'refine') canvas.classList.add('refine-mode');
+  else if (mode === 'draw') canvas.classList.add('draw-mode');
+  // Mode-specific full-canvas highlighting (pink for add, cyan for draw).
+  const wrapEl = document.getElementById('canvas-wrap');
+  if (wrapEl) {
+    wrapEl.classList.toggle('add-active', mode === 'add');
+    wrapEl.classList.toggle('draw-active', mode === 'draw');
+  }
+  // Leaving add mode clears any held quick-label highlight.
+  if (mode !== 'add') {
+    numKeyDown = null;
+    highlightQuickBtn(-1);
+  }
+  // Entering draw mode without a mask selected is pointless — bounce back.
+  if (mode === 'draw' && selectedMask < 0) {
+    setStatus('Pick a mask first (click or Space), then press D to draw-edit.');
+    interactionMode = 'select';
+    if (wrapEl) wrapEl.classList.remove('draw-active');
+    canvas.classList.remove('draw-mode');
+    updateModeButtons();
+  }
+}
+
+function updateModeButtons() {
+  document.getElementById('btn-mode-refine').classList.toggle('active', interactionMode === 'refine');
+  document.getElementById('btn-mode-merge').classList.toggle('active', interactionMode === 'merge');
+  document.getElementById('btn-mode-box').classList.toggle('active', interactionMode === 'box');
+  document.getElementById('btn-mode-add').classList.toggle('active', interactionMode === 'add');
+  const drawBtn = document.getElementById('btn-mode-draw');
+  if (drawBtn) drawBtn.classList.toggle('active', interactionMode === 'draw');
+}
+
+let modeFlashTimer = null;
+function flashMode(text) {
+  const el = document.getElementById('mode-indicator');
+  el.textContent = text;
+  // Color: green for accept, red for reject, yellow for everything else
+  if (text.startsWith('\u2713')) el.style.color = 'rgba(80,255,120,0.8)';
+  else if (text.startsWith('\u2717')) el.style.color = 'rgba(255,80,80,0.8)';
+  else el.style.color = 'rgba(255,255,0,0.6)';
+  el.classList.add('show');
+  clearTimeout(modeFlashTimer);
+  modeFlashTimer = setTimeout(() => el.classList.remove('show'), 400);
+}
+
+// ══════════════════════════════════════════════
+// RENDERING
+// ══════════════════════════════════════════════
+function fitImage() {
+  if (!img) return;
+  const ww = wrap.clientWidth, wh = wrap.clientHeight;
+  canvas.width = ww; canvas.height = wh;
+  scale = Math.min(ww / img.width, wh / img.height) * 0.95;
+  offsetX = (ww - img.width * scale) / 2;
+  offsetY = (wh - img.height * scale) / 2;
+}
+
+function screenToImage(sx, sy) {
+  return { x: (sx - offsetX) / scale, y: (sy - offsetY) / scale };
+}
+
+function render() {
+  if (!img || !currentData) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.translate(offsetX, offsetY);
+  ctx.scale(scale, scale);
+
+  // Draw image
+  ctx.drawImage(img, 0, 0);
+
+  const masks = currentData.masks || [];
+
+  // Draw masks
+  for (let i = 0; i < masks.length; i++) {
+    const m = masks[i];
+    if (m.status === 'rejected') continue;
+
+    const isSel = i === selectedMask;
+    const polygons = m.polygon_px || [];
+
+    // Fill
+    ctx.globalAlpha = maskOpacity;
+    ctx.fillStyle = maskColor(m, 1.0);
+    for (const poly of polygons) {
+      if (poly.length < 6) continue;
+      ctx.beginPath();
+      ctx.moveTo(poly[0], poly[1]);
+      for (let j = 2; j < poly.length; j += 2) {
+        ctx.lineTo(poly[j], poly[j + 1]);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Stroke
+    ctx.globalAlpha = 1.0;
+    ctx.strokeStyle = isSel ? '#ffff00' : maskStrokeColor(m);
+    ctx.lineWidth = isSel ? 3 / scale : 1.5 / scale;
+    for (const poly of polygons) {
+      if (poly.length < 6) continue;
+      ctx.beginPath();
+      ctx.moveTo(poly[0], poly[1]);
+      for (let j = 2; j < poly.length; j += 2) {
+        ctx.lineTo(poly[j], poly[j + 1]);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    }
+
+    // Label at centroid
+    if (polygons.length > 0 && polygons[0].length >= 2) {
+      const poly = polygons[0];
+      let cx = 0, cy = 0, n = 0;
+      for (let j = 0; j < poly.length; j += 2) { cx += poly[j]; cy += poly[j + 1]; n++; }
+      cx /= n; cy /= n;
+
+      const labelText = `${m.label} ${m.species || ''}`;
+      const fs = Math.max(10, Math.min(16, 14 / scale));
+      ctx.font = `bold ${fs}px monospace`;
+      ctx.globalAlpha = 1.0;
+      ctx.lineWidth = 3 / scale;
+      ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+      ctx.strokeText(labelText, cx, cy);
+      ctx.fillStyle = isSel ? '#ffff00' : '#fff';
+      ctx.fillText(labelText, cx, cy);
+    }
+  }
+
+  // Draw point markers (optional toggle)
+  if (document.getElementById('chk-points').checked) {
+    ctx.globalAlpha = 0.8;
+    for (const m of masks) {
+      if (m.status === 'rejected') continue;
+      const px = m.source_x, py = m.source_y;
+      if (px == null || py == null) continue;
+
+      ctx.beginPath();
+      ctx.arc(px, py, 6 / scale, 0, Math.PI * 2);
+      ctx.fillStyle = maskColor(m, 1.0);
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.5 / scale;
+      ctx.stroke();
+    }
+  }
+
+  // In-progress draw path (cyan trail, drawn in image space so it zooms with the view)
+  if (isDrawing && drawPath.length > 0) {
+    ctx.beginPath();
+    ctx.moveTo(drawPath[0].x, drawPath[0].y);
+    for (let i = 1; i < drawPath.length; i++) {
+      ctx.lineTo(drawPath[i].x, drawPath[i].y);
+    }
+    ctx.strokeStyle = '#00d4ff';
+    ctx.lineWidth = 3 / scale;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+  }
+
+  ctx.globalAlpha = 1.0;
+  ctx.restore();
+}
+
+// ══════════════════════════════════════════════
+// MASK LIST PANEL
+// ══════════════════════════════════════════════
+// Which masks are checked for multi-select merge. Keyed by mask.id (stable
+// across renders) so sorting / re-indexing doesn't break the selection.
+let checkedMaskIds = new Set();
+
+function renderMaskList() {
+  const el = document.getElementById('mask-list');
+  const sumEl = document.getElementById('panel-summary');
+  if (!currentData) { el.innerHTML = ''; sumEl.textContent = ''; return; }
+
+  const masks = currentData.masks || [];
+  const nAcc = masks.filter(m => m.status === 'accepted').length;
+  const nPend = masks.filter(m => m.status === 'pending').length;
+  const nChecked = masks.filter(m => checkedMaskIds.has(m.id)).length;
+  const checkedLabel = nChecked >= 2 ? ` — ${nChecked} checked (press M to merge)` : '';
+  sumEl.textContent = `${nAcc}/${masks.length} accepted, ${nPend} pending${checkedLabel}`;
+
+  el.innerHTML = masks.map((m, i) => {
+    const isSel = i === selectedMask;
+    const statusIcon = m.status === 'accepted' ? '&#10003;'
+                     : m.status === 'rejected' ? '&#10007;' : '&#9679;';
+    const cls = [
+      m.status,
+      isSel ? 'active' : '',
+      m.source_type === 'exemplar' ? 'exemplar' : '',
+    ].filter(Boolean).join(' ');
+    const area = m.area > 1000 ? `${(m.area / 1000).toFixed(1)}k` : m.area;
+    const checked = checkedMaskIds.has(m.id) ? 'checked' : '';
+    const swatchStyle = `background:${maskColor(m, 0.9)}`;
+    return `<li class="${cls}" data-idx="${i}" onclick="selectMaskFromList(${i}, event)">
+      <input type="checkbox" class="m-check" ${checked}
+             data-mask-id="${m.id}"
+             onclick="event.stopPropagation(); toggleMaskChecked(${m.id})">
+      <span class="m-swatch" style="${swatchStyle}"></span>
+      <span class="m-status">${statusIcon}</span>
+      <span class="m-label">${m.label}</span>
+      <span class="m-species">${m.species || '?'}</span>
+      <span class="m-area">${area}px</span>
+      <span class="m-score">${(m.score * 100).toFixed(0)}%</span>
+    </li>`;
+  }).join('');
+
+  if (selectedMask >= 0) {
+    const item = el.querySelector(`li[data-idx="${selectedMask}"]`);
+    if (item) item.scrollIntoView({block: 'nearest'});
+  }
+}
+
+function toggleMaskChecked(maskId) {
+  if (checkedMaskIds.has(maskId)) checkedMaskIds.delete(maskId);
+  else checkedMaskIds.add(maskId);
+  renderMaskList();
+}
+
+function clearMaskChecks() {
+  if (checkedMaskIds.size === 0) return;
+  checkedMaskIds.clear();
+  renderMaskList();
+}
+
+function selectMaskFromList(i) {
+  if (interactionMode === 'merge' && selectedMask >= 0 && i !== selectedMask) {
+    doMerge(selectedMask, i);
+    return;
+  }
+  selectedMask = i;
+  if (autoCenter) centerOnMask(i);
+  renderMaskList();
+  render();
+}
+
+function centerOnMask(idx) {
+  if (!currentData || !currentData.masks[idx]) return;
+  const m = currentData.masks[idx];
+  // Compute bounding box across all polygons
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const poly of (m.polygon_px || [])) {
+    for (let j = 0; j < poly.length; j += 2) {
+      if (poly[j] < minX) minX = poly[j];
+      if (poly[j] > maxX) maxX = poly[j];
+      if (poly[j+1] < minY) minY = poly[j+1];
+      if (poly[j+1] > maxY) maxY = poly[j+1];
+    }
+  }
+  if (minX === Infinity) return;
+  // Add padding (30% around the mask)
+  const padX = (maxX - minX) * 0.3;
+  const padY = (maxY - minY) * 0.3;
+  minX -= padX; minY -= padY; maxX += padX; maxY += padY;
+  // Zoom to fit this region
+  const ww = canvas.width, wh = canvas.height;
+  const maskW = maxX - minX, maskH = maxY - minY;
+  if (maskW <= 0 || maskH <= 0) return;
+  scale = Math.min(ww / maskW, wh / maskH) * 0.9;
+  // Clamp scale to reasonable range
+  scale = Math.max(0.1, Math.min(scale, 15));
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  offsetX = ww / 2 - cx * scale;
+  offsetY = wh / 2 - cy * scale;
+}
+
+function selectNextPending() {
+  if (!currentData) return;
+  const masks = currentData.masks;
+  if (!masks.length) return;
+
+  let start = selectedMask >= 0 ? selectedMask + 1 : 0;
+  for (let k = 0; k < masks.length; k++) {
+    const i = (start + k) % masks.length;
+    if (masks[i].status === 'pending') {
+      selectedMask = i;
+      centerOnMask(i);  // always zoom to fit
+      renderMaskList();
+      render();
+      return;
+    }
+  }
+  setStatus('No more pending masks');
+}
+
+// ══════════════════════════════════════════════
+// MASK ACTIONS
+// ══════════════════════════════════════════════
+// Sticky toggle — when off, accept/reject do NOT auto-advance. Useful when
+// you're doing fine-scale edits and don't want Enter to yank you off the mask.
+// Toggle with Space or the "Auto-advance" button in the top bar.
+let autoAdvance = true;
+
+// Sticky Add mode: when A is pressed, we stay in a "ADD -> click -> refine ->
+// Enter/Delete -> ADD" loop until A is pressed again. Separate from
+// interactionMode because the user passes through 'refine' between masks.
+let stickyAddMode = false;
+
+function _updateStickyAddIndicator() {
+  const btn = document.getElementById('btn-mode-add');
+  if (btn) {
+    if (stickyAddMode) {
+      btn.style.background = '#e94560';
+      btn.style.color = '#fff';
+      btn.title = 'Sticky Add ON — A to exit. Click places a mask, refine it, Enter/Delete to accept, repeat.';
+      btn.textContent = 'Add (A) ●';
+    } else {
+      btn.style.background = '';
+      btn.style.color = '';
+      btn.title = 'Press A to enter sticky Add mode: add -> refine -> accept -> repeat.';
+      btn.textContent = 'Add (A)';
+    }
+  }
+  setStatus(stickyAddMode
+    ? 'Sticky Add ON — click to place, refine, Enter to accept -> next mask. A to stop.'
+    : 'Sticky Add OFF');
+}
+
+function setAutoAdvance(v) {
+  autoAdvance = !!v;
+  const btn = document.getElementById('auto-advance-btn');
+  if (btn) {
+    btn.textContent = autoAdvance ? 'Auto YES' : 'Auto NO';
+    btn.style.background = autoAdvance ? '#1a5c32' : '#5a1a2a';
+    btn.title = autoAdvance
+      ? 'Auto-advance ON — Enter/Reject move to next mask/frame. Press Space to turn off.'
+      : 'Auto-advance OFF — Enter/Reject stay on the current mask. Press Space to turn on.';
+  }
+  setStatus(autoAdvance ? 'Auto-advance ON' : 'Auto-advance OFF (Enter stays put)');
+}
+
+function acceptMask() {
+  if (!currentData) return;
+  // Fresh frame (nothing selected) -> Enter zooms to the first pending mask.
+  // This lets the user land on a frame in full view, then press Enter once
+  // to start reviewing. (Respects autoAdvance: if off, this still selects
+  // the first mask — that's an initial focus, not a progression.)
+  if (selectedMask < 0) {
+    advanceToNextOrFrame();
+    return;
+  }
+  const m = currentData.masks[selectedMask];
+  // If no species assigned yet, show popup first
+  if (!m.species) {
+    pendingAddMaskIdx = selectedMask;
+    showCatPopup();
+    return;
+  }
+  m.status = 'accepted';
+  persistMaskStatus(m.id, 'accepted');
+  flashMode('\u2713 ' + m.label);
+  // In sticky Add mode, after acceptance snap back to Add so the next click
+  // creates a new mask. Otherwise follow the normal auto-advance (or stay
+  // put when auto-advance is off).
+  if (stickyAddMode) {
+    selectedMask = -1;
+    setInteractionMode('add');
+    renderMaskList(); render();
+    setStatus('Accepted — click to add the next mask (A to stop).');
+    return;
+  }
+  setInteractionMode('select');
+  renderMaskList(); render();
+  if (autoAdvance) {
+    setTimeout(() => advanceToNextOrFrame(), 150);
+  }
+}
+
+function rejectMask() {
+  if (selectedMask < 0 || !currentData) return;
+  const m = currentData.masks[selectedMask];
+  m.status = 'rejected';
+  // Persist right away so the next Add/Refine request sees this mask as
+  // rejected and stops clipping against it.
+  persistMaskStatus(m.id, 'rejected');
+  flashMode('\u2717 ' + m.label);
+  if (stickyAddMode) {
+    selectedMask = -1;
+    setInteractionMode('add');
+    renderMaskList(); render();
+    setStatus('Rejected — click to add the next mask (A to stop).');
+    return;
+  }
+  renderMaskList(); render();
+  if (autoAdvance) {
+    setTimeout(() => advanceToNextOrFrame(), 150);
+  }
+}
+
+async function acceptAllMasks() {
+  if (!currentData || currentIdx < 0) return;
+  const filename = images[currentIdx].filename;
+  const res = await fetch(`/api/image/${encodeURIComponent(filename)}/accept_all`, { method: 'POST' });
+  const data = await res.json();
+  if (data.ok) {
+    for (const m of currentData.masks) {
+      if (m.status === 'pending') m.status = 'accepted';
+    }
+    setStatus(`${data.accepted} masks accepted`);
+    renderMaskList(); render();
+  }
+}
+
+// ══════════════════════════════════════════════
+// REFINEMENT (click to add/remove)
+// ══════════════════════════════════════════════
+// When the server returns `affected = {updated:[…], removed:[…]}`, merge
+// those deltas into currentData.masks so the canvas matches the new truth
+// without a full refetch. `updated` entries are full mask dicts; `removed`
+// is just `[{id: ...}, ...]`.
+function applyAffected(affected) {
+  if (!affected || !currentData) return;
+  const upd = affected.updated || [];
+  const rm = new Set((affected.removed || []).map(r => r && r.id));
+  if (upd.length) {
+    for (const newMask of upd) {
+      const i = currentData.masks.findIndex(m => m.id === newMask.id);
+      if (i >= 0) Object.assign(currentData.masks[i], newMask);
+    }
+  }
+  if (rm.size) {
+    currentData.masks = currentData.masks.filter(m => !rm.has(m.id));
+    if (selectedMask >= 0 && !currentData.masks[selectedMask]) selectedMask = -1;
+  }
+}
+
+async function doRefine(clickX, clickY, clickLabel) {
+  if (selectedMask < 0 || !currentData || refineInFlight) return;
+  const mask = currentData.masks[selectedMask];
+  const filename = images[currentIdx].filename;
+
+  refineInFlight = true;
+  setStatus(clickLabel === 1 ? 'Adding...' : 'Removing...');
+
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/refine`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        mask_id: mask.id,
+        click_x: clickX, click_y: clickY,
+        click_label: clickLabel,
+      }),
+    });
+    const data = await res.json();
+    if (data.ok && data.mask) {
+      // Update mask in place
+      Object.assign(mask, data.mask);
+      setStatus(clickLabel === 1 ? 'Region added' : 'Region removed');
+      renderMaskList(); render();
+    } else {
+      setStatus('Refinement failed: ' + (data.error || ''));
+    }
+  } catch (e) {
+    setStatus('Refinement error');
+  }
+  refineInFlight = false;
+}
+
+// ══════════════════════════════════════════════
+// BOX REDRAW
+// ══════════════════════════════════════════════
+async function doBoxRedraw(imgBox) {
+  if (selectedMask < 0 || !currentData) return;
+  const mask = currentData.masks[selectedMask];
+  const filename = images[currentIdx].filename;
+
+  setStatus('Redrawing from box...');
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/rebox`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ mask_id: mask.id, box: imgBox }),
+    });
+    const data = await res.json();
+    if (data.ok && data.mask) {
+      Object.assign(mask, data.mask);
+      applyAffected(data.affected);
+      setStatus('Mask redrawn');
+      renderMaskList(); render();
+    } else {
+      setStatus('Box redraw failed: ' + (data.error || ''));
+    }
+  } catch (e) {
+    setStatus('Box redraw error');
+  }
+}
+
+// ══════════════════════════════════════════════
+// MERGE
+// ══════════════════════════════════════════════
+// Merge every mask in checkedMaskIds into the first one (lowest id), using
+// the existing pairwise /merge endpoint. Fails fast if any step errors.
+async function mergeCheckedMasks() {
+  if (!currentData || currentIdx < 0) return;
+  if (checkedMaskIds.size < 2) { setStatus('Check at least 2 masks first'); return; }
+
+  const filename = images[currentIdx].filename;
+  // Anchor = lowest id in the selection (arbitrary but deterministic).
+  const ids = Array.from(checkedMaskIds).sort((a, b) => a - b);
+  let anchorId = ids[0];
+  const toMerge = ids.slice(1);
+
+  setStatus(`Merging ${ids.length} masks...`);
+  for (const otherId of toMerge) {
+    try {
+      const res = await fetch(`/api/image/${encodeURIComponent(filename)}/merge`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ mask_id_a: anchorId, mask_id_b: otherId }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        setStatus(`Merge stopped: ${data.error || 'unknown'} (some merges may have landed)`);
+        break;
+      }
+      // Replace the anchor mask with the merged result locally.
+      const anchorIdx = currentData.masks.findIndex(m => m.id === anchorId);
+      if (anchorIdx >= 0) Object.assign(currentData.masks[anchorIdx], data.mask);
+      // Drop the removed mask locally.
+      currentData.masks = currentData.masks.filter(m => m.id !== data.removed_id);
+      // The backend may have assigned a new id to the merged mask — follow it.
+      anchorId = data.mask.id;
+    } catch (e) {
+      setStatus('Merge error: ' + e.message);
+      break;
+    }
+  }
+
+  // Leave only the surviving anchor checked, select it for immediate review.
+  checkedMaskIds = new Set([anchorId]);
+  const newIdx = currentData.masks.findIndex(m => m.id === anchorId);
+  if (newIdx >= 0) {
+    selectedMask = newIdx;
+    if (interactionMode !== 'refine') setInteractionMode('refine');
+  }
+  setStatus(`Merged ${ids.length} masks`);
+  renderMaskList();
+  render();
+}
+
+async function doMerge(idxA, idxB) {
+  if (!currentData) return;
+  const maskA = currentData.masks[idxA];
+  const maskB = currentData.masks[idxB];
+  const filename = images[currentIdx].filename;
+
+  setStatus('Merging...');
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/merge`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ mask_id_a: maskA.id, mask_id_b: maskB.id }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      Object.assign(maskA, data.mask);
+      currentData.masks = currentData.masks.filter(m => m.id !== data.removed_id);
+      selectedMask = currentData.masks.indexOf(maskA);
+      setStatus('Masks merged');
+      interactionMode = 'select'; mergeFirstId = -1;
+      updateModeButtons();
+      renderMaskList(); render();
+    } else {
+      setStatus('Merge failed: ' + (data.error || ''));
+    }
+  } catch (e) {
+    setStatus('Merge error');
+  }
+}
+
+// ══════════════════════════════════════════════
+// EXEMPLAR SCAN
+// ══════════════════════════════════════════════
+function getScanThreshold() {
+  return parseInt(document.getElementById('scan-threshold').value) / 100;
+}
+
+// Update threshold display
+document.getElementById('scan-threshold').addEventListener('input', function() {
+  document.getElementById('scan-threshold-val').textContent = (this.value / 100).toFixed(1);
+});
+
+async function doExemplarScan(mode) {
+  if (!currentData || currentIdx < 0) return;
+  if (mode === 'this' && selectedMask < 0) { setStatus('Select a mask first'); return; }
+
+  const filename = images[currentIdx].filename;
+  const threshold = getScanThreshold();
+
+  const body = { mode: mode, threshold: threshold };
+  if (mode === 'this') {
+    body.mask_id = currentData.masks[selectedMask].id;
+  }
+
+  const label = mode === 'all' ? 'Scanning all species' : `Scanning ${currentData.masks[selectedMask].species}`;
+  setStatus(`${label} (threshold ${threshold})...`);
+
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/exemplar`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      if (data.count > 0) {
+        // For 'all' mode, masks already added server-side; reload image data
+        if (mode === 'all') {
+          const imgRes = await fetch(`/api/image/${encodeURIComponent(filename)}`);
+          currentData = await imgRes.json();
+        } else {
+          currentData.masks.push(...data.new_masks);
+        }
+        const species = data.species_scanned ? ` (${data.species_scanned.join(', ')})` : '';
+        setStatus(`Found ${data.count} candidates${species}`);
+      } else {
+        setStatus('No candidates found above threshold');
+      }
+      renderMaskList(); render();
+    } else {
+      setStatus('Scan failed: ' + (data.error || ''));
+    }
+  } catch (e) {
+    setStatus('Scan error: ' + e.message);
+  }
+}
+
+// ══════════════════════════════════════════════
+// ADD NEW MASK
+// ══════════════════════════════════════════════
+const ADD_LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').concat(
+  ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(c => 'A' + c)
+);
+
+function nextAddLabel() {
+  if (!currentData) return 'A';
+  const used = new Set(currentData.masks.map(m => m.label));
+  for (const l of ADD_LABELS) {
+    if (!used.has(l)) return l;
+  }
+  return 'Z' + currentData.masks.length;
+}
+
+// Pending add click — stored until species is chosen
+let pendingAddClick = null; // {imgX, imgY, label}
+
+async function addMaskAt(imgX, imgY) {
+  if (!currentData || currentIdx < 0) return;
+  const filename = images[currentIdx].filename;
+  const label = nextAddLabel();
+
+  // If a target-label number is currently held, pre-assign species+category
+  // so the new mask is born already labeled. The backend subtracts existing
+  // masks, so the new mask won't get lumped into a neighbor.
+  let species = '', category = '', name = '';
+  if (numKeyDown !== null && TARGET_LABELS[numKeyDown]) {
+    const lbl = TARGET_LABELS[numKeyDown];
+    species = lbl.code;
+    category = lbl.category || 'Coral';
+    name = lbl.name || lbl.code;
+  }
+
+  setStatus(`Segmenting ${label}${species ? ' as ' + species : ''}...`);
+
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/add`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        click_x: imgX, click_y: imgY,
+        label: label, species: species, category: category,
+      }),
+    });
+    const data = await res.json();
+    if (data.ok && data.mask) {
+      // If we pre-assigned, hydrate the returned mask so the list shows it.
+      if (species && !data.mask.species) data.mask.species = species;
+      if (category && !data.mask.category) data.mask.category = category;
+      if (name && !data.mask.name) data.mask.name = name;
+      currentData.masks.push(data.mask);
+      selectedMask = currentData.masks.length - 1;
+      // Merge in any neighbor updates (edited-wins trimmed their RLEs).
+      applyAffected(data.affected);
+      // Re-find the new mask after applyAffected potentially reordered.
+      const newIdx = currentData.masks.findIndex(m => m.id === data.mask.id);
+      if (newIdx >= 0) selectedMask = newIdx;
+      // Straight into refine mode for immediate touch-up (user request).
+      setInteractionMode('refine');
+      renderMaskList(); render();
+      flashMode(label);
+      setStatus(`${label}${species ? ' -> ' + species : ''} added — refine now, Enter to accept`);
+    } else {
+      setStatus('Add failed: ' + (data.error || 'no mask'));
+    }
+  } catch (e) {
+    setStatus('Add error: ' + e.message);
+  }
+}
+
+function showCatPopup() {
+  const popup = document.getElementById('cat-popup');
+  const wrapRect = wrap.getBoundingClientRect();
+  popup.style.left = (wrapRect.left + wrapRect.width / 2 - 120) + 'px';
+  popup.style.top = (wrapRect.top + wrapRect.height / 2 - 20) + 'px';
+  popup.classList.add('visible');
+}
+
+function hideCatPopup() {
+  document.getElementById('cat-popup').classList.remove('visible');
+  pendingAddMaskIdx = -1;
+  pendingAddClick = null;
+}
+
+// Target species list from server
+const TARGET_SPECIES = [{% for sp in target_species %}'{{ sp }}'{% if not loop.last %}, {% endif %}{% endfor %}];
+const TARGET_LABELS = [{% for lbl in target_labels %}{code:'{{ lbl.code }}', name:{{ lbl.name|tojson }}, category:{{ lbl.category|tojson }}}{% if not loop.last %}, {% endif %}{% endfor %}];
+
+// Held-number-key state (mirror of step 4). While a number is held, clicks
+// in ADD mode create a new mask with the corresponding target label.
+let numKeyDown = null;
+
+function highlightQuickBtn(idx) {
+  document.querySelectorAll('.qa-btn').forEach((b, i) => {
+    b.classList.toggle('active', i === idx);
+  });
+}
+
+function toggleQuickLabel(idx) {
+  const lbl = TARGET_LABELS[idx];
+  if (!lbl) return;
+  setStatus(`${idx + 1} = ${lbl.code}${lbl.name ? ' (' + lbl.name + ')' : ''} — enter Add mode, then hold ${idx + 1} and click`);
+}
+
+function assignNewMaskSpecies(species) {
+  if (pendingAddMaskIdx < 0 || !currentData) { hideCatPopup(); return; }
+  const mask = currentData.masks[pendingAddMaskIdx];
+  mask.species = species;
+  mask.category = 'Coral';
+  mask.name = species;
+  hideCatPopup();
+  mask.status = 'accepted';
+  persistMaskStatus(mask.id, 'accepted');
+  flashMode('\u2713 ' + mask.label + ' ' + species);
+  if (stickyAddMode) {
+    selectedMask = -1;
+    setInteractionMode('add');
+    renderMaskList(); render();
+    setStatus('Accepted — click to add the next mask (A to stop).');
+    return;
+  }
+  setInteractionMode('select');
+  renderMaskList(); render();
+  if (autoAdvance) setTimeout(() => advanceToNextOrFrame(), 150);
+}
+
+function assignNewMaskCategory(category) {
+  if (pendingAddMaskIdx < 0 || !currentData) { hideCatPopup(); return; }
+  const mask = currentData.masks[pendingAddMaskIdx];
+  const catCodes = {'Sponge':'SPO', 'Macroalgae':'MACA', 'Gorgonian':'GORG',
+    'Turf':'TURF', '':''};
+  mask.species = catCodes[category] || category.toUpperCase().slice(0, 4);
+  mask.category = category;
+  hideCatPopup();
+  mask.status = 'accepted';
+  persistMaskStatus(mask.id, 'accepted');
+  flashMode('\u2713 ' + mask.label + ' ' + (mask.species || ''));
+  if (stickyAddMode) {
+    selectedMask = -1;
+    setInteractionMode('add');
+    renderMaskList(); render();
+    setStatus('Accepted — click to add the next mask (A to stop).');
+    return;
+  }
+  setInteractionMode('select');
+  renderMaskList(); render();
+  if (autoAdvance) setTimeout(() => advanceToNextOrFrame(), 150);
+}
+
+// ══════════════════════════════════════════════
+// MOUSE INTERACTION
+// ══════════════════════════════════════════════
+function findMaskAt(imgX, imgY) {
+  if (!currentData) return -1;
+  const masks = currentData.masks;
+  for (let i = masks.length - 1; i >= 0; i--) {
+    if (masks[i].status === 'rejected') continue;
+    const polys = masks[i].polygon_px || [];
+    for (const poly of polys) {
+      if (pointInPolygon(imgX, imgY, poly)) return i;
+    }
+  }
+  return -1;
+}
+
+function pointInPolygon(x, y, poly) {
+  let inside = false;
+  const n = poly.length / 2;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = poly[i * 2], yi = poly[i * 2 + 1];
+    const xj = poly[j * 2], yj = poly[j * 2 + 1];
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+// Click-vs-drag threshold for promoting a pending left-click to a pan.
+const PAN_THRESHOLD = 4;
+let pendingClick = null; // {clientX, clientY, startOffsetX, startOffsetY, sx, sy, imgX, imgY}
+
+// TagLab-style draw gesture (active only in interactionMode === 'draw').
+let isDrawing = false;
+let drawPath = []; // array of {x,y} in IMAGE coords
+
+canvas.addEventListener('mousedown', e => {
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+
+  // Pan: middle button or alt+left (power-user shortcut)
+  if (e.button === 1 || (e.button === 0 && e.altKey)) {
+    isPanning = true;
+    panStartX = e.clientX - offsetX;
+    panStartY = e.clientY - offsetY;
+    canvas.style.cursor = 'grabbing';
+    return;
+  }
+
+  const {x: imgX, y: imgY} = screenToImage(sx, sy);
+
+  // DRAW mode: start capturing a freehand path. Short-circuits all other
+  // click handling until mouseup.
+  if (e.button === 0 && interactionMode === 'draw' && selectedMask >= 0) {
+    isDrawing = true;
+    drawPath = [{x: imgX, y: imgY}];
+    e.preventDefault();
+    return;
+  }
+
+  // Shift+left drag: box redraw (still instant; needs drag detection directly)
+  if (e.button === 0 && e.shiftKey && selectedMask >= 0) {
+    isDrawingBox = true;
+    boxStartX = sx; boxStartY = sy;
+    boxEndX = sx; boxEndY = sy;
+    e.preventDefault();
+    return;
+  }
+
+  // Right-click: always instant negative refinement on selected mask
+  if (e.button === 2 && selectedMask >= 0) {
+    e.preventDefault();
+    doRefine(imgX, imgY, 0);
+    return;
+  }
+
+  // Plain left click: defer. If the cursor moves > PAN_THRESHOLD before
+  // release, promote to pan. Otherwise fire the mode-specific click action
+  // in mouseup. This gives us click+drag=pan everywhere without disrupting
+  // single-click semantics.
+  if (e.button === 0) {
+    pendingClick = {
+      clientX: e.clientX, clientY: e.clientY,
+      startOffsetX: offsetX, startOffsetY: offsetY,
+      sx, sy, imgX, imgY,
+    };
+    canvas.style.cursor = 'grab';
+  }
+});
+
+canvas.addEventListener('mousemove', e => {
+  // Active draw gesture — append to path and re-render to show the trail.
+  if (isDrawing) {
+    const rect = canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    const {x: imgX, y: imgY} = screenToImage(sx, sy);
+    const last = drawPath[drawPath.length - 1];
+    if (!last || Math.hypot(last.x - imgX, last.y - imgY) > 1) {
+      drawPath.push({x: imgX, y: imgY});
+      render();
+    }
+    return;
+  }
+
+  // Active pan drag
+  if (isPanning) {
+    offsetX = e.clientX - panStartX;
+    offsetY = e.clientY - panStartY;
+    render();
+    return;
+  }
+
+  // Pending click — promote to pan once we've moved enough
+  if (pendingClick) {
+    const dx = e.clientX - pendingClick.clientX;
+    const dy = e.clientY - pendingClick.clientY;
+    if ((dx * dx + dy * dy) > PAN_THRESHOLD * PAN_THRESHOLD) {
+      isPanning = true;
+      panStartX = pendingClick.clientX - pendingClick.startOffsetX;
+      panStartY = pendingClick.clientY - pendingClick.startOffsetY;
+      pendingClick = null;
+      canvas.style.cursor = 'grabbing';
+    }
+    // Keep updating loupe even while deciding
+    updateLoupe(e.clientX, e.clientY, e.clientX - (canvas.getBoundingClientRect().left), e.clientY - (canvas.getBoundingClientRect().top));
+    return;
+  }
+
+  // Loupe follow-cursor for all other move events
+  const rect = canvas.getBoundingClientRect();
+  updateLoupe(e.clientX, e.clientY, e.clientX - rect.left, e.clientY - rect.top);
+
+  if (isDrawingBox) {
+    boxEndX = e.clientX - rect.left;
+    boxEndY = e.clientY - rect.top;
+    const boxEl = document.getElementById('box-overlay');
+    const left = Math.min(boxStartX, boxEndX);
+    const top = Math.min(boxStartY, boxEndY);
+    const w = Math.abs(boxEndX - boxStartX);
+    const h = Math.abs(boxEndY - boxStartY);
+    boxEl.style.display = 'block';
+    boxEl.style.left = left + 'px';
+    boxEl.style.top = top + 'px';
+    boxEl.style.width = w + 'px';
+    boxEl.style.height = h + 'px';
+    return;
+  }
+});
+
+function _restCursor() {
+  return interactionMode === 'add' ? 'cell' : 'crosshair';
+}
+
+function executePendingClick(pc) {
+  const {imgX, imgY} = pc;
+  // ADD mode (or A key held)
+  if (interactionMode === 'add' || aKeyDown) { addMaskAt(imgX, imgY); return; }
+  // MERGE mode
+  if (interactionMode === 'merge') {
+    const hitIdx = findMaskAt(imgX, imgY);
+    if (hitIdx >= 0) {
+      if (mergeFirstId < 0) {
+        mergeFirstId = hitIdx;
+        selectedMask = hitIdx;
+        setStatus(`Merge: click second mask (selected ${currentData.masks[hitIdx].label})`);
+        renderMaskList(); render();
+      } else if (hitIdx !== mergeFirstId) {
+        doMerge(mergeFirstId, hitIdx);
+      }
+    }
+    return;
+  }
+  // REFINE mode: positive refinement on selected mask
+  if (interactionMode === 'refine' && selectedMask >= 0) { doRefine(imgX, imgY, 1); return; }
+  // SELECT mode (default)
+  const hitIdx = findMaskAt(imgX, imgY);
+  if (hitIdx === selectedMask && selectedMask >= 0) { doRefine(imgX, imgY, 1); return; }
+  if (hitIdx >= 0) {
+    selectedMask = hitIdx;
+    // Auto-enter refine mode on selection so the user's next click edits
+    // the mask (not deselects). Was: stay in select, requiring another click.
+    setInteractionMode('refine');
+    renderMaskList(); render();
+    return;
+  }
+  // Click on nothing: deselect
+  selectedMask = -1;
+  renderMaskList(); render();
+}
+
+canvas.addEventListener('mouseup', e => {
+  // Finalize draw gesture
+  if (isDrawing) {
+    isDrawing = false;
+    const path = drawPath;
+    drawPath = [];
+    if (path.length < 3) {
+      setStatus('Draw too short — try a larger gesture.');
+      render();
+      return;
+    }
+    submitDrawEdit(path);
+    return;
+  }
+  if (isPanning) { isPanning = false; canvas.style.cursor = _restCursor(); pendingClick = null; return; }
+  if (pendingClick) {
+    const pc = pendingClick;
+    pendingClick = null;
+    canvas.style.cursor = _restCursor();
+    executePendingClick(pc);
+    return;
+  }
+  if (isDrawingBox) {
+    isDrawingBox = false;
+    document.getElementById('box-overlay').style.display = 'none';
+    const p1 = screenToImage(boxStartX, boxStartY);
+    const p2 = screenToImage(boxEndX, boxEndY);
+    const imgBox = [
+      Math.min(p1.x, p2.x), Math.min(p1.y, p2.y),
+      Math.max(p1.x, p2.x), Math.max(p1.y, p2.y),
+    ];
+    if (imgBox[2] - imgBox[0] > 5 && imgBox[3] - imgBox[1] > 5) {
+      doBoxRedraw(imgBox);
+    }
+    return;
+  }
+});
+
+// Prevent context menu on right-click
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const zoom = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const newScale = scale * zoom;
+  if (newScale < 0.05 || newScale > 30) return;
+  offsetX = mx - (mx - offsetX) * zoom;
+  offsetY = my - (my - offsetY) * zoom;
+  scale = newScale;
+  render();
+}, {passive: false});
+
+// ══════════════════════════════════════════════
+// UNDO / RESET
+// ══════════════════════════════════════════════
+async function undoRefine() {
+  if (selectedMask < 0 || !currentData) return;
+  const mask = currentData.masks[selectedMask];
+  if (!mask.refinement_clicks || mask.refinement_clicks.length === 0) {
+    setStatus('Nothing to undo');
+    return;
+  }
+  const filename = images[currentIdx].filename;
+  setStatus('Undoing...');
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/undo_refine`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ mask_id: mask.id }),
+    });
+    const data = await res.json();
+    if (data.ok && data.mask) {
+      Object.assign(mask, data.mask);
+      setStatus(`Undo (${data.remaining_undos} edits left)`);
+      renderMaskList(); render();
+    } else {
+      setStatus('Undo failed: ' + (data.error || ''));
+    }
+  } catch (e) { setStatus('Undo error'); }
+}
+
+async function resetMask() {
+  if (selectedMask < 0 || !currentData) return;
+  const mask = currentData.masks[selectedMask];
+  const filename = images[currentIdx].filename;
+  setStatus('Resetting to original...');
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/reset_mask`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ mask_id: mask.id }),
+    });
+    const data = await res.json();
+    if (data.ok && data.mask) {
+      Object.assign(mask, data.mask);
+      flashMode('RESET');
+      renderMaskList(); render();
+    } else {
+      setStatus('Reset failed: ' + (data.error || ''));
+    }
+  } catch (e) { setStatus('Reset error'); }
+}
+
+// ══════════════════════════════════════════════
+// KEYBOARD
+// ══════════════════════════════════════════════
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  const activeScreen = document.querySelector('.screen.active');
+  if (!activeScreen || activeScreen.id !== 'review') return;
+
+  // When species popup is showing: number keys assign species, letter keys assign category
+  if (pendingAddMaskIdx >= 0) {
+    const num = parseInt(e.key);
+    // 1-N: assign target species
+    if (num >= 1 && num <= TARGET_SPECIES.length) {
+      assignNewMaskSpecies(TARGET_SPECIES[num - 1]);
+      e.preventDefault();
+      return;
+    }
+    // 0: unlabel
+    if (e.key === '0') { assignNewMaskCategory(''); e.preventDefault(); return; }
+    // Letter shortcuts for generic categories
+    const catKeys = {s:'Sponge', m:'Macroalgae', g:'Gorgonian', t:'Turf'};
+    if (catKeys[e.key.toLowerCase()]) {
+      assignNewMaskCategory(catKeys[e.key.toLowerCase()]);
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'Escape') { hideCatPopup(); e.preventDefault(); return; }
+    return;
+  }
+
+  // Popup NOT open: track held-number in Add mode for labelled placement.
+  // Only intercept when we're actually in Add mode — don't steal numbers
+  // elsewhere (some keybindings may use them in the future).
+  if (interactionMode === 'add') {
+    const num = parseInt(e.key);
+    if (num >= 1 && num <= TARGET_LABELS.length) {
+      if (numKeyDown !== num - 1) {
+        numKeyDown = num - 1;
+        highlightQuickBtn(numKeyDown);
+      }
+      e.preventDefault();
+      return;
+    }
+  }
+
+  switch (e.key) {
+    case ' ':
+      // Space is now the sticky auto-advance toggle. The old "cycle through
+      // masks" behavior lives on Tab.
+      if (!e.repeat) setAutoAdvance(!autoAdvance);
+      e.preventDefault();
+      break;
+    case 'Tab':
+      e.preventDefault();
+      selectNextMask();
+      break;
+    case 'Enter':
+      e.preventDefault();
+      acceptMask();
+      break;
+    case 'x': case 'X':
+    case 'Delete': case 'Backspace':
+      e.preventDefault();
+      rejectMask();
+      break;
+    case 'n': case 'N':
+      if (!e.ctrlKey && !e.metaKey) { saveCurrentMasks(); nextImage(); e.preventDefault(); }
+      break;
+    case 'b': case 'B':
+      if (!e.ctrlKey && !e.metaKey) { saveCurrentMasks(); prevImage(); e.preventDefault(); }
+      break;
+    case 'f': case 'F':
+      fitImage(); render(); e.preventDefault();
+      break;
+    case 'o': case 'O':
+      cycleOpacity(); e.preventDefault();
+      break;
+    case 'p': case 'P':
+      if (e.shiftKey) {
+        // Shift+P — toggle source-point visibility (was plain P, moved to make
+        // room for the timer-pause shortcut that matches step 4).
+        document.getElementById('chk-points').checked = !document.getElementById('chk-points').checked;
+        render();
+      } else if (!e.ctrlKey && !e.metaKey) {
+        _timerTogglePause();
+      }
+      e.preventDefault();
+      break;
+    case 'r': case 'R':
+      setInteractionMode(interactionMode === 'refine' ? 'select' : 'refine');
+      e.preventDefault();
+      break;
+    case 'a': case 'A':
+      // Sticky add: A enters Add mode AND sets a flag so that after you
+      // accept/reject the just-added mask, you snap back to Add instead of
+      // advancing to the next pending mask. A again clears the flag and
+      // drops you back to select. While in the refine sub-step (between
+      // addMaskAt and Enter/Delete), A still exits cleanly.
+      if (!e.ctrlKey && !e.metaKey) {
+        if (stickyAddMode) {
+          stickyAddMode = false;
+          setInteractionMode('select');
+        } else {
+          stickyAddMode = true;
+          setInteractionMode('add');
+        }
+        _updateStickyAddIndicator();
+        e.preventDefault();
+      }
+      break;
+    case 'd': case 'D':
+      if (!e.ctrlKey && !e.metaKey) {
+        setInteractionMode(interactionMode === 'draw' ? 'refine' : 'draw');
+        e.preventDefault();
+      }
+      break;
+    case 'm': case 'M':
+      // If 2+ masks are checked via the panel checkboxes, merge them all.
+      // Otherwise fall through to the toggle-merge-mode behavior.
+      if (checkedMaskIds.size >= 2) {
+        mergeCheckedMasks();
+      } else {
+        setInteractionMode(interactionMode === 'merge' ? 'select' : 'merge');
+      }
+      e.preventDefault();
+      break;
+    case 'u': case 'U':
+      undoRefine();
+      e.preventDefault();
+      break;
+    case 'z': case 'Z':
+      if (e.ctrlKey || e.metaKey) {
+        // Ctrl+Z = reset mask to original
+        resetMask();
+        e.preventDefault();
+      } else {
+        // Z alone = auto-center toggle
+        autoCenter = !autoCenter;
+        setStatus(autoCenter ? 'Auto-center ON' : 'Auto-center OFF');
+        savePrefs();
+        e.preventDefault();
+      }
+      break;
+    case 'h': case 'H':
+      loupeEnabled = !loupeEnabled;
+      if (!loupeEnabled) {
+        const loupe = document.getElementById('loupe');
+        if (loupe) loupe.classList.remove('visible');
+      }
+      setStatus(loupeEnabled ? 'Magnifier ON' : 'Magnifier OFF');
+      savePrefs();
+      e.preventDefault();
+      break;
+    case 'Escape':
+      hideCatPopup();
+      selectedMask = -1;
+      setInteractionMode('select');
+      renderMaskList(); render();
+      break;
+    case 's':
+      if (e.ctrlKey || e.metaKey) { saveCurrentMasks(); setStatus('Saved'); e.preventDefault(); }
+      break;
+  }
+});
+
+document.addEventListener('keyup', e => {
+  const num = parseInt(e.key);
+  if (num >= 1 && num <= TARGET_LABELS.length && numKeyDown === num - 1) {
+    numKeyDown = null;
+    highlightQuickBtn(-1);
+  }
+});
+
+// Clear held-number + Add-mode latch on focus loss so the user doesn't return
+// to the window stuck in an invisible state.
+window.addEventListener('blur', () => {
+  if (numKeyDown !== null) {
+    numKeyDown = null;
+    highlightQuickBtn(-1);
+  }
+});
+
+// ══════════════════════════════════════════════
+// Hover loupe (hidden by default — toggle with H)
+// ══════════════════════════════════════════════
+let loupeEnabled = false;   // hidden by default per user request
+const LOUPE_SIZE = 180;
+const LOUPE_ZOOM = 3;
+let lastLoupeCursor = null;
+
+function updateLoupe(clientX, clientY, sx, sy) {
+  lastLoupeCursor = {clientX, clientY, sx, sy};
+  const loupe = document.getElementById('loupe');
+  if (!loupeEnabled || !img) { if (loupe) loupe.classList.remove('visible'); return; }
+
+  const {x: imgX, y: imgY} = screenToImage(sx, sy);
+  if (imgX < 0 || imgY < 0 || imgX >= img.naturalWidth || imgY >= img.naturalHeight) {
+    loupe.classList.remove('visible');
+    return;
+  }
+
+  loupe.classList.add('visible');
+  const off = 20;
+  loupe.style.left = (clientX + off) + 'px';
+  loupe.style.top = (clientY + off) + 'px';
+
+  const lc = document.getElementById('loupe-canvas');
+  const lctx = lc.getContext('2d');
+  lctx.imageSmoothingEnabled = false;
+
+  const cropPx = LOUPE_SIZE / (LOUPE_ZOOM * scale);
+  const srcX = Math.max(0, imgX - cropPx / 2);
+  const srcY = Math.max(0, imgY - cropPx / 2);
+  const srcW = Math.min(cropPx, img.naturalWidth - srcX);
+  const srcH = Math.min(cropPx, img.naturalHeight - srcY);
+
+  lctx.fillStyle = '#000';
+  lctx.fillRect(0, 0, LOUPE_SIZE, LOUPE_SIZE);
+  lctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, LOUPE_SIZE, LOUPE_SIZE);
+
+  // Yellow crosshair
+  lctx.strokeStyle = 'rgba(255, 220, 50, 0.8)';
+  lctx.lineWidth = 1;
+  lctx.beginPath();
+  lctx.moveTo(LOUPE_SIZE/2 - 10, LOUPE_SIZE/2); lctx.lineTo(LOUPE_SIZE/2 + 10, LOUPE_SIZE/2);
+  lctx.moveTo(LOUPE_SIZE/2, LOUPE_SIZE/2 - 10); lctx.lineTo(LOUPE_SIZE/2, LOUPE_SIZE/2 + 10);
+  lctx.stroke();
+
+  // When a target-label number is held, overlay the label code big + pink.
+  if (numKeyDown !== null && TARGET_LABELS[numKeyDown]) {
+    const code = TARGET_LABELS[numKeyDown].code;
+    lctx.font = 'bold 36px Segoe UI, sans-serif';
+    lctx.textAlign = 'center';
+    lctx.textBaseline = 'middle';
+    lctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+    lctx.fillText(code, LOUPE_SIZE / 2 + 2, LOUPE_SIZE - 26 + 2);
+    lctx.fillStyle = '#ff6b7f';
+    lctx.fillText(code, LOUPE_SIZE / 2, LOUPE_SIZE - 26);
+  }
+}
+
+canvas.addEventListener('mouseleave', () => {
+  const loupe = document.getElementById('loupe');
+  if (loupe) loupe.classList.remove('visible');
+});
+
+// ══════════════════════════════════════════════
+// Persisted prefs (localStorage) — carries loupe on/off, autocenter,
+// mask opacity across frames, relaunches, and exports.
+// ══════════════════════════════════════════════
+const PREFS_KEY = 'tcrmp_segment_prefs_v1';
+
+function loadPrefs() {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return;
+    const p = JSON.parse(raw);
+    if (typeof p.loupeEnabled === 'boolean') loupeEnabled = p.loupeEnabled;
+    if (typeof p.autoCenter === 'boolean') autoCenter = p.autoCenter;
+    if (typeof p.maskOpacity === 'number') {
+      maskOpacity = p.maskOpacity;
+      const slider = document.getElementById('opacity-slider');
+      if (slider) slider.value = Math.round(maskOpacity * 100);
+      const val = document.getElementById('opacity-val');
+      if (val) val.textContent = Math.round(maskOpacity * 100) + '%';
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function savePrefs() {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({
+      loupeEnabled, autoCenter, maskOpacity,
+    }));
+  } catch (e) { /* ignore */ }
+}
+
+loadPrefs();
+
+// ══════════════════════════════════════════════
+// Scrap Frame — same API shape as step 4.
+// ══════════════════════════════════════════════
+async function submitDrawEdit(path) {
+  if (selectedMask < 0 || !currentData || currentIdx < 0) return;
+  const mask = currentData.masks[selectedMask];
+  const filename = images[currentIdx].filename;
+
+  setStatus(`Applying draw edit (${path.length} pts)...`);
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/draw_edit`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        mask_id: mask.id,
+        path: path.map(p => [p.x, p.y]),
+      }),
+    });
+    const data = await res.json();
+    if (data.ok && data.mask) {
+      Object.assign(mask, data.mask);
+      applyAffected(data.affected);
+      renderMaskList(); render();
+      const verb = data.op === 'subtract' ? 'Carved' : 'Added';
+      setStatus(`${verb} via draw edit — ${mask.area} px`);
+    } else {
+      setStatus('Draw edit failed: ' + (data.error || 'unknown'));
+    }
+  } catch (e) {
+    setStatus('Draw edit error: ' + e.message);
+  }
+  render();
+}
+
+async function scrapFrame() {
+  if (currentIdx < 0 || !images[currentIdx]) return;
+  const filename = images[currentIdx].filename;
+  if (!confirm(`Scrap this frame?\n\n${filename}\n\nExcluded from review and export. Reversible via /unscrap.`)) return;
+
+  const res = await fetch(`/api/image/${encodeURIComponent(filename)}/scrap`, {method: 'POST'});
+  const data = await res.json();
+  if (!res.ok) { alert('Scrap failed: ' + (data.error || res.status)); return; }
+
+  setStatus(`Scrapped ${filename} — ${data.remaining} frames remaining`);
+  images.splice(currentIdx, 1);
+  if (!images.length) {
+    setStatus('No more frames to review.');
+    return;
+  }
+  const nextIdx = Math.min(currentIdx, images.length - 1);
+  selectImage(nextIdx);
+}
+
+window.addEventListener('resize', () => { if (img) { fitImage(); render(); } });
+
+// ══════════════════════════════════════════════
+// Two cycle entry points:
+//   selectNextMask       — cycles ALL masks. Bound to Space. Never advances
+//                          frames on its own (the user is reviewing manually).
+//   advanceToNextOrFrame — cycles PENDING masks. Bound to Enter/X progression.
+//                          When no pending masks are left the frame is done
+//                          and we auto-advance + fit the next frame.
+// ══════════════════════════════════════════════
+function selectNextMask() {
+  if (!currentData) return;
+  const masks = currentData.masks;
+  if (!masks.length) { setStatus('No masks in this frame'); return; }
+  const start = selectedMask >= 0 ? (selectedMask + 1) % masks.length : 0;
+  selectedMask = start;
+  centerOnMask(selectedMask);
+  if (interactionMode !== 'refine') setInteractionMode('refine');
+  renderMaskList();
+  render();
+}
+
+function advanceToNextOrFrame() {
+  if (!currentData) return;
+  const masks = currentData.masks;
+  if (masks.length) {
+    // Prefer the next pending mask.
+    const start = selectedMask >= 0 ? (selectedMask + 1) % masks.length : 0;
+    for (let k = 0; k < masks.length; k++) {
+      const i = (start + k) % masks.length;
+      if (masks[i].status === 'pending') {
+        selectedMask = i;
+        centerOnMask(selectedMask);
+        if (interactionMode !== 'refine') setInteractionMode('refine');
+        renderMaskList();
+        render();
+        return;
+      }
+    }
+  }
+  // No pending masks left (or no masks at all) — advance to next frame in full view.
+  advanceToNextFrame();
+}
+
+// ── Per-frame timer (mirrors step 4) ─────────────────────────────
+// Per-session rolling average of time-per-frame. `P` or the ⏸ button pauses.
+const FRAME_TIMER_TARGET_S = 15.0;
+let _frameStartMs = 0;
+let _framePausedAtMs = 0;
+let _framePausedTotalMs = 0;
+let _frameTickInt = null;
+let _frameTimesSec = [];
+
+function _timerFmt(sec) {
+  if (!isFinite(sec)) return '—';
+  if (sec < 60) return sec.toFixed(1) + 's';
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return `${m}m ${s}s`;
+}
+function _timerColor(sec) {
+  if (sec <= FRAME_TIMER_TARGET_S) return '#4ecca3';
+  if (sec <= FRAME_TIMER_TARGET_S * 2) return '#f0a500';
+  return '#e94560';
+}
+function _timerElapsedSec() {
+  if (_frameStartMs <= 0) return 0;
+  const now = _framePausedAtMs > 0 ? _framePausedAtMs : Date.now();
+  return Math.max(0, (now - _frameStartMs - _framePausedTotalMs) / 1000);
+}
+function _timerRender() {
+  const el = document.getElementById('frame-timer');
+  if (!el) return;
+  const now = _timerElapsedSec();
+  const avg = _frameTimesSec.length
+    ? _frameTimesSec.reduce((a, b) => a + b, 0) / _frameTimesSec.length
+    : NaN;
+  const nowStr = _frameStartMs > 0 ? _timerFmt(now) : '—';
+  const avgStr = isFinite(avg) ? _timerFmt(avg) : '—';
+  const color = _timerColor(now);
+  const avgColor = isFinite(avg) ? _timerColor(avg) : '#888';
+  const paused = _framePausedAtMs > 0;
+  el.innerHTML =
+    '<span style="color:#666">this </span>' +
+    `<span style="color:${paused ? '#888' : color};font-weight:700">${nowStr}${paused ? ' ⏸' : ''}</span>` +
+    ' <span style="color:#666">· avg </span>' +
+    `<span style="color:${avgColor}">${avgStr}</span>` +
+    ` <span style="color:#666">(n=${_frameTimesSec.length}, target ${FRAME_TIMER_TARGET_S.toFixed(0)}s)</span>`;
+  const btn = document.getElementById('frame-timer-pause');
+  if (btn) btn.textContent = paused ? '▶' : '⏸';
+}
+function _timerStart() {
+  _frameStartMs = Date.now();
+  _framePausedAtMs = 0;
+  _framePausedTotalMs = 0;
+  if (_frameTickInt) clearInterval(_frameTickInt);
+  _timerRender();
+  _frameTickInt = setInterval(_timerRender, 250);
+}
+function _timerTogglePause() {
+  if (_frameStartMs <= 0) return;
+  if (_framePausedAtMs > 0) {
+    _framePausedTotalMs += Date.now() - _framePausedAtMs;
+    _framePausedAtMs = 0;
+    if (!_frameTickInt) _frameTickInt = setInterval(_timerRender, 250);
+  } else {
+    _framePausedAtMs = Date.now();
+    if (_frameTickInt) { clearInterval(_frameTickInt); _frameTickInt = null; }
+  }
+  _timerRender();
+}
+function _timerRecordPrev() {
+  if (_frameStartMs <= 0) return;
+  if (_framePausedAtMs > 0) {
+    _framePausedTotalMs += Date.now() - _framePausedAtMs;
+    _framePausedAtMs = 0;
+  }
+  const elapsed = (Date.now() - _frameStartMs - _framePausedTotalMs) / 1000;
+  if (elapsed >= 0.5) _frameTimesSec.push(elapsed);
+  _frameStartMs = 0;
+  _framePausedTotalMs = 0;
+  if (_frameTickInt) { clearInterval(_frameTickInt); _frameTickInt = null; }
+  _timerRender();
+}
+
+function advanceToNextFrame() {
+  if (currentIdx < images.length - 1) {
+    saveCurrentMasks();
+    selectImage(currentIdx + 1);
+    setStatus('Next frame — full view. Enter to start reviewing.');
+  } else {
+    // End of batch AND every mask on this last frame is reviewed -> auto-export.
+    // Save first (belt & suspenders; doExport also saves but this catches the
+    // selection-cleared state), then fire the export overlay.
+    setStatus('End of batch — exporting…');
+    saveCurrentMasks().then(() => doExport()).catch(() => doExport());
+  }
+}
+
+// ══════════════════════════════════════════════
+// UI HELPERS
+// ══════════════════════════════════════════════
+function updateCounter() {
+  const el = document.getElementById('img-counter');
+  el.textContent = images.length > 0 ? `${currentIdx + 1} / ${images.length}` : '0 / 0';
+}
+
+let statusTimer = null;
+function setStatus(msg) {
+  const el = document.getElementById('status-text');
+  el.textContent = msg;
+  el.classList.add('flash');
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(() => { el.textContent = ''; el.classList.remove('flash'); }, 3000);
+}
+
+// ══════════════════════════════════════════════
+// EXPORT
+// ══════════════════════════════════════════════
+async function doExport() {
+  if (currentData && currentIdx >= 0) await saveCurrentMasks();
+
+  setStatus('Exporting batch...');
+  const res = await fetch('/api/export_batch', { method: 'POST' });
+  const data = await res.json();
+
+  if (!data.ok) { setStatus('Export failed'); return; }
+
+  document.getElementById('export-summary').innerHTML = `
+    Images: ${data.exported_images}<br>
+    Masks: ${data.exported_masks}<br>
+    New classes: ${data.new_classes}<br>
+    Total classes: ${data.total_classes}
+  `;
+
+  const total = images.length;
+  const remaining = total - data.exported_images;
+  const remEl = document.getElementById('export-remaining');
+  const nextBtn = document.getElementById('btn-next-review');
+
+  if (remaining > 0 || images.length < 999) {
+    remEl.textContent = `Batch of ${data.exported_images} exported to YOLO format`;
+    nextBtn.style.display = 'inline-block';
+    document.getElementById('export-title').textContent = 'Batch Exported';
+  } else {
+    remEl.textContent = 'All images exported!';
+    nextBtn.style.display = 'none';
+    document.getElementById('export-title').textContent = 'All Done!';
+  }
+
+  document.getElementById('export-overlay').classList.add('visible');
+}
+
+async function nextReviewBatch() {
+  document.getElementById('export-overlay').classList.remove('visible');
+  await fetch('/api/next_review_batch', { method: 'POST' });
+  await loadReviewBatch();
+  if (images.length > 0) selectImage(0);
+  else setStatus('No more images to review');
+}
+
+function closeExportOverlay() {
+  document.getElementById('export-overlay').classList.remove('visible');
+}
+
+function backToStartup() {
+  document.getElementById('export-overlay').classList.remove('visible');
+  scanResult = null;
+  document.getElementById('setup-info').classList.remove('visible');
+  showScreen('startup');
+}
+
+// ══════════════════════════════════════════════
+// Auto-skip startup when the orchestrator has already
+// configured + kicked off processing. The user should
+// land directly in the review view, not see the setup form.
+// ══════════════════════════════════════════════
+const ORCHESTRATED = {{ 'true' if orchestrated else 'false' }};
+
+async function _bootStep(s) {
+  const processed = s.processing_done || 0;
+  const total = s.processing_total || 0;
+  const stillProcessing = total > 0 && processed < total;
+  if (stillProcessing) {
+    showScreen('processing');
+    await runProcessing(total);
+    return;
+  }
+  await loadReviewBatch();
+  showScreen('review');
+  if (images.length > 0) selectImage(0);
+}
+
+window.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const res = await fetch('/api/status');
+    const s = await res.json();
+    if (s.configured) { await _bootStep(s); return; }
+
+    // Not configured yet. If we're orchestrated, the orchestrator is in the
+    // process of POSTing /api/configure — poll until it lands, then boot.
+    if (!ORCHESTRATED) return; // standalone mode: show startup form
+
+    const veil = document.getElementById('orch-loading');
+    const veilMsg = document.getElementById('orch-loading-msg');
+    let tries = 0;
+    while (tries < 300) { // cap at ~10 minutes — model load + configure window
+      await new Promise(r => setTimeout(r, 2000));
+      tries += 1;
+      try {
+        const r2 = await fetch('/api/status');
+        const s2 = await r2.json();
+        if (veilMsg) {
+          veilMsg.textContent = s2.configured
+            ? 'Configured. Loading review batch...'
+            : `Still waiting on orchestrator (attempt ${tries})...`;
+        }
+        if (s2.configured) {
+          if (veil) veil.classList.remove('active');
+          await _bootStep(s2);
+          return;
+        }
+      } catch (e) { /* transient; keep polling */ }
+    }
+    if (veilMsg) veilMsg.textContent = 'Orchestrator did not configure in time. Reload the page to retry.';
+  } catch (e) {
+    console.warn('auto-skip init failed:', e);
+  }
+});
+</script>
+</body>
+</html>

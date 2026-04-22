@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Kill-and-restart shortcut for the TCRMP CVR-CLIP Pipeline Orchestrator.
+# run_pipeline.sh already sweeps stale processes, launches the server, and
+# opens a browser — so "restart" is just a plain re-run. Usage:
+#   orch           # restart on default port 5050
+#   orch 5080      # restart on a custom port
+exec bash "$(dirname "$(readlink -f "$0")")/../run_pipeline.sh" "$@"

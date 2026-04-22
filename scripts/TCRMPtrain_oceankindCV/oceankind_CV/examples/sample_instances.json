@@ -1,0 +1,63 @@
+{
+    "info": {
+        "description": "Marine Species Dataset",
+        "year": 2024
+    },
+    "categories": [
+        {
+            "id": 0,
+            "name": "AENA_Normal",
+            "supercategory": "Ray"
+        },
+        {
+            "id": 1,
+            "name": "BlueParrot_TP",
+            "supercategory": "Fish"
+        },
+        {
+            "id": 2,
+            "name": "CAPE_Normal",
+            "supercategory": "Shark"
+        },
+        {
+            "id": 3,
+            "name": "EPMO_Normal",
+            "supercategory": "Grouper"
+        },
+        {
+            "id": 4,
+            "name": "EPST_Bicolor",
+            "supercategory": "Grouper"
+        },
+        {
+            "id": 5,
+            "name": "EPST_Dark",
+            "supercategory": "Grouper"
+        },
+        {
+            "id": 6,
+            "name": "EPST_Ghost",
+            "supercategory": "Grouper"
+        },
+        {
+            "id": 7,
+            "name": "EPST_Normal",
+            "supercategory": "Grouper"
+        },
+        {
+            "id": 13,
+            "name": "LUAN_Normal",
+            "supercategory": "Snapper"
+        },
+        {
+            "id": 14,
+            "name": "LUAP_Normal",
+            "supercategory": "Snapper"
+        },
+        {
+            "id": 15,
+            "name": "LUCY_Normal",
+            "supercategory": "Snapper"
+        }
+    ]
+} 

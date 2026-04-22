@@ -1,0 +1,16 @@
+# env/ and caches live inside github_repo/ and must not be committed.
+env/
+__pycache__/
+*.pyc
+*.pyo
+**/*.egg-info/
+
+# Vendored tree .git dirs (re-cloneable from upstream).
+scripts/TCRMPtrain_oceankindCV/oceankind_CV/.git/
+scripts/TCRMPtrain_oceankindCV/ultralytics_src/.git/
+
+# OS / editor cruft.
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TCRMP Species Recode</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }
+  h1 { color: #e94560; font-size: 20px; margin-bottom: 4px; }
+  .sub { color: #888; font-size: 13px; margin-bottom: 14px; }
+  .bar { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+  .bar input[type=text] { background: #0d1117; border: 1px solid #333; color: #eee;
+    padding: 6px 10px; width: 280px; font-size: 13px; border-radius: 3px; }
+  .bar label { font-size: 13px; color: #aaa; cursor: pointer; }
+  .bar label input { margin-right: 4px; }
+  .wrap { max-height: calc(100vh - 220px); overflow-y: auto; border: 1px solid #2a2a4a; border-radius: 4px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th { background: #16213e; color: #4ecca3; padding: 7px 8px; text-align: left;
+    position: sticky; top: 0; z-index: 2; white-space: nowrap; }
+  td { padding: 5px 8px; border-bottom: 1px solid #222; }
+  tr:hover { background: #16213e; }
+  tr.excluded { opacity: 0.4; }
+  .ct { text-align: right; font-variant-numeric: tabular-nums; }
+  input.rm { background: #0d1117; border: 1px solid #333; color: #eee;
+    padding: 3px 5px; width: 100%; font-size: 12px; border-radius: 2px; }
+  input.rm.changed { border-color: #e94560; background: #1c0a10; }
+  .chk { text-align: center; }
+  .bottom { display: flex; align-items: center; gap: 16px; margin-top: 12px; }
+  .changes { color: #e94560; font-weight: 600; font-size: 14px; }
+  .btn { padding: 9px 22px; border: none; border-radius: 4px; background: #e94560;
+    color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .btn:hover { background: #c73e54; }
+  .btn:disabled { background: #444; cursor: not-allowed; }
+  #results { display: none; margin-top: 18px; background: #16213e; padding: 16px; border-radius: 6px; }
+  #results h2 { color: #4ecca3; font-size: 16px; margin-bottom: 10px; }
+  .r-table { width: auto; margin-top: 8px; }
+  .r-table td { padding: 3px 14px; }
+  .r-table td:last-child { text-align: right; }
+  .files { color: #888; font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<h1>TCRMP Species Recode</h1>
+<p class="sub">{{ "{:,}".format(total_points) }} points &middot; {{ rows|length }} codes &middot;
+  Edit <b>new_code / new_name / new_category</b>, check <b>exclude</b> to omit from top-10 ranking, then Save &amp; Recode.</p>
+
+<div class="bar">
+  <input type="text" id="filter" placeholder="Filter by code or name...">
+  <label><input type="checkbox" id="changedOnly"> Show changed only</label>
+</div>
+
+<div class="wrap">
+<table>
+<thead>
+<tr>
+  <th>#</th><th>code</th><th>category</th><th>name</th><th>count</th>
+  <th>new_code</th><th>new_name</th><th>new_category</th><th>exclude</th>
+</tr>
+</thead>
+<tbody id="tbody">
+{% for r in rows %}
+<tr data-code="{{ r.code }}" data-name="{{ r.name|lower }}" data-cat="{{ r.category|lower }}">
+  <td>{{ loop.index }}</td>
+  <td><strong>{{ r.code }}</strong></td>
+  <td>{{ r.category }}</td>
+  <td>{{ r.name }}</td>
+  <td class="ct">{{ "{:,}".format(r.count) }}</td>
+  <td><input class="rm" data-field="new_code" data-orig="{{ r.code }}" value="{{ r.code }}"></td>
+  <td><input class="rm" data-field="new_name" data-orig="{{ r.name }}" value="{{ r.name }}"></td>
+  <td><input class="rm" data-field="new_category" data-orig="{{ r.category }}" value="{{ r.category }}"></td>
+  <td class="chk"><input type="checkbox" class="excl" data-code="{{ r.code }}"></td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+
+<div class="bottom">
+  <button class="btn" id="saveBtn">Save &amp; Recode</button>
+  <span class="changes"><span id="cnt">0</span> changes pending</span>
+</div>
+
+<div id="results">
+  <h2>Top 10 Corals by Point Count</h2>
+  <table class="r-table" id="top10table"></table>
+  <p class="files" id="filesInfo"></p>
+</div>
+
+<script>
+const tbody = document.getElementById('tbody');
+const filterEl = document.getElementById('filter');
+const changedOnlyEl = document.getElementById('changedOnly');
+const cntEl = document.getElementById('cnt');
+const saveBtn = document.getElementById('saveBtn');
+
+function applyFilters() {
+  const q = filterEl.value.toLowerCase();
+  const co = changedOnlyEl.checked;
+  for (const tr of tbody.rows) {
+    const code = tr.dataset.code.toLowerCase();
+    const name = tr.dataset.name;
+    const cat = tr.dataset.cat;
+    const matchQ = !q || code.includes(q) || name.includes(q) || cat.includes(q);
+    const hasChange = tr.querySelector('.rm.changed') !== null;
+    tr.style.display = (matchQ && (!co || hasChange)) ? '' : 'none';
+  }
+}
+
+filterEl.addEventListener('input', applyFilters);
+changedOnlyEl.addEventListener('change', applyFilters);
+
+// Change detection
+tbody.addEventListener('input', function(e) {
+  if (e.target.classList.contains('rm')) {
+    const inp = e.target;
+    inp.classList.toggle('changed', inp.value !== inp.dataset.orig);
+    updateCount();
+  }
+});
+
+// Exclude checkbox styling
+tbody.addEventListener('change', function(e) {
+  if (e.target.classList.contains('excl')) {
+    e.target.closest('tr').classList.toggle('excluded', e.target.checked);
+  }
+});
+
+function updateCount() {
+  cntEl.textContent = document.querySelectorAll('.rm.changed').length;
+}
+
+// Save
+saveBtn.addEventListener('click', async function() {
+  const remaps = [];
+  const excludes = [];
+
+  // Collect remaps
+  for (const tr of tbody.rows) {
+    const inputs = tr.querySelectorAll('.rm');
+    const vals = {};
+    let changed = false;
+    for (const inp of inputs) {
+      vals[inp.dataset.field] = inp.value.trim();
+      if (inp.value.trim() !== inp.dataset.orig) changed = true;
+    }
+    if (changed) {
+      remaps.push({
+        old_code: inputs[0].dataset.orig,
+        new_code: vals.new_code,
+        new_name: vals.new_name,
+        new_category: vals.new_category,
+      });
+    }
+  }
+
+  // Collect excludes
+  for (const cb of document.querySelectorAll('.excl:checked')) {
+    // Use the potentially-remapped code
+    const tr = cb.closest('tr');
+    const newCodeInput = tr.querySelector('[data-field="new_code"]');
+    excludes.push(newCodeInput.value.trim());
+  }
+
+  if (!remaps.length && !excludes.length) {
+    alert('No changes or excludes to apply.');
+    return;
+  }
+
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Processing...';
+
+  try {
+    const resp = await fetch('/recode', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({remaps, excludes}),
+    });
+    const data = await resp.json();
+
+    if (!data.success) {
+      alert('Error: ' + (data.error || 'Unknown'));
+      return;
+    }
+
+    // Show results
+    const t10 = document.getElementById('top10table');
+    t10.innerHTML = '<tr><th>#</th><th>Code</th><th>Species</th><th style="text-align:right">Points</th></tr>' +
+      data.top10_corals.map(c =>
+        `<tr><td>${c.rank}</td><td><strong>${c.code}</strong></td><td>${c.name}</td><td style="text-align:right">${c.count.toLocaleString()}</td></tr>`
+      ).join('');
+
+    document.getElementById('filesInfo').textContent =
+      `Saved to output/: ${data.files.join(', ')} | ${data.changes_applied} codes remapped, ${data.excludes_applied} excluded from ranking`;
+
+    document.getElementById('results').style.display = 'block';
+    document.getElementById('results').scrollIntoView({behavior: 'smooth'});
+  } catch(err) {
+    alert('Request failed: ' + err);
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Save & Recode';
+  }
+});
+</script>
+</body>
+</html>

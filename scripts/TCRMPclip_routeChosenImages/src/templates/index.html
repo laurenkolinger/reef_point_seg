@@ -1,0 +1,1971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TCRMP Route Chosen Images</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; overflow: hidden; height: 100vh; }
+
+/* ── Screens ── */
+.screen { display: none; width: 100%; height: 100%; }
+.screen.active { display: flex; }
+
+#orch-loading { background: #0a0a1a; align-items: center; justify-content: center; }
+#orch-loading .orch-veil { display: flex; flex-direction: column; align-items: center; gap: 16px; max-width: 480px; padding: 40px 24px; }
+#orch-loading .orch-veil-title { color: #e94560; font-size: 20px; font-weight: 700; }
+#orch-loading .orch-veil-msg { color: #aaa; font-size: 13px; text-align: center; line-height: 1.4; }
+#orch-loading .orch-veil-hint { color: #666; font-size: 11px; margin-top: 12px; }
+
+/* ── STARTUP SCREEN ── */
+#startup { align-items: center; justify-content: center; }
+.setup-card {
+  background: #16213e; border: 1px solid #0f3460; border-radius: 8px;
+  padding: 32px 40px; width: 580px; max-height: 90vh; overflow-y: auto;
+}
+.setup-card h1 { font-size: 20px; margin-bottom: 20px; color: #e94560; }
+.setup-card h2 { font-size: 15px; margin: 16px 0 10px; color: #4ecca3; }
+.field { margin-bottom: 16px; }
+.field label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+.field input[type=text] { width: 100%; padding: 8px 12px; border: 1px solid #0f3460; border-radius: 4px; background: #1a1a2e; color: #eee; font-size: 13px; }
+.field input[type=text]:focus { border-color: #e94560; outline: none; }
+.field-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.field-row label { font-size: 13px; color: #ccc; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.field-row input[type=checkbox], .field-row input[type=radio] { accent-color: #e94560; }
+.mode-buttons { display: flex; gap: 12px; margin-bottom: 16px; }
+.mode-btn {
+  flex: 1; padding: 14px; border: 2px solid #0f3460; border-radius: 6px;
+  background: #1a1a2e; color: #ccc; cursor: pointer; text-align: center;
+  font-size: 13px; transition: all 0.2s;
+}
+.mode-btn:hover { border-color: #e94560; color: #eee; }
+.mode-btn.active { border-color: #e94560; background: rgba(233,69,96,0.1); color: #e94560; font-weight: 600; }
+.mode-btn .mode-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.mode-btn .mode-desc { font-size: 11px; color: #888; }
+.mode-btn.active .mode-desc { color: #ccc; }
+.setup-card .btn-action {
+  width: 100%; padding: 12px; border: none; border-radius: 4px;
+  background: #e94560; color: #fff; font-size: 14px; font-weight: 600;
+  cursor: pointer; margin-top: 8px;
+}
+.setup-card .btn-action:hover { background: #c73e54; }
+.setup-card .btn-action:disabled { background: #444; cursor: not-allowed; }
+.setup-card .btn-scan { background: #0f3460; margin-bottom: 6px; }
+.setup-card .btn-scan:hover { background: #163d70; }
+.setup-error { color: #e94560; font-size: 12px; margin-top: 8px; }
+.setup-info { color: #4ecca3; font-size: 12px; margin-top: 8px; background: rgba(78,204,163,0.1); padding: 8px 10px; border-radius: 4px; display: none; }
+.setup-info.visible { display: block; }
+.setup-info .num { font-weight: 700; color: #4ecca3; }
+.year-grid { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.year-grid label { font-size: 13px; color: #ccc; cursor: pointer; display: flex; align-items: center; gap: 4px; min-width: 70px; }
+.year-grid .select-all { font-size: 11px; color: #e94560; cursor: pointer; margin-left: 8px; text-decoration: underline; }
+.hidden { display: none !important; }
+
+/* ── PROCESSING SCREEN ── */
+#processing { align-items: center; justify-content: center; flex-direction: column; gap: 16px; }
+.progress-wrap { width: 550px; }
+.progress-wrap h2 { font-size: 16px; margin-bottom: 12px; }
+.progress-bar-outer { width: 100%; height: 24px; background: #0f3460; border-radius: 4px; overflow: hidden; }
+.progress-bar-inner { height: 100%; background: #e94560; transition: width 0.2s; border-radius: 4px; }
+.progress-text { font-size: 13px; color: #888; margin-top: 8px; }
+.progress-current { font-size: 12px; color: #666; margin-top: 4px; }
+.progress-eta { font-size: 12px; color: #4ecca3; margin-top: 4px; }
+
+/* ── REVIEW SCREEN ── */
+#review { flex-direction: column; }
+
+.review-topbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 12px; background: #16213e; border-bottom: 1px solid #0f3460;
+  height: 36px; user-select: none; flex-shrink: 0;
+}
+.review-topbar h1 { font-size: 14px; }
+.btn { padding: 4px 10px; border: 1px solid #0f3460; border-radius: 3px; background: #1a1a2e; color: #eee; cursor: pointer; font-size: 12px; white-space: nowrap; }
+.btn:hover { background: #0f3460; }
+.btn.primary { background: #e94560; border-color: #e94560; }
+.btn.primary:hover { background: #c73e54; }
+.spacer { flex: 1; }
+.img-counter { font-size: 13px; font-weight: 600; color: #e94560; min-width: 70px; text-align: center; }
+.batch-info { font-size: 11px; color: #888; }
+.status { font-size: 12px; color: #888; }
+.status.flash { color: #4ecca3; }
+
+.review-body { display: flex; flex: 1; overflow: hidden; }
+
+/* Canvas */
+.canvas-wrap { flex: 1; position: relative; overflow: hidden; background: #111; }
+#canvas { position: absolute; top: 0; left: 0; cursor: crosshair; }
+
+/* AUX mode: green border + badge. Side-observation logging, step 4 only. */
+.canvas-wrap.aux-active {
+  box-shadow: inset 0 0 0 4px #50ff80, inset 0 0 24px rgba(80, 255, 128, 0.25);
+}
+.canvas-wrap.aux-active::after {
+  content: 'AUX MODE — click to log a side observation (L to exit)';
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  background: #2a9a3a; color: #fff; padding: 4px 14px;
+  font-weight: 700; font-size: 12px; letter-spacing: 0.5px;
+  border-radius: 3px; pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  z-index: 50;
+}
+
+/* Right panel */
+.panel {
+  width: 260px; min-width: 260px; background: #16213e;
+  border-left: 1px solid #0f3460; display: flex; flex-direction: column;
+  flex-shrink: 0;
+}
+.panel-header {
+  padding: 8px 10px; border-bottom: 1px solid #0f3460;
+  display: flex; align-items: center; gap: 8px;
+}
+.panel-header h3 { font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 1px; }
+.panel-header .summary { font-size: 11px; color: #888; margin-left: auto; }
+
+.point-list { list-style: none; flex: 1; overflow-y: auto; padding: 2px 4px; }
+.point-list li {
+  padding: 5px 6px; margin-bottom: 1px; border-radius: 3px;
+  font-size: 11px; cursor: pointer; display: flex; align-items: center; gap: 6px;
+  transition: background 0.1s; border: 1px solid transparent;
+}
+.point-list li:hover { background: #1a1a2e; }
+.point-list li.active { background: #0f3460; border-color: #e94560; }
+.point-list li.locked { opacity: 0.7; }
+.point-list li .plabel { font-weight: 700; width: 16px; color: #4ecca3; font-size: 12px; }
+.point-list li .pspecies { flex: 1; color: #ccc; }
+.point-list li .pconf { color: #666; font-size: 10px; width: 32px; text-align: right; }
+.point-list li .pcoord { color: #555; font-size: 10px; width: 60px; text-align: right; }
+.point-list li.no-cross .plabel { color: #e94560; }
+.point-list li.unid .plabel { color: #f0a500; }
+
+.panel-actions { padding: 8px; border-top: 1px solid #0f3460; display: flex; flex-direction: column; gap: 4px; }
+
+.help-text { padding: 6px 8px; font-size: 10px; color: #444; line-height: 1.6; border-top: 1px solid #0f3460; flex-shrink: 0; }
+.help-text kbd { background: #0f3460; padding: 1px 4px; border-radius: 2px; font-size: 9px; color: #aaa; }
+
+/* ── Added points ── */
+.point-list li.added .plabel { color: #ff69b4; }
+
+/* ── Category popup ── */
+#cat-popup {
+  position: fixed; z-index: 250; display: none;
+  background: #16213e; border: 1px solid #e94560; border-radius: 6px;
+  padding: 6px 4px; font-size: 12px; pointer-events: auto;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+}
+#cat-popup.visible { display: flex; gap: 2px; flex-wrap: wrap; width: 260px; }
+#cat-popup .cat-btn {
+  padding: 4px 6px; border: 1px solid #0f3460; border-radius: 3px;
+  background: #1a1a2e; color: #ccc; cursor: pointer; font-size: 11px;
+  flex: 1; min-width: 60px; text-align: center; white-space: nowrap;
+}
+#cat-popup .cat-btn:hover { background: #0f3460; color: #fff; }
+#cat-popup .cat-btn kbd { color: #e94560; font-weight: 700; margin-right: 2px; }
+
+/* ── EXPORT DONE overlay ── */
+.overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 200;
+}
+.overlay.visible { display: flex; }
+.overlay-card {
+  background: #16213e; border: 1px solid #0f3460; border-radius: 8px;
+  padding: 24px 32px; max-width: 500px; text-align: center;
+}
+.overlay-card h2 { color: #4ecca3; margin-bottom: 12px; }
+.overlay-card p { font-size: 13px; color: #aaa; margin-bottom: 8px; }
+.overlay-card .btn { margin-top: 12px; }
+
+/* Letter flash */
+#letter-flash {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  font-size: 140px; font-weight: 900; color: rgba(255,255,0,0.7);
+  pointer-events: none; z-index: 300; opacity: 0; transition: opacity 0.15s;
+  text-shadow: 0 0 40px rgba(0,0,0,0.8);
+}
+#letter-flash.show { opacity: 1; }
+
+/* Quick-add label bar */
+.quickadd-bar {
+  display: flex; align-items: center; gap: 6px; padding: 5px 12px;
+  background: #16213e; border-bottom: 1px solid #0f3460; flex-shrink: 0;
+  font-size: 12px; flex-wrap: wrap;
+}
+.quickadd-bar .qa-label { color: #888; text-transform: uppercase; letter-spacing: 0.5px; font-size: 10px; margin-right: 4px; }
+.quickadd-bar .qa-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #0f3460; border: 1px solid #1f4077;
+  color: #ddd; padding: 4px 10px; border-radius: 3px;
+  cursor: pointer; font-family: inherit; font-size: 12px;
+  transition: all 0.1s;
+}
+.quickadd-bar .qa-btn:hover { background: #163d70; color: #fff; }
+.quickadd-bar .qa-btn.active {
+  background: #e94560; border-color: #ff6b7f; color: #fff;
+  box-shadow: 0 0 8px rgba(233, 69, 96, 0.5);
+}
+.quickadd-bar .qa-btn .qa-key {
+  background: rgba(0,0,0,0.35); color: #4ecca3;
+  padding: 1px 5px; border-radius: 2px; font-size: 10px; font-weight: 700;
+}
+.quickadd-bar .qa-btn .qa-name { color: #aaa; font-style: italic; font-size: 11px; }
+.quickadd-bar .qa-btn.active .qa-name { color: #ffdde1; }
+.quickadd-bar .qa-off {
+  margin-left: auto; color: #e94560; cursor: pointer;
+  font-size: 11px; padding: 4px 8px;
+}
+.quickadd-bar .qa-off:hover { text-decoration: underline; }
+
+/* Hover loupe (magnifier) */
+#loupe {
+  position: fixed; width: 180px; height: 180px;
+  border: 2px solid #e94560; border-radius: 50%;
+  pointer-events: none; display: none;
+  background: #000; overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  z-index: 250;
+}
+#loupe canvas { display: block; }
+#loupe.visible { display: block; }
+</style>
+</head>
+<body>
+
+<!-- ════════════ STARTUP ════════════ -->
+<!-- Orchestrator loading veil: shown when the orchestrator launched us so the
+     user never sees the standalone startup form. JS auto-calls doStart(). -->
+{% if orchestrated %}
+<div class="screen active" id="orch-loading">
+  <div class="orch-veil">
+    <div class="orch-veil-title">TCRMP — Loading frames</div>
+    <div id="orch-loading-msg" class="orch-veil-msg">
+      Reading selected_frames.csv, splitting CPC / OCR, loading existing points...
+    </div>
+    <div class="orch-veil-hint">
+      (this view is orchestrator-driven — close the tab and use the Step&nbsp;4 panel if you need to reconfigure)
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="screen{% if not orchestrated %} active{% endif %}" id="startup">
+  <div class="setup-card">
+    <h1>TCRMP Route Chosen Images</h1>
+
+    <!-- Mode selection -->
+    <div class="mode-buttons">
+      <div class="mode-btn active" id="mode-new" onclick="setMode('new')">
+        <div class="mode-title">Load Selected Frames</div>
+        <div class="mode-desc">CPC + OCR from TCRMPcvr_chooseImages</div>
+      </div>
+      <div class="mode-btn" id="mode-resume" onclick="setMode('resume')">
+        <div class="mode-title">Continue Existing</div>
+        <div class="mode-desc">Resume from export directory</div>
+      </div>
+    </div>
+
+    <!-- New project fields -->
+    <div id="new-fields">
+      <div class="field">
+        <label>Selected Frames CSV (from TCRMPcvr_chooseImages)</label>
+        <input type="text" id="inp-frames" value="{{ default_frames }}">
+      </div>
+      <div class="field">
+        <label>Export Directory (unified output)</label>
+        <input type="text" id="inp-export" value="{{ default_export }}">
+      </div>
+      <div class="field">
+        <label>Species Filter (uncheck to exclude — empty = all frames)</label>
+        <div class="year-grid" id="species-grid">
+          {% for sp in target_species %}
+          <label><input type="checkbox" class="sp-chk" value="{{ sp }}" checked> {{ sp }}</label>
+          {% endfor %}
+          <span class="select-all" onclick="toggleAllSpecies()">toggle all</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Resume fields -->
+    <div id="resume-fields" class="hidden">
+      <div class="field">
+        <label>Export Directory (with existing detection data)</label>
+        <input type="text" id="inp-resume-export" placeholder="/path/to/existing/export">
+      </div>
+    </div>
+
+    <!-- Common: review batch size -->
+    <div class="field">
+      <label>Review Batch Size</label>
+      <div class="field-row">
+        <label><input type="radio" name="rbatch" value="5"{% if default_batch_size == '5' %} checked{% endif %}> 5</label>
+        <label><input type="radio" name="rbatch" value="10"{% if default_batch_size == '10' or not default_batch_size %} checked{% endif %}> 10</label>
+        <label><input type="radio" name="rbatch" value="20"{% if default_batch_size == '20' %} checked{% endif %}> 20</label>
+        <label><input type="radio" name="rbatch" value="all"{% if default_batch_size == 'all' %} checked{% endif %}> All (no batching)</label>
+      </div>
+    </div>
+
+    <!-- Common: reference mode -->
+    <div class="field">
+      <label>
+        <input type="checkbox" id="chk-reference"{% if default_reference_mode %} checked{% endif %}>
+        Show existing points as read-only reference (place fresh points instead)
+      </label>
+      <div style="color:#888; font-size:12px; margin-top:4px; margin-left:22px">
+        Existing OCR / CPC points render larger and grayed on the canvas for reference only.
+        They don't appear in the Labels panel and aren't exported. Use hold-number+click to place
+        your own fresh points.
+      </div>
+    </div>
+
+    <div class="field">
+      <label>
+        <input type="checkbox" id="chk-shuffle"{% if default_shuffle %} checked{% endif %}>
+        Shuffle frames (randomize review order)
+      </label>
+      <div style="color:#888; font-size:12px; margin-top:4px; margin-left:22px">
+        Random per-session. Which frames have been processed / exported is
+        still tracked on disk, so you can pick up unprocessed ones later.
+      </div>
+    </div>
+
+    <div class="setup-info" id="setup-info"></div>
+    <button class="btn-action" id="btn-start" onclick="doStart()">Load & Start</button>
+    <div class="setup-error" id="setup-error"></div>
+  </div>
+</div>
+
+<!-- ════════════ PROCESSING ════════════ -->
+<div class="screen" id="processing">
+  <div class="progress-wrap">
+    <h2>Processing all images...</h2>
+    <div class="progress-bar-outer">
+      <div class="progress-bar-inner" id="progress-bar" style="width: 0%"></div>
+    </div>
+    <div class="progress-text" id="progress-text">0 / 0</div>
+    <div class="progress-current" id="progress-current"></div>
+    <div class="progress-eta" id="progress-eta"></div>
+  </div>
+</div>
+
+<!-- ════════════ REVIEW ════════════ -->
+<div class="screen" id="review">
+  <div class="review-topbar">
+    <h1>TCRMP Route Chosen Images</h1>
+    <button class="btn" onclick="prevImage()" title="Previous (B)">&#9664; Prev</button>
+    <span class="img-counter" id="img-counter">0 / 0</span>
+    <button class="btn" onclick="nextImage()" title="Next (N)">Next &#9654;</button>
+    <span class="batch-info" id="batch-info"></span>
+    <span id="image-filename" style="color:#4ecca3; font-family:monospace; font-size:13px; margin-left:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:500px;"></span>
+    <span class="spacer"></span>
+    <span id="frame-timer"
+          style="font-family:monospace; font-size:12px; color:#aaa; margin-right:6px"
+          title="This frame — target 15.0s. Average is the rolling mean for this session.">
+      —
+    </span>
+    <button class="btn" id="frame-timer-pause"
+            onclick="_timerTogglePause()" title="Pause / resume the timer (P)"
+            style="padding:2px 8px;font-size:11px;margin-right:8px">⏸</button>
+    <span class="status" id="status-text"></span>
+    <button class="btn primary" onclick="doExport()">Export Batch</button>
+  </div>
+  <div class="quickadd-bar" id="quickadd-bar">
+    <span class="qa-label">Tap number (sticky) + click to place:</span>
+    {% for lbl in target_labels %}
+    <button class="qa-btn" data-code="{{ lbl.code }}" data-idx="{{ loop.index0 }}"
+            onclick="toggleQuickLabel({{ loop.index0 }})"
+            title="Tap {{ loop.index }} (or click this button) to lock label {{ lbl.code }}{% if lbl.name %} ({{ lbl.name }}){% endif %} — then click on the image to place. Tap/click again to clear.">
+      <span class="qa-key">{{ loop.index }}</span>
+      <span class="qa-code">{{ lbl.code }}</span>
+      <span class="qa-name">{{ lbl.name }}</span>
+    </button>
+    {% endfor %}
+  </div>
+  <div class="review-body">
+    <div class="canvas-wrap" id="canvas-wrap">
+      <canvas id="canvas"></canvas>
+      <div id="loupe"><canvas id="loupe-canvas" width="180" height="180"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h3>Labels</h3>
+        <span class="summary" id="panel-summary"></span>
+      </div>
+      <ul class="point-list" id="point-list"></ul>
+      <div class="panel-actions">
+        <button class="btn" onclick="fitImage(); render();">Fit View (F)</button>
+        <button class="btn" style="background:#5a1a2a;border-color:#8a2437;color:#ffbcc7"
+                onclick="scrapFrame()" title="Remove this frame from the dataset — it won't be reviewed or exported">
+          Scrap Frame
+        </button>
+      </div>
+      <div class="help-text">
+        <kbd>1-{{ target_labels|length }}</kbd> lock label (tap again to clear) &nbsp;
+        <kbd>click</kbd> place point<br>
+        <kbd>A+click</kbd> place point, popup for species/category<br>
+        <kbd>Space</kbd> next frame &nbsp;
+        <kbd>Shift+Space</kbd> prev frame<br>
+        <kbd>N</kbd>/<kbd>B</kbd> next/prev frame (aliases)<br>
+        <kbd>Click+drag</kbd> pan &nbsp;
+        <kbd>Scroll</kbd> zoom<br>
+        <kbd>Click</kbd> (no drag) deselect<br>
+        <kbd>Drag</kbd> on a point moves it<br>
+        <kbd>Ctrl+click</kbd> place selected point here<br>
+        <kbd>Arrows</kbd> nudge (Shift=5px) &nbsp;
+        <kbd>Del</kbd> delete point<br>
+        <kbd>Tab</kbd> cycle unlabeled points &nbsp;
+        <kbd>Enter</kbd> lock point<br>
+        <kbd>F</kbd> fit view &nbsp;
+        <kbd>Z</kbd> auto-center<br>
+        <kbd>H</kbd> toggle magnifier
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="cat-popup">
+  <div style="width:100%; font-size:10px; color:#666; padding:2px 4px; text-transform:uppercase; letter-spacing:0.5px;">Species</div>
+  {% for sp in target_species %}
+  <div class="cat-btn" onclick="assignSpecies('{{ sp }}')"><kbd>{{ loop.index }}</kbd>{{ sp }}</div>
+  {% endfor %}
+  <div style="width:100%; border-top:1px solid #0f3460; margin:2px 0;"></div>
+  <div style="width:100%; font-size:10px; color:#666; padding:2px 4px; text-transform:uppercase; letter-spacing:0.5px;">Category</div>
+  <div class="cat-btn" onclick="assignCategory('Coral')"><kbd>c</kbd>Coral</div>
+  <div class="cat-btn" onclick="assignCategory('Sponge')"><kbd>s</kbd>Sponge</div>
+  <div class="cat-btn" onclick="assignCategory('Macroalgae')"><kbd>m</kbd>Macro</div>
+  <div class="cat-btn" onclick="assignCategory('Gorgonian')"><kbd>g</kbd>Gorg</div>
+  <div class="cat-btn" onclick="assignCategory('Dca')"><kbd>d</kbd>Dca</div>
+  <div class="cat-btn" onclick="assignCategory('Turf')"><kbd>t</kbd>Turf</div>
+  <div class="cat-btn" onclick="assignCategory('Non-living')"><kbd>n</kbd>Non-liv</div>
+  <div class="cat-btn" onclick="assignCategory('')"><kbd>0</kbd>Unlabel</div>
+</div>
+<div id="letter-flash"></div>
+
+<!-- Export overlay -->
+<div class="overlay" id="export-overlay">
+  <div class="overlay-card">
+    <h2 id="export-title">Batch Exported</h2>
+    <p id="export-summary"></p>
+    <div id="export-remaining" style="margin:12px 0; font-size:14px; color:#e94560; font-weight:600;"></div>
+    <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+      <button class="btn primary" id="btn-next-review" onclick="nextReviewBatch()">Next Review Batch</button>
+      <button class="btn" onclick="closeExportOverlay()">Done</button>
+      <button class="btn" onclick="backToStartup()">Change Settings</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const wrap = document.getElementById('canvas-wrap');
+
+let currentMode = 'new';
+let scanResult = null;
+
+let images = [];        // [{filename, year, n_points, status}]
+let currentIdx = -1;
+let currentData = null; // {points, status}
+let img = null;
+
+let scale = 1, offsetX = 0, offsetY = 0;
+let draggingPoint = -1, selectedPoint = -1;
+let isPanning = false, panStartX = 0, panStartY = 0;
+let autoCenter = false; // toggle with Z key
+const SKIP_SPECIES = new Set(['UNK', 'TWS']); // always hidden
+let flashTimer = null;
+
+// Reference mode: existing OCR/CPC points render as large, read-only context.
+// Set by the startup checkbox; refreshed from /api/image/<fn> responses.
+let referenceMode = false;
+
+// A point is "read-only reference" iff we're in reference mode and it wasn't
+// added by the user during this session (user-added points have added === true).
+function isReferenceOnly(pt) {
+  return referenceMode && pt && pt.added !== true;
+}
+
+// ETA tracking
+let processStartTime = 0;
+let processTimes = [];
+
+function isSkippedPoint(pt) {
+  if (SKIP_SPECIES.has((pt.species_code || '').toUpperCase())) return true;
+  return false;
+}
+
+// Used by the Labels panel only — reference-only points render on canvas
+// but should not appear in the list.
+function isHiddenFromPanel(pt) {
+  return isSkippedPoint(pt) || isReferenceOnly(pt);
+}
+
+function imageHasRelevantPoints(data) {
+  if (!data || !data.points) return false;
+  return data.points.some(pt => !isSkippedPoint(pt));
+}
+
+function sortedPointIndices() {
+  if (!currentData) return [];
+  const pts = currentData.points;
+  const indices = pts.map((_, i) => i).filter(i => !isHiddenFromPanel(pts[i]));
+  indices.sort((a, b) => {
+    const aUnid = pts[a].ocr_confidence === 0 ? 0 : 1;
+    const bUnid = pts[b].ocr_confidence === 0 ? 0 : 1;
+    if (aUnid !== bUnid) return aUnid - bUnid;
+    return pts[a].label.localeCompare(pts[b].label);
+  });
+  return indices;
+}
+
+let sortedIndices = [];
+
+function getReviewBatchSize() {
+  const v = document.querySelector('input[name=rbatch]:checked').value;
+  // "all" is a sentinel meaning "no batching" — send a huge int so the
+  // backend's files[offset:offset+N] slice just returns everything.
+  return v === 'all' ? 999999 : parseInt(v);
+}
+
+// ══════════════════════════════════════════════
+// SCREEN SWITCHING
+// ══════════════════════════════════════════════
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+// ══════════════════════════════════════════════
+// STARTUP — MODE SWITCHING
+// ══════════════════════════════════════════════
+function setMode(mode) {
+  currentMode = mode;
+  document.getElementById('mode-new').classList.toggle('active', mode === 'new');
+  document.getElementById('mode-resume').classList.toggle('active', mode === 'resume');
+  document.getElementById('new-fields').classList.toggle('hidden', mode !== 'new');
+  document.getElementById('resume-fields').classList.toggle('hidden', mode !== 'resume');
+  document.getElementById('btn-start').textContent = mode === 'new' ? 'Load & Start' : 'Continue';
+  document.getElementById('setup-info').classList.remove('visible');
+  document.getElementById('setup-error').textContent = '';
+  scanResult = null;
+}
+
+function toggleAllSpecies() {
+  const chks = document.querySelectorAll('.sp-chk');
+  const allChecked = Array.from(chks).every(c => c.checked);
+  chks.forEach(c => c.checked = !allChecked);
+}
+
+// ══════════════════════════════════════════════
+// STARTUP — SCAN / CONFIGURE
+// ══════════════════════════════════════════════
+async function configureNew() {
+  const framesPath = document.getElementById('inp-frames').value.trim();
+  const exportDir = document.getElementById('inp-export').value.trim();
+  const errEl = document.getElementById('setup-error');
+  const infoEl = document.getElementById('setup-info');
+
+  if (!framesPath) { errEl.textContent = 'Selected frames CSV is required'; return; }
+  if (!exportDir) { errEl.textContent = 'Export directory is required'; return; }
+
+  const spChks = document.querySelectorAll('.sp-chk:checked');
+  const speciesFilter = Array.from(spChks).map(c => c.value);
+
+  errEl.textContent = '';
+  infoEl.innerHTML = 'Loading frames...';
+  infoEl.classList.add('visible');
+
+  try {
+    const res = await fetch('/api/configure', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        selected_frames: framesPath,
+        export_dir: exportDir,
+        species_filter: speciesFilter,
+        review_batch_size: getReviewBatchSize(),
+        reference_mode: document.getElementById('chk-reference').checked,
+        shuffle: document.getElementById('chk-shuffle').checked,
+      }),
+    });
+    scanResult = await res.json();
+
+    if (scanResult.error) {
+      errEl.textContent = scanResult.error;
+      infoEl.classList.remove('visible');
+      return;
+    }
+
+    let html = `<span class="num">${scanResult.total_frames}</span> frames loaded.`;
+    html += `<br>CPC (pre-2020): <span class="num">${scanResult.cpc_loaded}</span> loaded with coords`;
+    if (scanResult.already_processed > 0) {
+      html += `<br>Already processed: <span class="num">${scanResult.already_processed}</span>`;
+    }
+    html += `<br>OCR needed (2020+): <span class="num">${scanResult.ocr_remaining}</span>`;
+    if (scanResult.cpc_missing > 0) {
+      html += `<br><span style="color:#f0a500">CPC coords missing: ${scanResult.cpc_missing}</span>`;
+    }
+    if (scanResult.image_missing > 0) {
+      html += `<br><span style="color:#f0a500">Images not found: ${scanResult.image_missing}</span>`;
+    }
+    if (scanResult.species_filter.length > 0) {
+      html += `<br>Species filter: ${scanResult.species_filter.join(', ')}`;
+    }
+
+    if (scanResult.phase === 'review') {
+      html += `<br><br>All ready! <span class="num">${scanResult.review_count}</span> frames for review.`;
+      document.getElementById('btn-start').textContent = 'Start Review';
+    } else {
+      html += `<br><br>Click <b>Load & Start</b> to begin OCR processing.`;
+      document.getElementById('btn-start').textContent = 'Start Processing';
+    }
+
+    infoEl.innerHTML = html;
+    infoEl.classList.add('visible');
+  } catch (e) {
+    errEl.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function scanResume() {
+  const exportDir = document.getElementById('inp-resume-export').value.trim();
+  const errEl = document.getElementById('setup-error');
+  const infoEl = document.getElementById('setup-info');
+
+  if (!exportDir) { errEl.textContent = 'Export directory is required'; return; }
+
+  try {
+    const res = await fetch('/api/resume', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        export_dir: exportDir,
+        review_batch_size: getReviewBatchSize(),
+        reference_mode: document.getElementById('chk-reference').checked,
+        shuffle: document.getElementById('chk-shuffle').checked,
+      }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json();
+      errEl.textContent = data.error || 'Failed to load project';
+      return;
+    }
+
+    scanResult = await res.json();
+
+    let html = `Loaded project: <span class="num">${scanResult.years.length}</span> year(s), <span class="num">${scanResult.total_processed}</span> processed detections.`;
+
+    if (scanResult.import_dir) {
+      html += `<br>Import dir: ${scanResult.import_dir}`;
+    }
+
+    if (scanResult.year_stats) {
+      html += '<br><br>';
+      for (const [yr, st] of Object.entries(scanResult.year_stats).sort()) {
+        const rem = st.remaining_review !== undefined ? st.remaining_review : (st.total - (st.exported || 0));
+        html += `${yr}: ${st.total} processed, ${st.exported || 0} exported, ${rem} to review<br>`;
+      }
+    }
+
+    if (scanResult.needs_processing && scanResult.processing_remaining > 0) {
+      html += `<br><span class="num">${scanResult.processing_remaining}</span> images still need OCR processing.`;
+      document.getElementById('btn-start').textContent = 'Continue Processing';
+    } else {
+      html += `<br><span class="num">${scanResult.review_count}</span> images ready for review.`;
+      document.getElementById('btn-start').textContent = 'Start Review';
+    }
+
+    infoEl.innerHTML = html;
+    infoEl.classList.add('visible');
+  } catch (e) {
+    errEl.textContent = 'Error: ' + e.message;
+  }
+}
+
+// toggleAllYears removed — species filter uses toggleAllSpecies above
+
+// ══════════════════════════════════════════════
+// START
+// ══════════════════════════════════════════════
+async function doStart() {
+  const errEl = document.getElementById('setup-error');
+
+  // Apply reference-mode choice immediately so the first frame render honors it.
+  referenceMode = document.getElementById('chk-reference').checked;
+
+  if (currentMode === 'new') {
+    await configureNew();
+    if (!scanResult) return;
+  } else if (!scanResult) {
+    await scanResume();
+    if (!scanResult) return;
+  }
+
+  if (scanResult.phase === 'review' || scanResult.review_count > 0) {
+    await loadReviewBatch();
+    showScreen('review');
+    if (images.length > 0) selectImage(0);
+    return;
+  }
+
+  const total = scanResult.ocr_remaining || scanResult.processing_remaining || 0;
+  if (total === 0) {
+    errEl.textContent = 'Nothing to process';
+    return;
+  }
+
+  showScreen('processing');
+  processStartTime = performance.now();
+  processTimes = [];
+  await runProcessing(total);
+}
+
+// ══════════════════════════════════════════════
+// PROCESSING
+// ══════════════════════════════════════════════
+async function runProcessing(total) {
+  const bar = document.getElementById('progress-bar');
+  const text = document.getElementById('progress-text');
+  const current = document.getElementById('progress-current');
+  const eta = document.getElementById('progress-eta');
+
+  for (let i = 0; i < total + 1; i++) {
+    const t0 = performance.now();
+    const res = await fetch('/api/process', { method: 'POST' });
+    const data = await res.json();
+    const elapsed = performance.now() - t0;
+
+    processTimes.push(elapsed);
+    // Keep rolling window of last 50 for ETA
+    if (processTimes.length > 50) processTimes.shift();
+
+    const pct = Math.round((data.processed / data.total) * 100);
+    bar.style.width = pct + '%';
+    text.textContent = `${data.processed} / ${data.total}`;
+
+    if (data.filename) {
+      current.textContent = `Year ${data.year} — ${data.filename} (${data.n_points} points)`;
+    }
+
+    // ETA calculation
+    if (data.processed > 0 && !data.done) {
+      const avgMs = processTimes.reduce((a, b) => a + b, 0) / processTimes.length;
+      const remainMs = avgMs * (data.total - data.processed);
+      const remainMin = Math.ceil(remainMs / 60000);
+      if (remainMin > 60) {
+        const hrs = Math.floor(remainMin / 60);
+        const mins = remainMin % 60;
+        eta.textContent = `ETA: ~${hrs}h ${mins}m remaining`;
+      } else {
+        eta.textContent = `ETA: ~${remainMin} min remaining`;
+      }
+    }
+
+    if (data.done) {
+      eta.textContent = 'Processing complete!';
+      break;
+    }
+  }
+
+  // Transition to review
+  await loadReviewBatch();
+  showScreen('review');
+  if (images.length > 0) selectImage(0);
+}
+
+// ══════════════════════════════════════════════
+// REVIEW
+// ══════════════════════════════════════════════
+async function loadReviewBatch() {
+  const res = await fetch('/api/review_batch');
+  const data = await res.json();
+  images = data.images || [];
+  currentIdx = -1;
+
+  const infoEl = document.getElementById('batch-info');
+  if (data.total_batches > 0) {
+    const start = data.offset + 1;
+    const end = Math.min(data.offset + data.batch_size, data.total_unreviewed);
+    infoEl.textContent = `Batch ${data.batch_number}/${data.total_batches} (${start}-${end} of ${data.total_unreviewed} unreviewed)`;
+  } else {
+    infoEl.textContent = 'No images to review';
+  }
+
+  updateCounter();
+}
+
+async function selectImage(idx) {
+  if (idx < 0 || idx >= images.length) return;
+
+  // Close out the previous frame's timer BEFORE swapping state — this is the
+  // sample the rolling average should see.
+  _timerRecordPrev();
+
+  currentIdx = idx;
+  const filename = images[idx].filename;
+
+  const res = await fetch(`/api/image/${encodeURIComponent(filename)}`);
+  currentData = await res.json();
+  if (typeof currentData.reference_mode === 'boolean') referenceMode = currentData.reference_mode;
+
+  sortedIndices = sortedPointIndices();
+
+  img = new Image();
+  img.onload = () => {
+    console.log(`Image loaded: ${filename} naturalSize=${img.naturalWidth}x${img.naturalHeight} .width=${img.width}x${img.height}`);
+    console.log(`Points:`, currentData.points.map(p => `${p.label}:(${p.x},${p.y}) ${p.species_code}`).join(', '));
+    fitImage();
+    render();
+  };
+  img.src = `/images/${encodeURIComponent(filename)}`;
+
+  selectedPoint = -1;
+  renderPointList();
+  updateCounter();
+  document.getElementById('image-filename').textContent = filename.replace('_cpc.json', '').replace('_pts.jpg', '');
+
+  // Kick the per-frame timer for the new frame.
+  _timerStart();
+}
+
+// ── Per-frame timer ──────────────────────────────────────────────
+// Logs time-per-frame to a rolling average (per session, not persisted).
+// The top-bar badge goes green at <= target, yellow up to 2x target, red beyond.
+// Pause: `P` or click the ⏸ button — freezes elapsed for the current frame
+// AND keeps paused time out of the final recorded sample for this frame.
+const FRAME_TIMER_TARGET_S = 15.0;
+let _frameStartMs = 0;              // wall-clock when the timer started
+let _framePausedAtMs = 0;           // wall-clock when pause began (0 if running)
+let _framePausedTotalMs = 0;        // accumulated paused ms for the current frame
+let _frameTickInt = null;
+let _frameTimesSec = [];
+
+function _timerFmt(sec) {
+  if (!isFinite(sec)) return '—';
+  if (sec < 60) return sec.toFixed(1) + 's';
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return `${m}m ${s}s`;
+}
+
+function _timerColor(sec) {
+  if (sec <= FRAME_TIMER_TARGET_S) return '#4ecca3';                    // green
+  if (sec <= FRAME_TIMER_TARGET_S * 2) return '#f0a500';                // yellow
+  return '#e94560';                                                     // red
+}
+
+function _timerElapsedSec() {
+  if (_frameStartMs <= 0) return 0;
+  const now = _framePausedAtMs > 0 ? _framePausedAtMs : Date.now();
+  return Math.max(0, (now - _frameStartMs - _framePausedTotalMs) / 1000);
+}
+
+function _timerRender() {
+  const el = document.getElementById('frame-timer');
+  if (!el) return;
+  const now = _timerElapsedSec();
+  const avg = _frameTimesSec.length
+    ? _frameTimesSec.reduce((a, b) => a + b, 0) / _frameTimesSec.length
+    : NaN;
+  const nowStr = _frameStartMs > 0 ? _timerFmt(now) : '—';
+  const avgStr = isFinite(avg) ? _timerFmt(avg) : '—';
+  const color = _timerColor(now);
+  const avgColor = isFinite(avg) ? _timerColor(avg) : '#888';
+  const paused = _framePausedAtMs > 0;
+  el.innerHTML =
+    '<span style="color:#666">this </span>' +
+    `<span style="color:${paused ? '#888' : color};font-weight:700">${nowStr}${paused ? ' ⏸' : ''}</span>` +
+    ' <span style="color:#666">· avg </span>' +
+    `<span style="color:${avgColor}">${avgStr}</span>` +
+    ` <span style="color:#666">(n=${_frameTimesSec.length}, target ${FRAME_TIMER_TARGET_S.toFixed(0)}s)</span>`;
+  // Keep the pause button label in sync
+  const btn = document.getElementById('frame-timer-pause');
+  if (btn) btn.textContent = paused ? '▶' : '⏸';
+}
+
+function _timerStart() {
+  _frameStartMs = Date.now();
+  _framePausedAtMs = 0;
+  _framePausedTotalMs = 0;
+  if (_frameTickInt) clearInterval(_frameTickInt);
+  _timerRender();
+  _frameTickInt = setInterval(_timerRender, 250);
+}
+
+function _timerTogglePause() {
+  if (_frameStartMs <= 0) return;
+  if (_framePausedAtMs > 0) {
+    // Resuming: add the paused span to the accumulator and clear pause flag.
+    _framePausedTotalMs += Date.now() - _framePausedAtMs;
+    _framePausedAtMs = 0;
+    if (!_frameTickInt) _frameTickInt = setInterval(_timerRender, 250);
+  } else {
+    _framePausedAtMs = Date.now();
+    // Stop ticking while paused — saves CPU.
+    if (_frameTickInt) { clearInterval(_frameTickInt); _frameTickInt = null; }
+  }
+  _timerRender();
+}
+
+function _timerRecordPrev() {
+  if (_frameStartMs <= 0) return;
+  // If the user left it paused, finalize the pause span before recording.
+  if (_framePausedAtMs > 0) {
+    _framePausedTotalMs += Date.now() - _framePausedAtMs;
+    _framePausedAtMs = 0;
+  }
+  const elapsed = (Date.now() - _frameStartMs - _framePausedTotalMs) / 1000;
+  // Ignore tiny times from accidental double-advances.
+  if (elapsed >= 0.5) _frameTimesSec.push(elapsed);
+  _frameStartMs = 0;
+  _framePausedTotalMs = 0;
+  if (_frameTickInt) { clearInterval(_frameTickInt); _frameTickInt = null; }
+  _timerRender();
+}
+
+async function prevImage() { if (currentIdx > 0) { await saveCurrentImage(); selectImage(currentIdx - 1); } }
+async function nextImage() { if (currentIdx < images.length - 1) { await saveCurrentImage(); selectImage(currentIdx + 1); } }
+
+async function saveCurrentImage() {
+  if (!currentData || currentIdx < 0) return;
+  const filename = images[currentIdx].filename;
+  await fetch(`/api/image/${encodeURIComponent(filename)}/points`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ points: currentData.points }),
+  });
+  images[currentIdx].status = 'reviewed';
+}
+
+async function scrapFrame() {
+  if (currentIdx < 0 || !images[currentIdx]) return;
+  const filename = images[currentIdx].filename;
+  if (!confirm(`Scrap this frame?\n\n${filename}\n\nIt will be excluded from review and export. You can undo via the JSON files if needed.`)) return;
+
+  const res = await fetch(`/api/image/${encodeURIComponent(filename)}/scrap`, {method: 'POST'});
+  const data = await res.json();
+  if (!res.ok) { alert('Scrap failed: ' + (data.error || res.status)); return; }
+
+  setStatus(`Scrapped ${filename} — ${data.remaining} frames remaining`);
+  // Remove from in-memory list and advance
+  images.splice(currentIdx, 1);
+  if (images.length === 0) {
+    // No more to review — reload the review batch from server (may have exported ones)
+    await loadReviewBatch();
+    if (!images.length) {
+      showScreen('review');
+      setStatus('No frames remaining to review.');
+    }
+    return;
+  }
+  const nextIdx = Math.min(currentIdx, images.length - 1);
+  selectImage(nextIdx);
+}
+
+function flashLetter(label) {
+  const el = document.getElementById('letter-flash');
+  el.textContent = label;
+  el.classList.add('show');
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => el.classList.remove('show'), 350);
+}
+
+// ── Aux-observation mode (side-sightings while reviewing) ──
+let auxMode = false;
+function toggleAuxMode() {
+  auxMode = !auxMode;
+  const wrapEl = document.getElementById('canvas-wrap');
+  if (wrapEl) wrapEl.classList.toggle('aux-active', auxMode);
+  setStatus(auxMode
+    ? 'AUX MODE — click on the image to log a side observation (L to exit)'
+    : 'Aux mode off');
+}
+
+async function promptAndSaveAux(x, y) {
+  const code = (prompt('Species code for the side observation (e.g. SPO, FSH):', '') || '').trim();
+  if (!code) return;
+  const notes = (prompt('Notes (optional — common name, count, behavior):', '') || '').trim();
+  if (!currentData || currentIdx < 0) return;
+  const filename = images[currentIdx].filename;
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/add_aux`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({x, y, species_code: code, notes}),
+    });
+    const data = await res.json();
+    if (data.ok && data.point) {
+      currentData.aux_points = currentData.aux_points || [];
+      currentData.aux_points.push(data.point);
+      render();
+      setStatus(`Aux logged: ${code}${notes ? ' — ' + notes : ''}`);
+    } else {
+      setStatus('Aux save failed: ' + (data.error || 'unknown'));
+    }
+  } catch (e) {
+    setStatus('Aux save error: ' + e.message);
+  }
+}
+
+// ── Quick-add: sticky number key, click places a target-labeled point ──
+// `numKeyDown` is the index (0-based) of the currently active quick-add label,
+// or null. Tapping the same number toggles it off; tapping a different number
+// switches. Works the same for mouse clicks on the label-bar buttons.
+let numKeyDown = null;
+
+function highlightQuickBtn(idx) {
+  document.querySelectorAll('.qa-btn').forEach((b, i) => {
+    b.classList.toggle('active', i === idx);
+  });
+}
+
+function setQuickLabel(idx) {
+  if (idx === null || idx === undefined) {
+    numKeyDown = null;
+    highlightQuickBtn(-1);
+    canvas.style.cursor = aKeyDown ? 'cell' : 'crosshair';
+    setStatus('Quick-add: off');
+    if (loupeEnabled) updateLoupeOverlay();
+    return;
+  }
+  const lbl = TARGET_LABELS[idx];
+  if (!lbl) return;
+  numKeyDown = idx;
+  highlightQuickBtn(idx);
+  canvas.style.cursor = 'cell';
+  setStatus(`Quick-add: ${lbl.code}${lbl.name ? ' (' + lbl.name + ')' : ''} — click to place; tap ${idx + 1} again to clear`);
+  if (loupeEnabled) updateLoupeOverlay();
+}
+
+// Button click toggles the sticky label (instead of flashing info, it now
+// behaves identically to tapping the number key).
+function toggleQuickLabel(idx) {
+  if (numKeyDown === idx) setQuickLabel(null);
+  else setQuickLabel(idx);
+}
+
+// ── Add Point mode ──────────────────────────────────────
+let aKeyDown = false;
+let pendingAddIdx = -1; // index of newly added point awaiting category
+
+const ADD_LABELS = 'UVWXYZ'.split('').concat(
+  ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(c => 'A' + c)
+);
+
+function nextAddLabel() {
+  if (!currentData) return ADD_LABELS[0];
+  const used = new Set(currentData.points.map(p => p.label));
+  for (const l of ADD_LABELS) {
+    if (!used.has(l)) return l;
+  }
+  return 'A' + ADD_LABELS.length; // fallback
+}
+
+function addPointAt(imgX, imgY) {
+  if (!currentData) return;
+  const label = nextAddLabel();
+  const pt = {
+    label: label,
+    x: Math.round(imgX * 10) / 10,
+    y: Math.round(imgY * 10) / 10,
+    species_code: '',
+    species_name: '',
+    category: '',
+    ocr_confidence: -1, // sentinel: manual point
+    has_crosshair: true,
+    added: true,
+    point_type: 1,
+  };
+  currentData.points.push(pt);
+  pendingAddIdx = currentData.points.length - 1;
+  selectedPoint = pendingAddIdx;
+  sortedIndices = sortedPointIndices();
+  renderPointList();
+  render();
+  flashLetter(label);
+  showCatPopup();
+}
+
+// Place a point and immediately assign the target label at TARGET_LABELS[idx].
+function addPointWithLabel(imgX, imgY, idx) {
+  if (!currentData) return;
+  const lbl = TARGET_LABELS[idx];
+  if (!lbl) return;
+  const label = nextAddLabel();
+  const pt = {
+    label: label,
+    x: Math.round(imgX * 10) / 10,
+    y: Math.round(imgY * 10) / 10,
+    species_code: lbl.code,
+    species_name: lbl.name || lbl.code,
+    category: lbl.category || 'Coral',
+    ocr_confidence: -1,
+    has_crosshair: true,
+    added: true,
+    point_type: 1,
+  };
+  currentData.points.push(pt);
+  selectedPoint = currentData.points.length - 1;
+  sortedIndices = sortedPointIndices();
+  renderPointList();
+  render();
+  flashLetter(label);
+  setStatus(`${label} -> ${lbl.code}${lbl.name ? ' (' + lbl.name + ')' : ''}`);
+}
+
+// Right-click = non-target prompt point. No target species attached; SAM3 will
+// still segment the region from this prompt in step 5 (labeled "?/Other") so
+// the reviewer can deal with it then. Rendered with a yellow/dashed marker.
+function addNonTargetPoint(imgX, imgY) {
+  if (!currentData) return;
+  const label = nextAddLabel();
+  const pt = {
+    label: label,
+    x: Math.round(imgX * 10) / 10,
+    y: Math.round(imgY * 10) / 10,
+    species_code: '?',
+    species_name: '',
+    category: 'Other',
+    ocr_confidence: -1,
+    has_crosshair: true,
+    added: true,
+    non_target: true,     // flag used by the renderer
+    point_type: 1,
+  };
+  currentData.points.push(pt);
+  selectedPoint = currentData.points.length - 1;
+  sortedIndices = sortedPointIndices();
+  renderPointList();
+  render();
+  flashLetter(label);
+  setStatus(`${label} -> non-target prompt (SAM3 will segment in step 5)`);
+}
+
+function showCatPopup() {
+  const popup = document.getElementById('cat-popup');
+  // Position near center of canvas
+  const wrapRect = wrap.getBoundingClientRect();
+  popup.style.left = (wrapRect.left + wrapRect.width / 2 - 105) + 'px';
+  popup.style.top = (wrapRect.top + wrapRect.height / 2 - 20) + 'px';
+  popup.classList.add('visible');
+}
+
+function hideCatPopup() {
+  document.getElementById('cat-popup').classList.remove('visible');
+  pendingAddIdx = -1;
+}
+
+// Target species list (from server template)
+const TARGET_SPECIES = [{% for sp in target_species %}'{{ sp }}'{% if not loop.last %}, {% endif %}{% endfor %}];
+const TARGET_LABELS = [{% for lbl in target_labels %}{code:'{{ lbl.code }}', name:{{ lbl.name|tojson }}, category:{{ lbl.category|tojson }}}{% if not loop.last %}, {% endif %}{% endfor %}];
+
+function assignSpecies(code) {
+  if (pendingAddIdx < 0 || !currentData) { hideCatPopup(); return; }
+  const pt = currentData.points[pendingAddIdx];
+  const info = TARGET_LABELS.find(l => l.code === code);
+  pt.species_code = code;
+  pt.category = (info && info.category) || 'Coral';
+  pt.species_name = (info && info.name) || code;
+  hideCatPopup();
+  sortedIndices = sortedPointIndices();
+  renderPointList();
+  render();
+  setStatus(`${pt.label} -> ${code}${info && info.name ? ' (' + info.name + ')' : ''}`);
+}
+
+function assignCategory(category) {
+  if (pendingAddIdx < 0 || !currentData) { hideCatPopup(); return; }
+  const pt = currentData.points[pendingAddIdx];
+  pt.category = category;
+  const catCodes = {
+    'Coral': 'CORAL', 'Sponge': 'SPO', 'Macroalgae': 'MACA',
+    'Gorgonian': 'GORG', 'Dca': 'DCA', 'Turf': 'TURF',
+    'Non-living': 'NL', '': '',
+  };
+  pt.species_code = catCodes[category] || category.toUpperCase().slice(0, 4);
+  hideCatPopup();
+  sortedIndices = sortedPointIndices();
+  renderPointList();
+  render();
+  setStatus(`${pt.label} -> ${category || 'Unlabeled'}`);
+}
+
+function selectNextLabel() {
+  if (!currentData || sortedIndices.length === 0) return;
+  if (selectedPoint < 0) {
+    selectedPoint = sortedIndices[0];
+  } else {
+    const curSortPos = sortedIndices.indexOf(selectedPoint);
+    const nextSortPos = (curSortPos + 1) % sortedIndices.length;
+    selectedPoint = sortedIndices[nextSortPos];
+  }
+  if (autoCenter) centerOnPoint(selectedPoint);
+  flashLetter(currentData.points[selectedPoint].label);
+  renderPointList();
+  render();
+}
+
+function centerOnPoint(idx) {
+  if (!currentData || !currentData.points[idx]) return;
+  const pt = currentData.points[idx];
+  const scr_x = pt.x * scale + offsetX;
+  const scr_y = pt.y * scale + offsetY;
+  offsetX += canvas.width / 2 - scr_x;
+  offsetY += canvas.height / 2 - scr_y;
+}
+
+function lockPoint() {
+  if (selectedPoint < 0) return;
+  setStatus(`${currentData.points[selectedPoint].label} locked`);
+}
+
+// ── Rendering ──
+function fitImage() {
+  if (!img) return;
+  const ww = wrap.clientWidth, wh = wrap.clientHeight;
+  canvas.width = ww; canvas.height = wh;
+  scale = Math.min(ww / img.width, wh / img.height) * 0.95;
+  offsetX = (ww - img.width * scale) / 2;
+  offsetY = (wh - img.height * scale) / 2;
+}
+
+function render() {
+  if (!img || !currentData) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.translate(offsetX, offsetY);
+  ctx.scale(scale, scale);
+
+  ctx.drawImage(img, 0, 0);
+
+  const pts = currentData.points;
+  for (let i = 0; i < pts.length; i++) {
+    const pt = pts[i];
+    if (isSkippedPoint(pt)) continue;
+    const isSel = i === selectedPoint;
+    const isAdded = pt.added === true;
+    const hasCross = pt.has_crosshair !== false;
+    const conf = pt.ocr_confidence || 0;
+    const pink = '#ff69b4';
+
+    if (isAdded) {
+      // ── Added point ── pink for target-labeled, amber dashed for non-target prompts
+      const isNonTarget = pt.non_target === true || pt.species_code === '?';
+      const color = isNonTarget ? '#ffb24a' : pink;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 16, 0, Math.PI * 2);
+      ctx.lineWidth = isSel ? 3.5 : 2;
+      ctx.strokeStyle = isSel ? '#ffff00' : color;
+      if (isNonTarget) ctx.setLineDash([5, 4]);
+      ctx.stroke();
+      if (isNonTarget) ctx.setLineDash([]);
+
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
+      ctx.fillStyle = isSel ? '#ffff00' : color;
+      ctx.fill();
+
+      const lbl = `${pt.label}`;
+      const spp = pt.species_code || '';
+      const labelText = isNonTarget
+        ? `${lbl} ? (non-target)`
+        : (spp ? `${lbl} ${spp}` : lbl);
+      ctx.font = 'bold 12px monospace';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+      ctx.strokeText(labelText, pt.x + 20, pt.y + 5);
+      ctx.fillStyle = isSel ? '#ffff00' : color;
+      ctx.fillText(labelText, pt.x + 20, pt.y + 5);
+    } else {
+      // ── OCR or CPC point ──
+      const refOnly = isReferenceOnly(pt);
+      const crossLen = refOnly ? 26 : 20;
+
+      // Crosshair at observation point (red normally; muted cyan in reference mode)
+      const crossColor = isSel ? '#ffff00' : (refOnly ? '#7fdfff' : '#ff0000');
+      ctx.beginPath();
+      ctx.moveTo(pt.x - crossLen, pt.y);
+      ctx.lineTo(pt.x + crossLen, pt.y);
+      ctx.moveTo(pt.x, pt.y - crossLen);
+      ctx.lineTo(pt.x, pt.y + crossLen);
+      ctx.strokeStyle = crossColor;
+      ctx.lineWidth = isSel ? 3.5 : (refOnly ? 2 : 2.5);
+      ctx.stroke();
+
+      // Circle around crosshair (skipped in reference mode — keeps the cue minimal)
+      if (!refOnly) {
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 18, 0, Math.PI * 2);
+        ctx.lineWidth = isSel ? 3.5 : 2;
+        if (isSel) ctx.strokeStyle = '#ffff00';
+        else if (!hasCross) ctx.strokeStyle = '#ff4444';
+        else if (conf === 0) ctx.strokeStyle = '#f0a500';
+        else ctx.strokeStyle = '#00ff00';
+        ctx.stroke();
+      }
+
+      // Line from letter centroid to crosshair (hidden in reference mode)
+      if (!refOnly && pt.letter_cx !== undefined) {
+        ctx.beginPath();
+        ctx.moveTo(pt.letter_cx, pt.letter_cy);
+        ctx.lineTo(pt.x, pt.y);
+        ctx.strokeStyle = 'rgba(255,255,0,0.4)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      // Letter label above crosshair (larger + muted cyan in reference mode)
+      const fontPx = refOnly ? 56 : 36;
+      const labelX = pt.x - (refOnly ? 16 : 10);
+      const labelY = pt.letter_cy !== undefined ? pt.letter_cy - 10 : pt.y - (refOnly ? 60 : 45);
+      ctx.font = `bold ${fontPx}px sans-serif`;
+      ctx.lineWidth = refOnly ? 5 : 4;
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.strokeText(pt.label, labelX, labelY);
+      ctx.fillStyle = isSel ? '#ffff00' : (refOnly ? '#7fdfff' : '#ff0000');
+      ctx.fillText(pt.label, labelX, labelY);
+
+      // Confidence + species code below crosshair
+      const confStr = conf > 0 ? `${conf}%` : '?';
+      const spp = pt.species_code || '';
+      const infoText = spp ? `${spp} (${confStr})` : confStr;
+      ctx.font = refOnly ? 'bold 22px monospace' : 'bold 14px monospace';
+      const infoY = refOnly ? pt.y + 38 : pt.y + 28;
+      ctx.lineWidth = refOnly ? 4 : 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.strokeText(infoText, pt.x + 22, infoY);
+      ctx.fillStyle = isSel ? '#ffff00' : (refOnly ? '#aee3f5' : '#ffcc00');
+      ctx.fillText(infoText, pt.x + 22, infoY);
+    } // end else (OCR/CPC point)
+  }
+
+  // ── Aux points (side observations) — not exported via SAM3/YOLO ──
+  if (currentData && currentData.aux_points && currentData.aux_points.length) {
+    for (const ap of currentData.aux_points) {
+      ctx.beginPath();
+      // Green diamond to stand out from the red/pink main points.
+      const s = 14;
+      ctx.moveTo(ap.x, ap.y - s);
+      ctx.lineTo(ap.x + s, ap.y);
+      ctx.lineTo(ap.x, ap.y + s);
+      ctx.lineTo(ap.x - s, ap.y);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(80, 255, 128, 0.85)';
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#000';
+      ctx.stroke();
+
+      const code = ap.species_code || '?';
+      ctx.font = 'bold 18px monospace';
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.strokeText(code, ap.x + 18, ap.y + 6);
+      ctx.fillStyle = '#50ff80';
+      ctx.fillText(code, ap.x + 18, ap.y + 6);
+    }
+  }
+
+  ctx.restore();
+}
+
+function screenToImage(sx, sy) {
+  return { x: (sx - offsetX) / scale, y: (sy - offsetY) / scale };
+}
+
+// ── Mouse interaction ──
+function findPointAt(sx, sy) {
+  if (!currentData) return -1;
+  const {x, y} = screenToImage(sx, sy);
+  const threshold = 25 / scale;
+  let best = -1, bestDist = Infinity;
+  for (let i = 0; i < currentData.points.length; i++) {
+    const pt = currentData.points[i];
+    if (isReferenceOnly(pt)) continue;
+    const d = Math.hypot(pt.x - x, pt.y - y);
+    if (d < threshold && d < bestDist) { best = i; bestDist = d; }
+  }
+  return best;
+}
+
+// Click vs drag: we defer starting a pan until the cursor moves more than
+// PAN_THRESHOLD pixels. A mouseup before that threshold = plain click (deselect).
+const PAN_THRESHOLD = 4;
+let pendingPan = null; // {startClientX, startClientY, startOffsetX, startOffsetY}
+
+// Right-click on the canvas places a non-target prompt point (see below) —
+// disable the browser's default context menu so it doesn't steal the click.
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+canvas.addEventListener('mousedown', e => {
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+
+  // Middle button or Alt+drag: start panning immediately (power-user shortcut)
+  if (e.button === 1 || (e.button === 0 && e.altKey)) {
+    isPanning = true;
+    panStartX = e.clientX - offsetX;
+    panStartY = e.clientY - offsetY;
+    canvas.style.cursor = 'grabbing';
+    return;
+  }
+
+  // Right click: place a NON-TARGET prompt point. SAM3 will segment the
+  // region from this point in step 5, but it's NOT assigned to the currently
+  // held quick-add label. Useful when you see another organism you want to
+  // segment without switching your active label.
+  if (e.button === 2 && currentData) {
+    e.preventDefault();
+    const {x, y} = screenToImage(sx, sy);
+    addNonTargetPoint(x, y);
+    return;
+  }
+
+  // Number-held + click: place a new point with that target label (set in #3)
+  if (e.button === 0 && numKeyDown !== null && currentData) {
+    const {x, y} = screenToImage(sx, sy);
+    addPointWithLabel(x, y, numKeyDown);
+    return;
+  }
+
+  // Aux mode + click: prompt + log a side observation. Not an SAM3 target —
+  // stored in added_points.csv, never exported for training.
+  if (e.button === 0 && auxMode && currentData) {
+    const {x, y} = screenToImage(sx, sy);
+    promptAndSaveAux(x, y);
+    return;
+  }
+
+  // A+click: place point + open category popup (non-target labels)
+  if (e.button === 0 && aKeyDown && currentData) {
+    const {x, y} = screenToImage(sx, sy);
+    addPointAt(x, y);
+    return;
+  }
+
+  // Ctrl+click: move the selected point here, then advance
+  if (e.button === 0 && e.ctrlKey && selectedPoint >= 0 && currentData) {
+    const {x, y} = screenToImage(sx, sy);
+    currentData.points[selectedPoint].x = Math.round(x * 10) / 10;
+    currentData.points[selectedPoint].y = Math.round(y * 10) / 10;
+    selectNextLabel();
+    return;
+  }
+
+  // Plain left click: on a point -> drag that point; on empty -> queue a potential pan
+  const idx = findPointAt(sx, sy);
+  if (idx >= 0) {
+    draggingPoint = idx;
+    selectedPoint = idx;
+    canvas.style.cursor = 'move';
+    renderPointList();
+    render();
+  } else if (e.button === 0) {
+    pendingPan = {
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startOffsetX: offsetX,
+      startOffsetY: offsetY,
+    };
+    canvas.style.cursor = 'grab';
+  }
+});
+
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+
+  updateLoupe(e.clientX, e.clientY, sx, sy);
+
+  if (isPanning) {
+    offsetX = e.clientX - panStartX;
+    offsetY = e.clientY - panStartY;
+    render();
+    return;
+  }
+
+  // Pending pan: promote to real pan once the cursor has moved enough
+  if (pendingPan) {
+    const dx = e.clientX - pendingPan.startClientX;
+    const dy = e.clientY - pendingPan.startClientY;
+    if ((dx * dx + dy * dy) > PAN_THRESHOLD * PAN_THRESHOLD) {
+      isPanning = true;
+      panStartX = pendingPan.startClientX - pendingPan.startOffsetX;
+      panStartY = pendingPan.startClientY - pendingPan.startOffsetY;
+      pendingPan = null;
+      canvas.style.cursor = 'grabbing';
+    }
+    return;
+  }
+
+  if (draggingPoint >= 0) {
+    const {x, y} = screenToImage(sx, sy);
+    currentData.points[draggingPoint].x = Math.round(x * 10) / 10;
+    currentData.points[draggingPoint].y = Math.round(y * 10) / 10;
+    renderPointList();
+    render();
+    return;
+  }
+
+  if (numKeyDown !== null || aKeyDown) {
+    canvas.style.cursor = 'cell';
+  } else {
+    canvas.style.cursor = findPointAt(sx, sy) >= 0 ? 'pointer' : 'crosshair';
+  }
+});
+
+canvas.addEventListener('mouseup', () => {
+  if (isPanning) { isPanning = false; canvas.style.cursor = 'crosshair'; }
+  if (draggingPoint >= 0) { draggingPoint = -1; canvas.style.cursor = 'crosshair'; }
+  if (pendingPan) {
+    // Click without drag = deselect current point
+    pendingPan = null;
+    selectedPoint = -1;
+    renderPointList();
+    render();
+    canvas.style.cursor = 'crosshair';
+  }
+});
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const zoom = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const newScale = scale * zoom;
+  if (newScale < 0.05 || newScale > 30) return;
+  offsetX = mx - (mx - offsetX) * zoom;
+  offsetY = my - (my - offsetY) * zoom;
+  scale = newScale;
+  render();
+}, {passive: false});
+
+canvas.addEventListener('mouseenter', () => {
+  if (loupeEnabled && img) document.getElementById('loupe').classList.add('visible');
+});
+canvas.addEventListener('mouseleave', () => {
+  document.getElementById('loupe').classList.remove('visible');
+});
+
+// ── Hover loupe (magnifier) ──
+let loupeEnabled = true;
+const LOUPE_SIZE = 180;
+const LOUPE_ZOOM = 3; // magnification over current view scale
+let lastLoupeCursor = null; // {clientX, clientY, sx, sy}
+
+function updateLoupe(clientX, clientY, sx, sy) {
+  lastLoupeCursor = {clientX, clientY, sx, sy};
+  const loupe = document.getElementById('loupe');
+  if (!loupeEnabled || !img) { loupe.classList.remove('visible'); return; }
+
+  // Map cursor screen px -> image px
+  const {x: imgX, y: imgY} = screenToImage(sx, sy);
+  if (imgX < 0 || imgY < 0 || imgX >= img.naturalWidth || imgY >= img.naturalHeight) {
+    loupe.classList.remove('visible');
+    return;
+  }
+
+  loupe.classList.add('visible');
+  // Position loupe offset from cursor (avoid covering it)
+  const off = 20;
+  loupe.style.left = (clientX + off) + 'px';
+  loupe.style.top = (clientY + off) + 'px';
+
+  const lc = document.getElementById('loupe-canvas');
+  const lctx = lc.getContext('2d');
+  lctx.imageSmoothingEnabled = false;
+
+  // Source region in image coords: sized so (crop * zoom * scale) == LOUPE_SIZE
+  const cropPx = LOUPE_SIZE / (LOUPE_ZOOM * scale);
+  const srcX = Math.max(0, imgX - cropPx / 2);
+  const srcY = Math.max(0, imgY - cropPx / 2);
+  const srcW = Math.min(cropPx, img.naturalWidth - srcX);
+  const srcH = Math.min(cropPx, img.naturalHeight - srcY);
+
+  lctx.fillStyle = '#000';
+  lctx.fillRect(0, 0, LOUPE_SIZE, LOUPE_SIZE);
+  lctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, LOUPE_SIZE, LOUPE_SIZE);
+
+  // Crosshair at center
+  lctx.strokeStyle = 'rgba(255, 220, 50, 0.8)';
+  lctx.lineWidth = 1;
+  lctx.beginPath();
+  lctx.moveTo(LOUPE_SIZE/2 - 10, LOUPE_SIZE/2); lctx.lineTo(LOUPE_SIZE/2 + 10, LOUPE_SIZE/2);
+  lctx.moveTo(LOUPE_SIZE/2, LOUPE_SIZE/2 - 10); lctx.lineTo(LOUPE_SIZE/2, LOUPE_SIZE/2 + 10);
+  lctx.stroke();
+
+  // Overlay the held label code, big and prominent
+  if (numKeyDown !== null && TARGET_LABELS[numKeyDown]) {
+    const code = TARGET_LABELS[numKeyDown].code;
+    lctx.font = 'bold 36px Segoe UI, sans-serif';
+    lctx.textAlign = 'center';
+    lctx.textBaseline = 'middle';
+    // Shadow for legibility over any background
+    lctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+    lctx.fillText(code, LOUPE_SIZE / 2 + 2, LOUPE_SIZE - 26 + 2);
+    lctx.fillStyle = '#ff6b7f';
+    lctx.fillText(code, LOUPE_SIZE / 2, LOUPE_SIZE - 26);
+  }
+}
+
+// Redraw the loupe at the last cursor position (used when numKeyDown changes).
+function updateLoupeOverlay() {
+  if (!lastLoupeCursor) return;
+  const {clientX, clientY, sx, sy} = lastLoupeCursor;
+  updateLoupe(clientX, clientY, sx, sy);
+}
+
+// ── Persisted user preferences (localStorage) ──
+// Stays across frames, sub-app relaunches, and exports — anything tied to
+// this browser origin. Use PREFS_KEY_v1 so we can version future changes.
+const PREFS_KEY = 'tcrmp_route_prefs_v1';
+
+function loadPrefs() {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return;
+    const p = JSON.parse(raw);
+    if (typeof p.autoCenter === 'boolean') autoCenter = p.autoCenter;
+    if (typeof p.loupeEnabled === 'boolean') loupeEnabled = p.loupeEnabled;
+  } catch (e) { /* ignore bad stored prefs */ }
+}
+
+function savePrefs() {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({
+      autoCenter: autoCenter,
+      loupeEnabled: loupeEnabled,
+    }));
+  } catch (e) { /* ignore — private mode, quota, etc. */ }
+}
+
+loadPrefs();
+
+// ── Keyboard ──
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  const activeScreen = document.querySelector('.screen.active');
+  if (!activeScreen || activeScreen.id !== 'review') return;
+
+  // Track A key for add-point mode
+  if (e.key === 'a' || e.key === 'A') {
+    if (!e.ctrlKey && !e.metaKey) {
+      aKeyDown = true;
+      canvas.style.cursor = 'cell';
+      e.preventDefault();
+      return;
+    }
+  }
+
+  // When popup is showing: number keys assign species, letter keys assign category
+  if (pendingAddIdx >= 0) {
+    const num = parseInt(e.key);
+    // 1-N: assign target species
+    if (num >= 1 && num <= TARGET_SPECIES.length) {
+      assignSpecies(TARGET_SPECIES[num - 1]);
+      e.preventDefault();
+      return;
+    }
+    // 0: unlabel
+    if (e.key === '0') { assignCategory(''); e.preventDefault(); return; }
+    // Letter shortcuts for generic categories
+    const catKeys = {c:'Coral', s:'Sponge', m:'Macroalgae', g:'Gorgonian', d:'Dca', t:'Turf', n:'Non-living'};
+    if (catKeys[e.key.toLowerCase()]) {
+      assignCategory(catKeys[e.key.toLowerCase()]);
+      e.preventDefault();
+      return;
+    }
+  } else {
+    // Popup NOT open: 1-N TAPS (not holds) toggle the sticky quick-add label.
+    // Tap the same number again to clear; tap a different number to switch.
+    // Auto-repeat fires keydown many times per second — ignore those so the
+    // label doesn't flicker on/off.
+    const num = parseInt(e.key);
+    if (num >= 1 && num <= TARGET_LABELS.length) {
+      if (!e.repeat) {
+        const idx = num - 1;
+        if (numKeyDown === idx) setQuickLabel(null);
+        else setQuickLabel(idx);
+      }
+      e.preventDefault();
+      return;
+    }
+  }
+
+  switch (e.key) {
+    case ' ':
+      // Space is the primary frame-advance key now (Shift+Space = prev).
+      // On the LAST image of the batch, Space auto-exports so you don't
+      // have to mouse up to the Export Batch button.
+      if (e.ctrlKey || e.metaKey) break;
+      e.preventDefault();
+      if (e.shiftKey) { saveCurrentImage(); prevImage(); }
+      else if (currentIdx >= images.length - 1) {
+        // End of batch — save + export. doExport handles the overlay.
+        saveCurrentImage().then(() => doExport());
+      } else {
+        saveCurrentImage(); nextImage();
+      }
+      break;
+    case 'p': case 'P':
+      if (!e.ctrlKey && !e.metaKey) {
+        _timerTogglePause();
+        e.preventDefault();
+      }
+      break;
+    case 'Tab':
+      e.preventDefault();
+      selectNextLabel();
+      break;
+    case 'Enter':
+      e.preventDefault();
+      lockPoint();
+      break;
+    case 'n': case 'N':
+      if (!e.ctrlKey && !e.metaKey) { saveCurrentImage(); nextImage(); e.preventDefault(); }
+      break;
+    case 'b': case 'B':
+      if (!e.ctrlKey && !e.metaKey) { saveCurrentImage(); prevImage(); e.preventDefault(); }
+      break;
+    case 'z': case 'Z':
+      autoCenter = !autoCenter;
+      setStatus(autoCenter ? 'Auto-center ON' : 'Auto-center OFF');
+      if (typeof savePrefs === 'function') savePrefs();
+      e.preventDefault();
+      break;
+    case 'f': case 'F':
+      fitImage(); render(); e.preventDefault();
+      break;
+    case 'h': case 'H':
+      loupeEnabled = !loupeEnabled;
+      if (!loupeEnabled) document.getElementById('loupe').classList.remove('visible');
+      setStatus(loupeEnabled ? 'Magnifier ON' : 'Magnifier OFF');
+      if (typeof savePrefs === 'function') savePrefs();
+      e.preventDefault();
+      break;
+    case 'l': case 'L':
+      if (!e.ctrlKey && !e.metaKey) { toggleAuxMode(); e.preventDefault(); }
+      break;
+    case 'Escape':
+      hideCatPopup();
+      selectedPoint = -1; renderPointList(); render();
+      break;
+    case 's':
+      if (e.ctrlKey || e.metaKey) { saveCurrentImage(); setStatus('Saved'); e.preventDefault(); }
+      break;
+    case 'ArrowUp':
+      if (selectedPoint >= 0) {
+        e.preventDefault();
+        currentData.points[selectedPoint].y -= (e.shiftKey ? 5 : 1);
+        renderPointList(); render();
+      }
+      break;
+    case 'ArrowDown':
+      if (selectedPoint >= 0) {
+        e.preventDefault();
+        currentData.points[selectedPoint].y += (e.shiftKey ? 5 : 1);
+        renderPointList(); render();
+      }
+      break;
+    case 'ArrowLeft':
+      if (selectedPoint >= 0) {
+        e.preventDefault();
+        currentData.points[selectedPoint].x -= (e.shiftKey ? 5 : 1);
+        renderPointList(); render();
+      }
+      break;
+    case 'ArrowRight':
+      if (selectedPoint >= 0) {
+        e.preventDefault();
+        currentData.points[selectedPoint].x += (e.shiftKey ? 5 : 1);
+        renderPointList(); render();
+      }
+      break;
+    case 'Delete':
+    case 'Backspace':
+      if (selectedPoint >= 0 && currentData) {
+        e.preventDefault();
+        const delLabel = currentData.points[selectedPoint].label;
+        currentData.points.splice(selectedPoint, 1);
+        selectedPoint = -1;
+        sortedIndices = sortedPointIndices();
+        renderPointList(); render();
+        setStatus(`Deleted point ${delLabel}`);
+      }
+      break;
+  }
+});
+
+document.addEventListener('keyup', e => {
+  // A is still momentary (popup-opening shortcut) — release clears it.
+  if (e.key === 'a' || e.key === 'A') {
+    aKeyDown = false;
+    if (pendingAddIdx < 0 && numKeyDown === null) canvas.style.cursor = 'crosshair';
+  }
+  // Number keys are STICKY now — do nothing on keyup. The label stays active
+  // until the user taps the same number again or taps a different one.
+});
+
+// On window blur clear only the momentary A state; sticky quick-add stays.
+window.addEventListener('blur', () => {
+  aKeyDown = false;
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// Orchestrator auto-boot: when launched via the orchestrator, skip the
+// standalone startup form and go straight to loading + review. The server
+// has already populated all the paths via env vars.
+//
+// Robust variant: works even if DOMContentLoaded has already fired by the
+// time this inline script runs (browsers occasionally do this on very small
+// pages or after a bfcache restore). Also surfaces errors into the veil
+// instead of failing silently.
+// ═══════════════════════════════════════════════════════════════════
+const ORCHESTRATED = {{ 'true' if orchestrated else 'false' }};
+console.log('[orch] auto-boot script parsed, ORCHESTRATED=', ORCHESTRATED,
+            'readyState=', document.readyState);
+
+async function _orchAutoBoot() {
+  if (!ORCHESTRATED) return;
+  const veil = document.getElementById('orch-loading');
+  const msg = document.getElementById('orch-loading-msg');
+  if (msg) msg.textContent = 'Calling /api/configure...';
+  try {
+    console.log('[orch] calling doStart()');
+    await doStart();
+    if (veil) veil.classList.remove('active');
+    console.log('[orch] doStart finished');
+  } catch (e) {
+    console.error('[orch] auto-boot error:', e);
+    if (msg) msg.textContent = 'Auto-boot failed: ' + (e && e.message || e) +
+        ' — open the browser console for details.';
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _orchAutoBoot, {once: true});
+} else {
+  // DOM is already parsed — run immediately on next tick so the browser has
+  // a chance to paint the veil first.
+  setTimeout(_orchAutoBoot, 0);
+}
+
+window.addEventListener('resize', () => { if (img) { fitImage(); render(); } });
+
+// ── UI helpers ──
+function renderPointList() {
+  const el = document.getElementById('point-list');
+  const sumEl = document.getElementById('panel-summary');
+  if (!currentData) { el.innerHTML = ''; sumEl.textContent = ''; return; }
+  const pts = currentData.points;
+  const nId = pts.filter(p => (p.ocr_confidence || 0) > 0).length;
+  sumEl.textContent = `${nId}/${pts.length} IDed`;
+
+  el.innerHTML = sortedIndices.map(i => {
+    const pt = pts[i];
+    const conf = pt.ocr_confidence || 0;
+    const isSel = i === selectedPoint;
+    let cls = isSel ? 'active' : '';
+    if (pt.added) cls += ' added';
+    else if (!pt.has_crosshair) cls += ' no-cross';
+    if (conf === 0 && !pt.added) cls += ' unid';
+    const confStr = pt.added ? '+' : (conf > 0 ? `${conf}%` : '\u2014');
+    return `<li class="${cls}" onclick="selectPointFromList(${i})" data-idx="${i}">
+      <span class="plabel">${pt.label}</span>
+      <span class="pspecies">${pt.species_code || '?'}</span>
+      <span class="pconf">${confStr}</span>
+      <span class="pcoord">${Math.round(pt.x)},${Math.round(pt.y)}</span>
+    </li>`;
+  }).join('');
+
+  if (selectedPoint >= 0) {
+    const item = el.querySelector(`li[data-idx="${selectedPoint}"]`);
+    if (item) item.scrollIntoView({block: 'nearest'});
+  }
+}
+
+function selectPointFromList(i) {
+  selectedPoint = i;
+  centerOnPoint(i);
+  renderPointList();
+  render();
+}
+
+function updateCounter() {
+  const el = document.getElementById('img-counter');
+  el.textContent = images.length > 0 ? `${currentIdx + 1} / ${images.length}` : '0 / 0';
+}
+
+let statusTimer = null;
+function setStatus(msg) {
+  const el = document.getElementById('status-text');
+  el.textContent = msg;
+  el.classList.add('flash');
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(() => { el.textContent = ''; el.classList.remove('flash'); }, 3000);
+}
+
+// ── Export ──
+async function doExport() {
+  if (currentData && currentIdx >= 0) await saveCurrentImage();
+
+  setStatus('Exporting batch...');
+  const res = await fetch('/api/export_batch', { method: 'POST' });
+  const data = await res.json();
+
+  if (!data.ok) {
+    setStatus('Export failed');
+    return;
+  }
+
+  document.getElementById('export-summary').innerHTML = `
+    Raw images: ${data.exported_raw}<br>
+    Test images: ${data.test_images}<br>
+    Point records: ${data.point_records}<br>
+    Years: ${data.years_affected.join(', ')}
+  `;
+
+  const remEl = document.getElementById('export-remaining');
+  const nextBtn = document.getElementById('btn-next-review');
+
+  if (data.remaining_review > 0) {
+    remEl.textContent = `${data.remaining_review} images remaining for review`;
+    nextBtn.style.display = 'inline-block';
+    document.getElementById('export-title').textContent = 'Batch Exported';
+  } else {
+    remEl.textContent = 'All images exported!';
+    nextBtn.style.display = 'none';
+    document.getElementById('export-title').textContent = 'All Done!';
+  }
+
+  document.getElementById('export-overlay').classList.add('visible');
+}
+
+async function nextReviewBatch() {
+  document.getElementById('export-overlay').classList.remove('visible');
+
+  // Load next batch (review_files rebuilt after export)
+  await loadReviewBatch();
+  if (images.length > 0) {
+    selectImage(0);
+  } else {
+    setStatus('No more images to review');
+  }
+}
+
+function closeExportOverlay() {
+  document.getElementById('export-overlay').classList.remove('visible');
+}
+
+function backToStartup() {
+  document.getElementById('export-overlay').classList.remove('visible');
+  scanResult = null;
+  document.getElementById('setup-info').classList.remove('visible');
+  showScreen('startup');
+}
+</script>
+</body>
+</html>

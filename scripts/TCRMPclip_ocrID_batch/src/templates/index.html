@@ -1,0 +1,1289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TCRMP OCR Batch</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; overflow: hidden; height: 100vh; }
+
+/* ── Screens ── */
+.screen { display: none; width: 100%; height: 100%; }
+.screen.active { display: flex; }
+
+/* ── STARTUP SCREEN ── */
+#startup { align-items: center; justify-content: center; }
+.setup-card {
+  background: #16213e; border: 1px solid #0f3460; border-radius: 8px;
+  padding: 32px 40px; width: 580px; max-height: 90vh; overflow-y: auto;
+}
+.setup-card h1 { font-size: 20px; margin-bottom: 20px; color: #e94560; }
+.setup-card h2 { font-size: 15px; margin: 16px 0 10px; color: #4ecca3; }
+.field { margin-bottom: 16px; }
+.field label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+.field input[type=text] { width: 100%; padding: 8px 12px; border: 1px solid #0f3460; border-radius: 4px; background: #1a1a2e; color: #eee; font-size: 13px; }
+.field input[type=text]:focus { border-color: #e94560; outline: none; }
+.field-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.field-row label { font-size: 13px; color: #ccc; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.field-row input[type=checkbox], .field-row input[type=radio] { accent-color: #e94560; }
+.mode-buttons { display: flex; gap: 12px; margin-bottom: 16px; }
+.mode-btn {
+  flex: 1; padding: 14px; border: 2px solid #0f3460; border-radius: 6px;
+  background: #1a1a2e; color: #ccc; cursor: pointer; text-align: center;
+  font-size: 13px; transition: all 0.2s;
+}
+.mode-btn:hover { border-color: #e94560; color: #eee; }
+.mode-btn.active { border-color: #e94560; background: rgba(233,69,96,0.1); color: #e94560; font-weight: 600; }
+.mode-btn .mode-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.mode-btn .mode-desc { font-size: 11px; color: #888; }
+.mode-btn.active .mode-desc { color: #ccc; }
+.setup-card .btn-action {
+  width: 100%; padding: 12px; border: none; border-radius: 4px;
+  background: #e94560; color: #fff; font-size: 14px; font-weight: 600;
+  cursor: pointer; margin-top: 8px;
+}
+.setup-card .btn-action:hover { background: #c73e54; }
+.setup-card .btn-action:disabled { background: #444; cursor: not-allowed; }
+.setup-card .btn-scan { background: #0f3460; margin-bottom: 6px; }
+.setup-card .btn-scan:hover { background: #163d70; }
+.setup-error { color: #e94560; font-size: 12px; margin-top: 8px; }
+.setup-info { color: #4ecca3; font-size: 12px; margin-top: 8px; background: rgba(78,204,163,0.1); padding: 8px 10px; border-radius: 4px; display: none; }
+.setup-info.visible { display: block; }
+.setup-info .num { font-weight: 700; color: #4ecca3; }
+.year-grid { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.year-grid label { font-size: 13px; color: #ccc; cursor: pointer; display: flex; align-items: center; gap: 4px; min-width: 70px; }
+.year-grid .select-all { font-size: 11px; color: #e94560; cursor: pointer; margin-left: 8px; text-decoration: underline; }
+.hidden { display: none !important; }
+
+/* ── PROCESSING SCREEN ── */
+#processing { align-items: center; justify-content: center; flex-direction: column; gap: 16px; }
+.progress-wrap { width: 550px; }
+.progress-wrap h2 { font-size: 16px; margin-bottom: 12px; }
+.progress-bar-outer { width: 100%; height: 24px; background: #0f3460; border-radius: 4px; overflow: hidden; }
+.progress-bar-inner { height: 100%; background: #e94560; transition: width 0.2s; border-radius: 4px; }
+.progress-text { font-size: 13px; color: #888; margin-top: 8px; }
+.progress-current { font-size: 12px; color: #666; margin-top: 4px; }
+.progress-eta { font-size: 12px; color: #4ecca3; margin-top: 4px; }
+
+/* ── REVIEW SCREEN ── */
+#review { flex-direction: column; }
+
+.review-topbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 12px; background: #16213e; border-bottom: 1px solid #0f3460;
+  height: 36px; user-select: none; flex-shrink: 0;
+}
+.review-topbar h1 { font-size: 14px; }
+.btn { padding: 4px 10px; border: 1px solid #0f3460; border-radius: 3px; background: #1a1a2e; color: #eee; cursor: pointer; font-size: 12px; white-space: nowrap; }
+.btn:hover { background: #0f3460; }
+.btn.primary { background: #e94560; border-color: #e94560; }
+.btn.primary:hover { background: #c73e54; }
+.spacer { flex: 1; }
+.img-counter { font-size: 13px; font-weight: 600; color: #e94560; min-width: 70px; text-align: center; }
+.batch-info { font-size: 11px; color: #888; }
+.status { font-size: 12px; color: #888; }
+.status.flash { color: #4ecca3; }
+
+.review-body { display: flex; flex: 1; overflow: hidden; }
+
+/* Canvas */
+.canvas-wrap { flex: 1; position: relative; overflow: hidden; background: #111; }
+#canvas { position: absolute; top: 0; left: 0; cursor: crosshair; }
+
+/* Right panel */
+.panel {
+  width: 260px; min-width: 260px; background: #16213e;
+  border-left: 1px solid #0f3460; display: flex; flex-direction: column;
+  flex-shrink: 0;
+}
+.panel-header {
+  padding: 8px 10px; border-bottom: 1px solid #0f3460;
+  display: flex; align-items: center; gap: 8px;
+}
+.panel-header h3 { font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 1px; }
+.panel-header .summary { font-size: 11px; color: #888; margin-left: auto; }
+
+.point-list { list-style: none; flex: 1; overflow-y: auto; padding: 2px 4px; }
+.point-list li {
+  padding: 5px 6px; margin-bottom: 1px; border-radius: 3px;
+  font-size: 11px; cursor: pointer; display: flex; align-items: center; gap: 6px;
+  transition: background 0.1s; border: 1px solid transparent;
+}
+.point-list li:hover { background: #1a1a2e; }
+.point-list li.active { background: #0f3460; border-color: #e94560; }
+.point-list li.locked { opacity: 0.7; }
+.point-list li .plabel { font-weight: 700; width: 16px; color: #4ecca3; font-size: 12px; }
+.point-list li .pspecies { flex: 1; color: #ccc; }
+.point-list li .pconf { color: #666; font-size: 10px; width: 32px; text-align: right; }
+.point-list li .pcoord { color: #555; font-size: 10px; width: 60px; text-align: right; }
+.point-list li.no-cross .plabel { color: #e94560; }
+.point-list li.unid .plabel { color: #f0a500; }
+
+.panel-actions { padding: 8px; border-top: 1px solid #0f3460; display: flex; flex-direction: column; gap: 4px; }
+
+.help-text { padding: 6px 8px; font-size: 10px; color: #444; line-height: 1.6; border-top: 1px solid #0f3460; flex-shrink: 0; }
+.help-text kbd { background: #0f3460; padding: 1px 4px; border-radius: 2px; font-size: 9px; color: #aaa; }
+
+/* ── Added points ── */
+.point-list li.added .plabel { color: #ff69b4; }
+
+/* ── Category popup ── */
+#cat-popup {
+  position: fixed; z-index: 250; display: none;
+  background: #16213e; border: 1px solid #e94560; border-radius: 6px;
+  padding: 6px 4px; font-size: 12px; pointer-events: auto;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+}
+#cat-popup.visible { display: flex; gap: 2px; flex-wrap: wrap; width: 210px; }
+#cat-popup .cat-btn {
+  padding: 4px 6px; border: 1px solid #0f3460; border-radius: 3px;
+  background: #1a1a2e; color: #ccc; cursor: pointer; font-size: 11px;
+  flex: 1; min-width: 60px; text-align: center; white-space: nowrap;
+}
+#cat-popup .cat-btn:hover { background: #0f3460; color: #fff; }
+#cat-popup .cat-btn kbd { color: #e94560; font-weight: 700; margin-right: 2px; }
+
+/* ── EXPORT DONE overlay ── */
+.overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 200;
+}
+.overlay.visible { display: flex; }
+.overlay-card {
+  background: #16213e; border: 1px solid #0f3460; border-radius: 8px;
+  padding: 24px 32px; max-width: 500px; text-align: center;
+}
+.overlay-card h2 { color: #4ecca3; margin-bottom: 12px; }
+.overlay-card p { font-size: 13px; color: #aaa; margin-bottom: 8px; }
+.overlay-card .btn { margin-top: 12px; }
+
+/* Letter flash */
+#letter-flash {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  font-size: 140px; font-weight: 900; color: rgba(255,255,0,0.7);
+  pointer-events: none; z-index: 300; opacity: 0; transition: opacity 0.15s;
+  text-shadow: 0 0 40px rgba(0,0,0,0.8);
+}
+#letter-flash.show { opacity: 1; }
+
+/* Category filter bar */
+.filter-bar {
+  display: flex; align-items: center; gap: 6px; padding: 3px 12px;
+  background: #16213e; border-bottom: 1px solid #0f3460; flex-shrink: 0;
+  font-size: 11px;
+}
+.filter-bar label { color: #aaa; cursor: pointer; display: flex; align-items: center; gap: 3px; }
+.filter-bar label:hover { color: #eee; }
+.filter-bar input[type=checkbox] { accent-color: #e94560; }
+.filter-bar .filter-label { color: #666; text-transform: uppercase; letter-spacing: 0.5px; font-size: 10px; margin-right: 4px; }
+</style>
+</head>
+<body>
+
+<!-- ════════════ STARTUP ════════════ -->
+<div class="screen active" id="startup">
+  <div class="setup-card">
+    <h1>TCRMP OCR Batch</h1>
+
+    <!-- Mode selection -->
+    <div class="mode-buttons">
+      <div class="mode-btn active" id="mode-new" onclick="setMode('new')">
+        <div class="mode-title">Start New Processing</div>
+        <div class="mode-desc">Scan import directory, run OCR on all images</div>
+      </div>
+      <div class="mode-btn" id="mode-resume" onclick="setMode('resume')">
+        <div class="mode-title">Continue Existing</div>
+        <div class="mode-desc">Resume from export directory</div>
+      </div>
+    </div>
+
+    <!-- New project fields -->
+    <div id="new-fields">
+      <div class="field">
+        <label>Import Directory (TCRMP_clip root — READ-ONLY)</label>
+        <input type="text" id="inp-import" value="/home/bizon/UVI Dropbox/SMITH LAB TEAM FOLDER/TCRMP/TCRMP_clip">
+      </div>
+      <div class="field">
+        <label>Export Directory (output will be created here)</label>
+        <input type="text" id="inp-export" value="" placeholder="/path/to/ocr_all">
+      </div>
+      <div class="field">
+        <label>Years to Process</label>
+        <div class="year-grid" id="year-grid">
+          <span style="color:#666; font-size:12px;">Enter import dir and scan to see available years</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Resume fields -->
+    <div id="resume-fields" class="hidden">
+      <div class="field">
+        <label>Export Directory (with existing detection data)</label>
+        <input type="text" id="inp-resume-export" placeholder="/path/to/existing/export">
+      </div>
+    </div>
+
+    <!-- Common: review batch size -->
+    <div class="field">
+      <label>Review Batch Size</label>
+      <div class="field-row">
+        <label><input type="radio" name="rbatch" value="5"> 5</label>
+        <label><input type="radio" name="rbatch" value="10" checked> 10</label>
+        <label><input type="radio" name="rbatch" value="20"> 20</label>
+      </div>
+    </div>
+
+    <button class="btn-action btn-scan" id="btn-scan" onclick="doScan()">Scan Directories</button>
+    <div class="setup-info" id="setup-info"></div>
+    <button class="btn-action" id="btn-start" onclick="doStart()">Start Processing</button>
+    <div class="setup-error" id="setup-error"></div>
+  </div>
+</div>
+
+<!-- ════════════ PROCESSING ════════════ -->
+<div class="screen" id="processing">
+  <div class="progress-wrap">
+    <h2>Processing all images...</h2>
+    <div class="progress-bar-outer">
+      <div class="progress-bar-inner" id="progress-bar" style="width: 0%"></div>
+    </div>
+    <div class="progress-text" id="progress-text">0 / 0</div>
+    <div class="progress-current" id="progress-current"></div>
+    <div class="progress-eta" id="progress-eta"></div>
+  </div>
+</div>
+
+<!-- ════════════ REVIEW ════════════ -->
+<div class="screen" id="review">
+  <div class="review-topbar">
+    <h1>TCRMP OCR Batch</h1>
+    <button class="btn" onclick="prevImage()" title="Previous (B)">&#9664; Prev</button>
+    <span class="img-counter" id="img-counter">0 / 0</span>
+    <button class="btn" onclick="nextImage()" title="Next (N)">Next &#9654;</button>
+    <span class="batch-info" id="batch-info"></span>
+    <span class="spacer"></span>
+    <span class="status" id="status-text"></span>
+    <button class="btn primary" onclick="doExport()">Export Batch</button>
+  </div>
+  <div class="filter-bar">
+    <span class="filter-label">Show only:</span>
+    <label><input type="checkbox" class="cat-filter" value="coral" onchange="updateCategoryFilter()"> Coral</label>
+    <label><input type="checkbox" class="cat-filter" value="sponge" onchange="updateCategoryFilter()"> Sponge</label>
+    <label><input type="checkbox" class="cat-filter" value="macroalgae" onchange="updateCategoryFilter()"> Macroalgae</label>
+    <label><input type="checkbox" class="cat-filter" value="gorgonian" onchange="updateCategoryFilter()"> Gorgonian</label>
+    <label><input type="checkbox" class="cat-filter" value="dca" onchange="updateCategoryFilter()"> Dca</label>
+    <label><input type="checkbox" class="cat-filter" value="turf" onchange="updateCategoryFilter()"> Turf</label>
+    <label><input type="checkbox" class="cat-filter" value="non-living" onchange="updateCategoryFilter()"> Non-living</label>
+    <label style="margin-left:8px; color:#e94560; cursor:pointer;" onclick="clearCategoryFilter()">Clear (all)</label>
+  </div>
+  <div class="review-body">
+    <div class="canvas-wrap" id="canvas-wrap">
+      <canvas id="canvas"></canvas>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h3>Labels</h3>
+        <span class="summary" id="panel-summary"></span>
+      </div>
+      <ul class="point-list" id="point-list"></ul>
+      <div class="panel-actions">
+        <button class="btn" onclick="fitImage(); render();">Fit View (F)</button>
+      </div>
+      <div class="help-text">
+        <kbd>Space</kbd> next label &nbsp;
+        <kbd>Enter</kbd> lock point<br>
+        <kbd>Arrows</kbd> nudge point (Shift=5px)<br>
+        <kbd>Ctrl+click</kbd> place point &nbsp;
+        <kbd>Drag</kbd> move point<br>
+        <kbd>A+click</kbd> add seg point &nbsp;
+        <kbd>1-8</kbd> set category<br>
+        <kbd>Scroll</kbd> zoom &nbsp;
+        <kbd>N</kbd> next &nbsp;
+        <kbd>B</kbd> prev<br>
+        <kbd>F</kbd> fit view &nbsp;
+        <kbd>Z</kbd> auto-center<br>
+        <kbd>Alt+drag</kbd> pan
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="cat-popup">
+  <div class="cat-btn" onclick="assignCategory('Coral')"><kbd>1</kbd>Coral</div>
+  <div class="cat-btn" onclick="assignCategory('Sponge')"><kbd>2</kbd>Sponge</div>
+  <div class="cat-btn" onclick="assignCategory('Macroalgae')"><kbd>3</kbd>Macro</div>
+  <div class="cat-btn" onclick="assignCategory('Gorgonian')"><kbd>4</kbd>Gorg</div>
+  <div class="cat-btn" onclick="assignCategory('Dca')"><kbd>5</kbd>Dca</div>
+  <div class="cat-btn" onclick="assignCategory('Turf')"><kbd>6</kbd>Turf</div>
+  <div class="cat-btn" onclick="assignCategory('Non-living')"><kbd>7</kbd>Non-liv</div>
+  <div class="cat-btn" onclick="assignCategory('')"><kbd>8</kbd>Unlabel</div>
+</div>
+<div id="letter-flash"></div>
+
+<!-- Export overlay -->
+<div class="overlay" id="export-overlay">
+  <div class="overlay-card">
+    <h2 id="export-title">Batch Exported</h2>
+    <p id="export-summary"></p>
+    <div id="export-remaining" style="margin:12px 0; font-size:14px; color:#e94560; font-weight:600;"></div>
+    <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+      <button class="btn primary" id="btn-next-review" onclick="nextReviewBatch()">Next Review Batch</button>
+      <button class="btn" onclick="closeExportOverlay()">Done</button>
+      <button class="btn" onclick="backToStartup()">Change Settings</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const wrap = document.getElementById('canvas-wrap');
+
+let currentMode = 'new';
+let scanResult = null;
+
+let images = [];        // [{filename, year, n_points, status}]
+let currentIdx = -1;
+let currentData = null; // {points, status}
+let img = null;
+
+let scale = 1, offsetX = 0, offsetY = 0;
+let draggingPoint = -1, selectedPoint = -1;
+let isPanning = false, panStartX = 0, panStartY = 0;
+let autoCenter = false; // toggle with Z key
+const SKIP_SPECIES = new Set(['UNK', 'TWS']); // always hidden
+let categoryFilter = new Set(); // empty = show all, otherwise only these categories
+let flashTimer = null;
+
+// ETA tracking
+let processStartTime = 0;
+let processTimes = [];
+
+function isSkippedPoint(pt) {
+  if (SKIP_SPECIES.has((pt.species_code || '').toUpperCase())) return true;
+  if (categoryFilter.size > 0 && !categoryFilter.has((pt.category || '').toLowerCase())) return true;
+  return false;
+}
+
+function imageHasRelevantPoints(data) {
+  if (!data || !data.points) return false;
+  return data.points.some(pt => !isSkippedPoint(pt));
+}
+
+function sortedPointIndices() {
+  if (!currentData) return [];
+  const pts = currentData.points;
+  const indices = pts.map((_, i) => i).filter(i => !isSkippedPoint(pts[i]));
+  indices.sort((a, b) => {
+    const aUnid = pts[a].ocr_confidence === 0 ? 0 : 1;
+    const bUnid = pts[b].ocr_confidence === 0 ? 0 : 1;
+    if (aUnid !== bUnid) return aUnid - bUnid;
+    return pts[a].label.localeCompare(pts[b].label);
+  });
+  return indices;
+}
+
+let sortedIndices = [];
+
+function getReviewBatchSize() {
+  return parseInt(document.querySelector('input[name=rbatch]:checked').value);
+}
+
+// ══════════════════════════════════════════════
+// SCREEN SWITCHING
+// ══════════════════════════════════════════════
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+// ══════════════════════════════════════════════
+// STARTUP — MODE SWITCHING
+// ══════════════════════════════════════════════
+function setMode(mode) {
+  currentMode = mode;
+  document.getElementById('mode-new').classList.toggle('active', mode === 'new');
+  document.getElementById('mode-resume').classList.toggle('active', mode === 'resume');
+  document.getElementById('new-fields').classList.toggle('hidden', mode !== 'new');
+  document.getElementById('resume-fields').classList.toggle('hidden', mode !== 'resume');
+  document.getElementById('btn-scan').textContent = mode === 'new' ? 'Scan Directories' : 'Load Project';
+  document.getElementById('btn-start').textContent = mode === 'new' ? 'Start Processing' : 'Continue';
+  document.getElementById('setup-info').classList.remove('visible');
+  document.getElementById('setup-error').textContent = '';
+  scanResult = null;
+}
+
+// ══════════════════════════════════════════════
+// STARTUP — SCAN / CONFIGURE
+// ══════════════════════════════════════════════
+async function doScan() {
+  const errEl = document.getElementById('setup-error');
+  const infoEl = document.getElementById('setup-info');
+  errEl.textContent = '';
+
+  if (currentMode === 'new') {
+    await scanNew();
+  } else {
+    await scanResume();
+  }
+}
+
+async function scanNew() {
+  const importDir = document.getElementById('inp-import').value.trim();
+  const exportDir = document.getElementById('inp-export').value.trim();
+  const errEl = document.getElementById('setup-error');
+  const infoEl = document.getElementById('setup-info');
+
+  if (!importDir) { errEl.textContent = 'Import directory is required'; return; }
+  if (!exportDir) { errEl.textContent = 'Export directory is required'; return; }
+
+  // First get available years
+  try {
+    const yrRes = await fetch('/api/available_years', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ import_dir: importDir }),
+    });
+    const yrData = await yrRes.json();
+
+    if (!yrData.years || yrData.years.length === 0) {
+      errEl.textContent = 'No TCRMP year directories found (2020+)';
+      return;
+    }
+
+    // Build year checkboxes
+    const grid = document.getElementById('year-grid');
+    grid.innerHTML = yrData.years.map(y =>
+      `<label><input type="checkbox" class="year-chk" value="${y}" checked> ${y}</label>`
+    ).join('') + '<span class="select-all" onclick="toggleAllYears()">toggle all</span>';
+
+  } catch (e) {
+    errEl.textContent = 'Error scanning: ' + e.message;
+    return;
+  }
+
+  // Don't auto-configure — let the user pick years first, then click Start
+  infoEl.innerHTML = 'Select years above, then click <b>Start Processing</b>.';
+  infoEl.classList.add('visible');
+}
+
+async function configureNew() {
+  const importDir = document.getElementById('inp-import').value.trim();
+  const exportDir = document.getElementById('inp-export').value.trim();
+  const errEl = document.getElementById('setup-error');
+  const infoEl = document.getElementById('setup-info');
+
+  const yearChks = document.querySelectorAll('.year-chk:checked');
+  const selectedYears = Array.from(yearChks).map(c => parseInt(c.value));
+
+  if (selectedYears.length === 0) {
+    errEl.textContent = 'Select at least one year';
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/configure', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        import_dir: importDir,
+        export_dir: exportDir,
+        selected_years: selectedYears,
+        review_batch_size: getReviewBatchSize(),
+      }),
+    });
+    scanResult = await res.json();
+
+    if (scanResult.total_images === 0) {
+      errEl.textContent = 'No _pts images found for selected years';
+      infoEl.classList.remove('visible');
+      return;
+    }
+
+    let html = `Found <span class="num">${scanResult.total_images}</span> images across ${selectedYears.length} year(s).`;
+    if (scanResult.already_processed > 0) {
+      html += `<br><span class="num">${scanResult.already_processed}</span> already processed (will be skipped).`;
+    }
+    html += `<br><span class="num">${scanResult.remaining}</span> remaining to process.`;
+
+    // Per-year breakdown
+    if (scanResult.year_stats) {
+      html += '<br><br>';
+      for (const [yr, st] of Object.entries(scanResult.year_stats).sort()) {
+        html += `${yr}: ${st.total} total, ${st.processed} done, ${st.remaining} remaining<br>`;
+      }
+    }
+
+    if (scanResult.phase === 'review') {
+      html += `<br>All images processed! <span class="num">${scanResult.review_count}</span> ready for review.`;
+      document.getElementById('btn-start').textContent = 'Start Review';
+    } else {
+      document.getElementById('btn-start').textContent = 'Start Processing';
+    }
+
+    infoEl.innerHTML = html;
+    infoEl.classList.add('visible');
+  } catch (e) {
+    errEl.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function scanResume() {
+  const exportDir = document.getElementById('inp-resume-export').value.trim();
+  const errEl = document.getElementById('setup-error');
+  const infoEl = document.getElementById('setup-info');
+
+  if (!exportDir) { errEl.textContent = 'Export directory is required'; return; }
+
+  try {
+    const res = await fetch('/api/resume', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        export_dir: exportDir,
+        review_batch_size: getReviewBatchSize(),
+      }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json();
+      errEl.textContent = data.error || 'Failed to load project';
+      return;
+    }
+
+    scanResult = await res.json();
+
+    let html = `Loaded project: <span class="num">${scanResult.years.length}</span> year(s), <span class="num">${scanResult.total_processed}</span> processed detections.`;
+
+    if (scanResult.import_dir) {
+      html += `<br>Import dir: ${scanResult.import_dir}`;
+    }
+
+    if (scanResult.year_stats) {
+      html += '<br><br>';
+      for (const [yr, st] of Object.entries(scanResult.year_stats).sort()) {
+        const rem = st.remaining_review !== undefined ? st.remaining_review : (st.total - (st.exported || 0));
+        html += `${yr}: ${st.total} processed, ${st.exported || 0} exported, ${rem} to review<br>`;
+      }
+    }
+
+    if (scanResult.needs_processing && scanResult.processing_remaining > 0) {
+      html += `<br><span class="num">${scanResult.processing_remaining}</span> images still need OCR processing.`;
+      document.getElementById('btn-start').textContent = 'Continue Processing';
+    } else {
+      html += `<br><span class="num">${scanResult.review_count}</span> images ready for review.`;
+      document.getElementById('btn-start').textContent = 'Start Review';
+    }
+
+    infoEl.innerHTML = html;
+    infoEl.classList.add('visible');
+  } catch (e) {
+    errEl.textContent = 'Error: ' + e.message;
+  }
+}
+
+function toggleAllYears() {
+  const chks = document.querySelectorAll('.year-chk');
+  const allChecked = Array.from(chks).every(c => c.checked);
+  chks.forEach(c => c.checked = !allChecked);
+}
+
+// ══════════════════════════════════════════════
+// START
+// ══════════════════════════════════════════════
+async function doStart() {
+  const errEl = document.getElementById('setup-error');
+
+  if (currentMode === 'new') {
+    // Ensure year checkboxes exist
+    const yearChks = document.querySelectorAll('.year-chk');
+    if (yearChks.length === 0) {
+      await doScan();  // builds checkboxes only
+      errEl.textContent = 'Select years and click Start Processing again';
+      return;
+    }
+    // Always (re)configure with currently selected years
+    await configureNew();
+    if (!scanResult) return;
+  } else if (!scanResult) {
+    await doScan();
+    if (!scanResult) return;
+  }
+
+  if (scanResult.phase === 'review' || scanResult.review_count > 0) {
+    // Skip to review
+    await loadReviewBatch();
+    showScreen('review');
+    if (images.length > 0) selectImage(0);
+    return;
+  }
+
+  if (scanResult.remaining === 0 && (!scanResult.review_count || scanResult.review_count === 0)) {
+    errEl.textContent = 'No images to process or review';
+    return;
+  }
+
+  const total = scanResult.remaining || scanResult.processing_remaining || 0;
+  if (total === 0) {
+    errEl.textContent = 'Nothing to process';
+    return;
+  }
+
+  showScreen('processing');
+  processStartTime = performance.now();
+  processTimes = [];
+  await runProcessing(total);
+}
+
+// ══════════════════════════════════════════════
+// PROCESSING
+// ══════════════════════════════════════════════
+async function runProcessing(total) {
+  const bar = document.getElementById('progress-bar');
+  const text = document.getElementById('progress-text');
+  const current = document.getElementById('progress-current');
+  const eta = document.getElementById('progress-eta');
+
+  for (let i = 0; i < total + 1; i++) {
+    const t0 = performance.now();
+    const res = await fetch('/api/process', { method: 'POST' });
+    const data = await res.json();
+    const elapsed = performance.now() - t0;
+
+    processTimes.push(elapsed);
+    // Keep rolling window of last 50 for ETA
+    if (processTimes.length > 50) processTimes.shift();
+
+    const pct = Math.round((data.processed / data.total) * 100);
+    bar.style.width = pct + '%';
+    text.textContent = `${data.processed} / ${data.total}`;
+
+    if (data.filename) {
+      current.textContent = `Year ${data.year} — ${data.filename} (${data.n_points} points)`;
+    }
+
+    // ETA calculation
+    if (data.processed > 0 && !data.done) {
+      const avgMs = processTimes.reduce((a, b) => a + b, 0) / processTimes.length;
+      const remainMs = avgMs * (data.total - data.processed);
+      const remainMin = Math.ceil(remainMs / 60000);
+      if (remainMin > 60) {
+        const hrs = Math.floor(remainMin / 60);
+        const mins = remainMin % 60;
+        eta.textContent = `ETA: ~${hrs}h ${mins}m remaining`;
+      } else {
+        eta.textContent = `ETA: ~${remainMin} min remaining`;
+      }
+    }
+
+    if (data.done) {
+      eta.textContent = 'Processing complete!';
+      break;
+    }
+  }
+
+  // Transition to review
+  await loadReviewBatch();
+  showScreen('review');
+  if (images.length > 0) selectImage(0);
+}
+
+// ══════════════════════════════════════════════
+// REVIEW
+// ══════════════════════════════════════════════
+async function loadReviewBatch() {
+  const res = await fetch('/api/review_batch');
+  const data = await res.json();
+  images = data.images || [];
+  currentIdx = -1;
+
+  const infoEl = document.getElementById('batch-info');
+  if (data.total_batches > 0) {
+    const start = data.offset + 1;
+    const end = Math.min(data.offset + data.batch_size, data.total_unreviewed);
+    infoEl.textContent = `Batch ${data.batch_number}/${data.total_batches} (${start}-${end} of ${data.total_unreviewed} unreviewed)`;
+  } else {
+    infoEl.textContent = 'No images to review';
+  }
+
+  updateCounter();
+}
+
+async function selectImage(idx) {
+  if (idx < 0 || idx >= images.length) return;
+  currentIdx = idx;
+  const filename = images[idx].filename;
+
+  const res = await fetch(`/api/image/${encodeURIComponent(filename)}`);
+  currentData = await res.json();
+
+  sortedIndices = sortedPointIndices();
+
+  img = new Image();
+  img.onload = () => {
+    fitImage();
+    render();
+  };
+  img.src = `/images/${encodeURIComponent(filename)}`;
+
+  selectedPoint = -1;
+  renderPointList();
+  updateCounter();
+}
+
+function prevImage() { if (currentIdx > 0) selectImage(currentIdx - 1); }
+function nextImage() { if (currentIdx < images.length - 1) selectImage(currentIdx + 1); }
+
+async function saveCurrentImage() {
+  if (!currentData || currentIdx < 0) return;
+  const filename = images[currentIdx].filename;
+  await fetch(`/api/image/${encodeURIComponent(filename)}/points`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ points: currentData.points }),
+  });
+  images[currentIdx].status = 'reviewed';
+}
+
+function flashLetter(label) {
+  const el = document.getElementById('letter-flash');
+  el.textContent = label;
+  el.classList.add('show');
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => el.classList.remove('show'), 350);
+}
+
+function updateCategoryFilter() {
+  const checked = document.querySelectorAll('.cat-filter:checked');
+  categoryFilter = new Set(Array.from(checked).map(c => c.value));
+  // Rebuild sorted indices with new filter
+  if (currentData) {
+    sortedIndices = sortedPointIndices();
+    selectedPoint = -1;
+    renderPointList();
+    render();
+  }
+}
+
+function clearCategoryFilter() {
+  document.querySelectorAll('.cat-filter').forEach(c => c.checked = false);
+  updateCategoryFilter();
+}
+
+// ── Add Point mode ──────────────────────────────────────
+let aKeyDown = false;
+let pendingAddIdx = -1; // index of newly added point awaiting category
+
+const ADD_LABELS = 'UVWXYZ'.split('').concat(
+  ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(c => 'A' + c)
+);
+
+function nextAddLabel() {
+  if (!currentData) return ADD_LABELS[0];
+  const used = new Set(currentData.points.map(p => p.label));
+  for (const l of ADD_LABELS) {
+    if (!used.has(l)) return l;
+  }
+  return 'A' + ADD_LABELS.length; // fallback
+}
+
+function addPointAt(imgX, imgY) {
+  if (!currentData) return;
+  const label = nextAddLabel();
+  const pt = {
+    label: label,
+    x: Math.round(imgX * 10) / 10,
+    y: Math.round(imgY * 10) / 10,
+    species_code: '',
+    species_name: '',
+    category: '',
+    ocr_confidence: -1, // sentinel: manual point
+    has_crosshair: true,
+    added: true,
+    point_type: 1,
+  };
+  currentData.points.push(pt);
+  pendingAddIdx = currentData.points.length - 1;
+  selectedPoint = pendingAddIdx;
+  sortedIndices = sortedPointIndices();
+  renderPointList();
+  render();
+  showCatPopup();
+  flashLetter(label);
+}
+
+function showCatPopup() {
+  const popup = document.getElementById('cat-popup');
+  // Position near center of canvas
+  const wrapRect = wrap.getBoundingClientRect();
+  popup.style.left = (wrapRect.left + wrapRect.width / 2 - 105) + 'px';
+  popup.style.top = (wrapRect.top + wrapRect.height / 2 - 20) + 'px';
+  popup.classList.add('visible');
+}
+
+function hideCatPopup() {
+  document.getElementById('cat-popup').classList.remove('visible');
+  pendingAddIdx = -1;
+}
+
+function assignCategory(category) {
+  if (pendingAddIdx < 0 || !currentData) { hideCatPopup(); return; }
+  const pt = currentData.points[pendingAddIdx];
+  pt.category = category;
+  // Set a shortcode for species_code based on category
+  const catCodes = {
+    'Coral': 'CORAL', 'Sponge': 'SPO', 'Macroalgae': 'MACA',
+    'Gorgonian': 'GORG', 'Dca': 'DCA', 'Turf': 'TURF',
+    'Non-living': 'NL', '': '',
+  };
+  pt.species_code = catCodes[category] || category.toUpperCase().slice(0, 4);
+  hideCatPopup();
+  sortedIndices = sortedPointIndices();
+  renderPointList();
+  render();
+  setStatus(`${pt.label} -> ${category || 'Unlabeled'}`);
+}
+
+function selectNextLabel() {
+  if (!currentData || sortedIndices.length === 0) return;
+  if (selectedPoint < 0) {
+    selectedPoint = sortedIndices[0];
+  } else {
+    const curSortPos = sortedIndices.indexOf(selectedPoint);
+    const nextSortPos = (curSortPos + 1) % sortedIndices.length;
+    selectedPoint = sortedIndices[nextSortPos];
+  }
+  if (autoCenter) centerOnPoint(selectedPoint);
+  flashLetter(currentData.points[selectedPoint].label);
+  renderPointList();
+  render();
+}
+
+function centerOnPoint(idx) {
+  if (!currentData || !currentData.points[idx]) return;
+  const pt = currentData.points[idx];
+  const scr_x = pt.x * scale + offsetX;
+  const scr_y = pt.y * scale + offsetY;
+  offsetX += canvas.width / 2 - scr_x;
+  offsetY += canvas.height / 2 - scr_y;
+}
+
+function lockPoint() {
+  if (selectedPoint < 0) return;
+  setStatus(`${currentData.points[selectedPoint].label} locked`);
+}
+
+// ── Rendering ──
+function fitImage() {
+  if (!img) return;
+  const ww = wrap.clientWidth, wh = wrap.clientHeight;
+  canvas.width = ww; canvas.height = wh;
+  scale = Math.min(ww / img.width, wh / img.height) * 0.95;
+  offsetX = (ww - img.width * scale) / 2;
+  offsetY = (wh - img.height * scale) / 2;
+}
+
+function render() {
+  if (!img || !currentData) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.translate(offsetX, offsetY);
+  ctx.scale(scale, scale);
+
+  ctx.drawImage(img, 0, 0);
+
+  const pts = currentData.points;
+  for (let i = 0; i < pts.length; i++) {
+    const pt = pts[i];
+    if (isSkippedPoint(pt)) continue;
+    const isSel = i === selectedPoint;
+    const isAdded = pt.added === true;
+    const hasCross = pt.has_crosshair !== false;
+    const conf = pt.ocr_confidence || 0;
+    const pink = '#ff69b4';
+
+    if (isAdded) {
+      // ── Added point: pink ──
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 16, 0, Math.PI * 2);
+      ctx.lineWidth = isSel ? 3.5 : 2;
+      ctx.strokeStyle = isSel ? '#ffff00' : pink;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
+      ctx.fillStyle = isSel ? '#ffff00' : pink;
+      ctx.fill();
+
+      const lbl = `${pt.label}`;
+      const spp = pt.species_code || '';
+      const labelText = spp ? `${lbl} ${spp}` : lbl;
+      ctx.font = 'bold 12px monospace';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+      ctx.strokeText(labelText, pt.x + 20, pt.y + 5);
+      ctx.fillStyle = isSel ? '#ffff00' : pink;
+      ctx.fillText(labelText, pt.x + 20, pt.y + 5);
+    } else {
+      // ── OCR-detected point ──
+      // Line from letter centroid to crosshair
+      if (pt.letter_cx !== undefined) {
+        ctx.beginPath();
+        ctx.moveTo(pt.letter_cx, pt.letter_cy);
+        ctx.lineTo(pt.x, pt.y);
+        ctx.strokeStyle = 'rgba(255,255,0,0.4)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(pt.letter_cx, pt.letter_cy, 4, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,0,0.6)';
+        ctx.fill();
+      }
+
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 18, 0, Math.PI * 2);
+      ctx.lineWidth = isSel ? 3.5 : 2;
+      if (isSel) ctx.strokeStyle = '#ffff00';
+      else if (!hasCross) ctx.strokeStyle = '#ff4444';
+      else if (conf === 0) ctx.strokeStyle = '#f0a500';
+      else ctx.strokeStyle = '#00ff00';
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
+      ctx.fillStyle = isSel ? '#ffff00' : '#00ff00';
+      ctx.fill();
+
+      const confStr = conf > 0 ? `${conf}%` : '?';
+      const label = `${pt.label} (${confStr})`;
+      ctx.font = 'bold 13px monospace';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+      ctx.strokeText(label, pt.x + 22, pt.y + 5);
+      ctx.fillStyle = isSel ? '#ffff00' : (conf > 0 ? '#fff' : '#f0a500');
+      ctx.fillText(label, pt.x + 22, pt.y + 5);
+
+      // Species code below label
+      const spp = pt.species_code || '';
+      if (spp) {
+        ctx.font = 'bold 11px monospace';
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+        ctx.strokeText(spp, pt.x + 22, pt.y + 19);
+        ctx.fillStyle = '#ffcc00';
+        ctx.fillText(spp, pt.x + 22, pt.y + 19);
+      }
+    } // end else (OCR point)
+  }
+  ctx.restore();
+}
+
+function screenToImage(sx, sy) {
+  return { x: (sx - offsetX) / scale, y: (sy - offsetY) / scale };
+}
+
+// ── Mouse interaction ──
+function findPointAt(sx, sy) {
+  if (!currentData) return -1;
+  const {x, y} = screenToImage(sx, sy);
+  const threshold = 25 / scale;
+  let best = -1, bestDist = Infinity;
+  for (let i = 0; i < currentData.points.length; i++) {
+    const pt = currentData.points[i];
+    const d = Math.hypot(pt.x - x, pt.y - y);
+    if (d < threshold && d < bestDist) { best = i; bestDist = d; }
+  }
+  return best;
+}
+
+canvas.addEventListener('mousedown', e => {
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+
+  if (e.button === 1 || (e.button === 0 && e.altKey)) {
+    isPanning = true;
+    panStartX = e.clientX - offsetX;
+    panStartY = e.clientY - offsetY;
+    canvas.style.cursor = 'grabbing';
+    return;
+  }
+
+  // A+click: add a new segmentation point
+  if (e.button === 0 && aKeyDown && currentData) {
+    const {x, y} = screenToImage(sx, sy);
+    addPointAt(x, y);
+    return;
+  }
+
+  // Ctrl+click: place the selected point at click position, then advance
+  if (e.button === 0 && e.ctrlKey && selectedPoint >= 0 && currentData) {
+    const {x, y} = screenToImage(sx, sy);
+    currentData.points[selectedPoint].x = Math.round(x * 10) / 10;
+    currentData.points[selectedPoint].y = Math.round(y * 10) / 10;
+    selectNextLabel();
+    return;
+  }
+
+  const idx = findPointAt(sx, sy);
+  if (idx >= 0) {
+    draggingPoint = idx;
+    selectedPoint = idx;
+    canvas.style.cursor = 'move';
+  } else {
+    selectedPoint = -1;
+  }
+  renderPointList();
+  render();
+});
+
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+
+  if (isPanning) {
+    offsetX = e.clientX - panStartX;
+    offsetY = e.clientY - panStartY;
+    render();
+    return;
+  }
+  if (draggingPoint >= 0) {
+    const {x, y} = screenToImage(sx, sy);
+    currentData.points[draggingPoint].x = Math.round(x * 10) / 10;
+    currentData.points[draggingPoint].y = Math.round(y * 10) / 10;
+    renderPointList();
+    render();
+    return;
+  }
+  canvas.style.cursor = findPointAt(sx, sy) >= 0 ? 'pointer' : 'crosshair';
+});
+
+canvas.addEventListener('mouseup', () => {
+  if (isPanning) { isPanning = false; canvas.style.cursor = 'crosshair'; }
+  if (draggingPoint >= 0) { draggingPoint = -1; canvas.style.cursor = 'crosshair'; }
+});
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const zoom = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const newScale = scale * zoom;
+  if (newScale < 0.05 || newScale > 30) return;
+  offsetX = mx - (mx - offsetX) * zoom;
+  offsetY = my - (my - offsetY) * zoom;
+  scale = newScale;
+  render();
+}, {passive: false});
+
+// ── Keyboard ──
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  const activeScreen = document.querySelector('.screen.active');
+  if (!activeScreen || activeScreen.id !== 'review') return;
+
+  // Track A key for add-point mode
+  if (e.key === 'a' || e.key === 'A') {
+    if (!e.ctrlKey && !e.metaKey) {
+      aKeyDown = true;
+      canvas.style.cursor = 'cell';
+      e.preventDefault();
+      return;
+    }
+  }
+
+  // Number keys 1-8: assign category to pending add point
+  if (pendingAddIdx >= 0 && e.key >= '1' && e.key <= '8') {
+    const cats = ['Coral', 'Sponge', 'Macroalgae', 'Gorgonian', 'Dca', 'Turf', 'Non-living', ''];
+    assignCategory(cats[parseInt(e.key) - 1]);
+    e.preventDefault();
+    return;
+  }
+
+  switch (e.key) {
+    case ' ':
+      e.preventDefault();
+      selectNextLabel();
+      break;
+    case 'Enter':
+      e.preventDefault();
+      lockPoint();
+      break;
+    case 'n': case 'N':
+      if (!e.ctrlKey && !e.metaKey) { saveCurrentImage(); nextImage(); e.preventDefault(); }
+      break;
+    case 'b': case 'B':
+      if (!e.ctrlKey && !e.metaKey) { saveCurrentImage(); prevImage(); e.preventDefault(); }
+      break;
+    case 'z': case 'Z':
+      autoCenter = !autoCenter;
+      setStatus(autoCenter ? 'Auto-center ON' : 'Auto-center OFF');
+      e.preventDefault();
+      break;
+    case 'f': case 'F':
+      fitImage(); render(); e.preventDefault();
+      break;
+    case 'Escape':
+      hideCatPopup();
+      selectedPoint = -1; renderPointList(); render();
+      break;
+    case 's':
+      if (e.ctrlKey || e.metaKey) { saveCurrentImage(); setStatus('Saved'); e.preventDefault(); }
+      break;
+    case 'ArrowUp':
+      if (selectedPoint >= 0) {
+        e.preventDefault();
+        currentData.points[selectedPoint].y -= (e.shiftKey ? 5 : 1);
+        renderPointList(); render();
+      }
+      break;
+    case 'ArrowDown':
+      if (selectedPoint >= 0) {
+        e.preventDefault();
+        currentData.points[selectedPoint].y += (e.shiftKey ? 5 : 1);
+        renderPointList(); render();
+      }
+      break;
+    case 'ArrowLeft':
+      if (selectedPoint >= 0) {
+        e.preventDefault();
+        currentData.points[selectedPoint].x -= (e.shiftKey ? 5 : 1);
+        renderPointList(); render();
+      }
+      break;
+    case 'ArrowRight':
+      if (selectedPoint >= 0) {
+        e.preventDefault();
+        currentData.points[selectedPoint].x += (e.shiftKey ? 5 : 1);
+        renderPointList(); render();
+      }
+      break;
+  }
+});
+
+document.addEventListener('keyup', e => {
+  if (e.key === 'a' || e.key === 'A') {
+    aKeyDown = false;
+    if (pendingAddIdx < 0) canvas.style.cursor = 'crosshair';
+  }
+});
+
+window.addEventListener('resize', () => { if (img) { fitImage(); render(); } });
+
+// ── UI helpers ──
+function renderPointList() {
+  const el = document.getElementById('point-list');
+  const sumEl = document.getElementById('panel-summary');
+  if (!currentData) { el.innerHTML = ''; sumEl.textContent = ''; return; }
+  const pts = currentData.points;
+  const nId = pts.filter(p => (p.ocr_confidence || 0) > 0).length;
+  sumEl.textContent = `${nId}/${pts.length} IDed`;
+
+  el.innerHTML = sortedIndices.map(i => {
+    const pt = pts[i];
+    const conf = pt.ocr_confidence || 0;
+    const isSel = i === selectedPoint;
+    let cls = isSel ? 'active' : '';
+    if (pt.added) cls += ' added';
+    else if (!pt.has_crosshair) cls += ' no-cross';
+    if (conf === 0 && !pt.added) cls += ' unid';
+    const confStr = pt.added ? '+' : (conf > 0 ? `${conf}%` : '\u2014');
+    return `<li class="${cls}" onclick="selectPointFromList(${i})" data-idx="${i}">
+      <span class="plabel">${pt.label}</span>
+      <span class="pspecies">${pt.species_code || '?'}</span>
+      <span class="pconf">${confStr}</span>
+      <span class="pcoord">${Math.round(pt.x)},${Math.round(pt.y)}</span>
+    </li>`;
+  }).join('');
+
+  if (selectedPoint >= 0) {
+    const item = el.querySelector(`li[data-idx="${selectedPoint}"]`);
+    if (item) item.scrollIntoView({block: 'nearest'});
+  }
+}
+
+function selectPointFromList(i) {
+  selectedPoint = i;
+  centerOnPoint(i);
+  renderPointList();
+  render();
+}
+
+function updateCounter() {
+  const el = document.getElementById('img-counter');
+  el.textContent = images.length > 0 ? `${currentIdx + 1} / ${images.length}` : '0 / 0';
+}
+
+let statusTimer = null;
+function setStatus(msg) {
+  const el = document.getElementById('status-text');
+  el.textContent = msg;
+  el.classList.add('flash');
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(() => { el.textContent = ''; el.classList.remove('flash'); }, 3000);
+}
+
+// ── Export ──
+async function doExport() {
+  if (currentData && currentIdx >= 0) await saveCurrentImage();
+
+  setStatus('Exporting batch...');
+  const res = await fetch('/api/export_batch', { method: 'POST' });
+  const data = await res.json();
+
+  if (!data.ok) {
+    setStatus('Export failed');
+    return;
+  }
+
+  document.getElementById('export-summary').innerHTML = `
+    Raw images: ${data.exported_raw}<br>
+    Test images: ${data.test_images}<br>
+    Point records: ${data.point_records}<br>
+    Years: ${data.years_affected.join(', ')}
+  `;
+
+  const remEl = document.getElementById('export-remaining');
+  const nextBtn = document.getElementById('btn-next-review');
+
+  if (data.remaining_review > 0) {
+    remEl.textContent = `${data.remaining_review} images remaining for review`;
+    nextBtn.style.display = 'inline-block';
+    document.getElementById('export-title').textContent = 'Batch Exported';
+  } else {
+    remEl.textContent = 'All images exported!';
+    nextBtn.style.display = 'none';
+    document.getElementById('export-title').textContent = 'All Done!';
+  }
+
+  document.getElementById('export-overlay').classList.add('visible');
+}
+
+async function nextReviewBatch() {
+  document.getElementById('export-overlay').classList.remove('visible');
+
+  // Load next batch (review_files rebuilt after export)
+  await loadReviewBatch();
+  if (images.length > 0) {
+    selectImage(0);
+  } else {
+    setStatus('No more images to review');
+  }
+}
+
+function closeExportOverlay() {
+  document.getElementById('export-overlay').classList.remove('visible');
+}
+
+function backToStartup() {
+  document.getElementById('export-overlay').classList.remove('visible');
+  scanResult = null;
+  document.getElementById('setup-info').classList.remove('visible');
+  showScreen('startup');
+}
+</script>
+</body>
+</html>

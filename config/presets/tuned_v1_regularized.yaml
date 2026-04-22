@@ -1,0 +1,104 @@
+# ======================================================================
+# Step 6 training preset — "Tuned v1, regularized coral segmentation"
+#
+# Why this preset exists:
+#   The default ultralytics hyperparameters are tuned for COCO (natural
+#   images, 80 classes, hundreds of thousands of frames). Our coral
+#   segmentation runs are single-class, underwater, a few hundred frames.
+#   The prior run (batch=-1, default aug) plateaued at mAP50-95 ≈ 0.495
+#   with val losses drifting upward (classic mild overfit signal).
+#
+#   This preset targets that failure mode: stronger per-image
+#   augmentation (color, geometric, mixing), cosine LR decay, and a
+#   longer patience so the heavier regularization has room to pay off.
+#   Expected lift: mAP50-95 ~0.52–0.56.
+#
+# How to use:
+#   Step 6 panel → "Load preset" dropdown → select this file → Import.
+#   Values below overwrite the current form fields; anything not listed
+#   here is left alone. Tweak anything afterward before Start Training.
+# ======================================================================
+
+_meta:
+  name: "Tuned v1 — regularized coral seg"
+  description: "Tier 1+2 regularization pack (stronger aug, cosine LR, longer patience). Targets mild overfit on small-dataset single-class seg."
+
+params:
+  # ── Core training ─────────────────────────────────────────────────
+  # (Run name deliberately omitted — leave blank to get an auto-stamped name.)
+  model: yolo11m-seg.pt           # ~22M params. Sweet spot for ~hundreds of frames.
+                                  # Jump to yolo11l-seg.pt only if you also have more data.
+  epochs: 1000                    # Hard cap. Patience almost always ends runs earlier.
+  imgsz: 1024                     # Pixels (square). Quadruples compute vs 512 but keeps
+                                  # coral-boundary detail. Only lower if GPU OOMs.
+  batch: 16                       # Safe both for single-GPU and 2-GPU DDP (multiple of 2).
+                                  # Ultralytics does NOT support batch=-1 under DDP.
+                                  # On single cuda:0 with 32 GB you could push 32 for speed.
+
+  # ── Split & patience ──────────────────────────────────────────────
+  valid_ratio: 0.2                # Fraction of labeled frames held out for val each epoch.
+  test_ratio: 0.1                 # Held out entirely for final generalization check.
+  min_samples: 10                 # Classes with <10 instances skip stratification and use
+                                  # random split (prevents scikit-learn from bailing).
+  patience: 150                   # Epochs of no-improvement before early stop. Raised from
+                                  # 100 because heavier aug makes peaks arrive later.
+
+  # ── Device ────────────────────────────────────────────────────────
+  device: "0"                     # Single-GPU on cuda:0. Options:
+                                  #   "0"    — single GPU (default)
+                                  #   "1"    — pin to GPU 1 (good for a parallel experiment)
+                                  #   "0,1"  — DDP across both GPUs (must set batch to a
+                                  #            multiple of 2; auto-batch not supported)
+                                  #   "cpu"  — debugging only
+
+  # ── Color / HSV jitter ────────────────────────────────────────────
+  # Fixes the biggest known mismatch from the prior run: hsv_h=0.2 (COCO
+  # default) was rotating hues by up to ±72° on underwater corals, which
+  # is wildly too aggressive for this domain. 0.03 is the usual coral tip.
+  hsv_h: 0.03                     # Range 0–1. Underwater tip: 0.02–0.05 (NOT 0.2).
+  hsv_s: 0.7                      # Range 0–1. Underwater lighting varies a lot in saturation.
+  hsv_v: 0.5                      # Range 0–1. Underwater brightness varies too.
+  bgr: 0.0                        # Channel-swap probability. Leave 0 unless mixing conventions.
+
+  # ── Geometric augmentation ────────────────────────────────────────
+  # Quadrat photos vary in angle and distance — modest geometric jitter
+  # helps the model generalize across those conditions.
+  degrees: 10                     # ± rotation in degrees. 5–15 typical for coral quadrats.
+  translate: 0.1                  # ± fraction of image size. 0.1–0.2 typical.
+  scale: 0.5                      # ± gain. Higher helps for varying quadrat distances.
+  shear: 0                        # ± degrees. Coral doesn't really shear; leave 0.
+  perspective: 0                  # Tiny tilt. 0 is fine for top-down quadrat photos.
+  flipud: 0.5                     # P(flip up-down). 0.5 is safe for top-down imagery.
+  fliplr: 0.5                     # P(flip left-right). 0.5 is safe for coral (no chirality).
+
+  # ── Sample mixing (seg-specific augmentation) ─────────────────────
+  # These are the big levers against the val-loss drift we saw at ep 200+.
+  # mosaic + copy_paste force the model to see corals in new contexts so
+  # it can't just memorize backgrounds.
+  mosaic: 0.5                     # P of 4-image mosaic per image. 0.5 is a reasonable start.
+  mixup: 0.1                      # P of two-image blend. Seg-typical: 0.0–0.15.
+  cutmix: 0.0                     # P of patch swap. Seg-typical: 0.0–0.1. Leaving off.
+  copy_paste: 0.2                 # P of copy-paste: cut a coral from one image, paste in
+                                  # another. THE big seg augmentation. Sparse coral tip: 0.1–0.3.
+  copy_paste_mode: flip           # "flip" mirror-pastes; "mixup" blends. Flip is the safer default.
+  close_mosaic: 10                # Disable mosaic during the last N epochs ("polish" phase).
+
+  # ── Optimizer & LR schedule ───────────────────────────────────────
+  # Cosine LR decay is the one clearly free win that was off last run:
+  # holds LR higher longer, then anneals sharply at the end. Usually
+  # squeezes a few extra tenths of a point at the tail.
+  optimizer: auto                 # auto picks AdamW for small data, SGD for large. Leave as auto.
+  lr0: 0.01                       # SGD ≈ 0.01, Adam ≈ 1e-3. "auto" + 0.01 lr0 works either way.
+  lrf: 0.01                       # final_lr = lr0 * lrf. 0.01 is standard.
+  momentum: 0.937                 # SGD momentum / Adam β₁. Ultralytics-tuned default.
+  weight_decay: 0.0005            # L2 regularization. Standard value.
+  warmup_epochs: 3.0              # Gently ramp LR from 0 to lr0 over N epochs.
+  cos_lr: true                    # ← enabled (was off). Cosine decay vs linear.
+
+  # ── Loss weights ──────────────────────────────────────────────────
+  # Relative weights; absolute scale is absorbed by LR. Ultralytics
+  # defaults are fine — no reason to change for this domain.
+  box: 7.5                        # Bounding-box regression weight.
+  cls: 0.5                        # Classification weight. Raise if many classes (not our case).
+  dfl: 1.5                        # Distribution focal loss weight.
+  label_smoothing: 0.0            # Softens one-hot targets. 0 for single-class is fine.
