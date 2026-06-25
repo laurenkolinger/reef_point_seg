@@ -54,60 +54,32 @@ function stopElapsedTimer(step) {
 
 // ── Project management ──────────────────────────────────────────────────────
 
-async function createProject() {
-    const name = document.getElementById('new-name').value.trim();
-    const base = document.getElementById('new-basedir').value.trim();
-    if (!name || !base) return alert('Please fill in project name and base directory.');
-
-    const data = await post('/api/project/create', { name, base_dir: base });
-    if (data.error) return alert('Error: ' + data.error);
-    state = data.state;
-    enterApp();
+// Projects are created and opened ONLY from the VICARIUS UI launcher; this
+// orchestrator window never shows a local create/open/resume home. When it has
+// no project (opened bare, stale, or after Save and Close), it bounces back to
+// the VICARIUS UI instead.
+function vicariusHomeUrl() {
+    // Prefer the launcher URL the VICARIUS UI injected via ?home= when it opened
+    // this window; fall back to the known local launcher.
+    try {
+        const h = new URLSearchParams(window.location.search).get('home');
+        if (h) return h;
+    } catch (e) {}
+    return 'http://127.0.0.1:5077/modules/reef_point_seg';
 }
 
-async function openProject() {
-    const dir = document.getElementById('open-dir').value.trim();
-    if (!dir) return alert('Please enter a project directory path.');
-
-    const data = await post('/api/project/open', { project_dir: dir });
-    if (data.error) return alert('Error: ' + data.error);
-    state = data.state;
-    enterApp();
-}
-
-function showSetup() {
+function bounceToVicarius() {
     Object.values(pollTimers).forEach(clearInterval);
     Object.values(elapsedTimers).forEach(clearInterval);
     pollTimers = {};
     elapsedTimers = {};
-    document.getElementById('setup-screen').style.display = '';
-    document.getElementById('app-screen').style.display = 'none';
-    document.getElementById('topbar-actions').style.display = 'none';
-    document.getElementById('topbar-project-name').textContent = '';
+    window.location.replace(vicariusHomeUrl());
 }
 
-async function quitProject() {
-    if (!confirm('Quit project? All running services will be stopped.')) return;
-    // Close any open service windows
-    Object.values(serviceWindows).forEach(w => { try { w.close(); } catch(e) {} });
-    serviceWindows = {};
-    await post('/api/project/quit', {});
-    state = null;
-    showSetup();
-}
-
-function resumeLoaded() {
-    if (!state) return;
-    document.getElementById('resume-card').style.display = 'none';
-    enterApp();
-}
-
-async function discardLoaded() {
-    if (!confirm('Discard loaded project and start fresh? Any running sub-apps will be stopped.')) return;
-    await post('/api/project/quit', {});
-    state = null;
-    document.getElementById('resume-card').style.display = 'none';
-    document.getElementById('resume-name').textContent = '';
+// Legacy callers route through showSetup(); it now bounces to the VICARIUS UI
+// rather than revealing any local create/open screen.
+function showSetup() {
+    bounceToVicarius();
 }
 
 function enterApp() {
@@ -116,6 +88,13 @@ function enterApp() {
     document.getElementById('topbar-actions').style.display = 'flex';
     document.getElementById('topbar-project-name').textContent =
         state.name + '  (' + state.id + ')';
+
+    // Fresh project context — let the step-6 default preset auto-apply
+    // again for this project, and wipe any run-name-edited flag from a
+    // previous session so the field reverts to blank.
+    window._step6PresetAutoApplied = false;
+    const nameEl = document.getElementById('s6-run-name');
+    if (nameEl) delete nameEl.dataset.userEdited;
 
     populateConfigs();
     updateSidebar();
@@ -153,6 +132,14 @@ function switchStep(step) {
     const panel = document.getElementById(`panel-${step}`);
     if (panel) panel.classList.add('active');
     updateSidebar();
+    // updateSidebar() only manages numeric steps; toggle the non-chain Expert
+    // Review I/O tile's active state here and refresh it on open.
+    const eli = document.querySelector('.step-nav li[data-step="expertids"]');
+    if (eli) eli.classList.toggle('active', step === 'expertids');
+    if (step === 'expertids' && window.ExpertIDs && window.ExpertIDs.onShow) window.ExpertIDs.onShow();
+
+    // Ensure the active panel always has working Prev/Next buttons.
+    renderStepNavFooters();
 
     // Each tab switch refreshes project state from the server so the sidebar
     // shows the live "completed / running / error" after background work ends.
@@ -165,9 +152,147 @@ function switchStep(step) {
                 updateSidebar();
             }
         } catch (e) { /* ignore */ }
+        if (step === 3) {
+            // Ensure labels are loaded/rendered on entering Step 3. loadStep3Labels
+            // no-ops the fetch if already loaded but re-renders to reflect the
+            // current selection (chips + checked rows from the saved config).
+            loadStep3Labels(false);
+        }
+        if (step === 6) {
+            // Step 6 panel expects: preset auto-loaded if first time, class
+            // list always freshly read from step 5 (or step 3 fallback), and
+            // the run-name field blank until the user types.
+            const nameEl = document.getElementById('s6-run-name');
+            if (nameEl && !nameEl.dataset.userEdited) nameEl.value = '';
+            refreshStep6Presets({ autoApply: true });
+            refreshStep6Classes();
+        }
         if (step === 7) loadStep7Report();
         if (step === 8) refreshStep8Gallery();
     })();
+}
+
+// ── Step Prev/Next navigation (computed from #step-nav order) ───────────────
+// The nav order is the single source of truth so the non-chain panels
+// (s4review, expertids) participate too. data-step values are a mix of numbers
+// ("1".."8") and strings ("s4review", "expertids"); we keep them as strings.
+
+function getNavOrder() {
+    const lis = document.querySelectorAll('#step-nav li[data-step]');
+    return Array.from(lis).map(li => li.getAttribute('data-step'));
+}
+
+// Normalize a switchStep argument: numeric steps must be passed as Numbers
+// (panels are #panel-1 etc and switchStep does numeric comparisons), the
+// non-chain panels stay strings.
+function navStepArg(ds) {
+    return /^\d+$/.test(ds) ? Number(ds) : ds;
+}
+
+function navTitleFor(ds) {
+    const li = document.querySelector(`#step-nav li[data-step="${ds}"]`);
+    if (!li) return ds;
+    const t = li.querySelector('.step-title');
+    return t ? t.textContent.trim() : ds;
+}
+
+// (Re)build the Prev/Next buttons inside every .step-nav-footer so the user can
+// move through the flow without the sidebar. Idempotent — safe to call often.
+function renderStepNavFooters() {
+    const order = getNavOrder();
+    order.forEach((ds, idx) => {
+        const footer = document.getElementById(`nav-footer-${ds}`);
+        if (!footer) return;
+        const prevDs = idx > 0 ? order[idx - 1] : null;
+        const nextDs = idx < order.length - 1 ? order[idx + 1] : null;
+        const isNumeric = /^\d+$/.test(ds);
+
+        // LEFT zone — Prev (always outline).
+        const prevBtn = prevDs
+            ? `<button class="btn btn-outline btn-sm" onclick='switchStep(${JSON.stringify(navStepArg(prevDs))})' title="Go to ${escAttr(navTitleFor(prevDs))}">&larr; Prev: ${escHtmlNav(navTitleFor(prevDs))}</button>`
+            : `<button class="btn btn-outline btn-sm" disabled>&larr; Prev</button>`;
+
+        // CENTER zone — Reset Step (numeric panels only) sits directly next to
+        // Save and Close. Reset opens a styled confirm modal before clearing.
+        let resetBtn = '';
+        if (isNumeric) {
+            resetBtn = `<button class="btn btn-outline btn-sm" onclick='openResetConfirm(${Number(ds)})' title="Clear this step's outputs and re-lock the steps after it. Asks for confirmation first; cannot be undone.">Reset Step</button>`;
+        }
+        const saveCloseBtn = `<button class="btn btn-outline btn-sm" onclick="saveAndClose()" title="Save the project as-is and close this window. Stops running sub-tools; you can reopen and resume later.">Save and Close</button>`;
+
+        // RIGHT zone — Next. Neutral by default, pink once this numeric step is
+        // completed; non-numeric panels keep Next neutral.
+        const completed = isNumeric
+            && typeof state !== 'undefined' && state && state.steps
+            && state.steps[String(ds)]
+            && state.steps[String(ds)].status === 'completed';
+        const nextClass = completed ? 'btn btn-magenta btn-sm' : 'btn btn-outline btn-sm';
+        const nextBtn = nextDs
+            ? `<button class="${nextClass}" onclick='switchStep(${JSON.stringify(navStepArg(nextDs))})' title="Go to ${escAttr(navTitleFor(nextDs))}">Next: ${escHtmlNav(navTitleFor(nextDs))} &rarr;</button>`
+            : `<button class="${nextClass}" disabled>Next &rarr;</button>`;
+
+        footer.innerHTML =
+            `<span class="nav-zone-left">${prevBtn}</span>` +
+            `<span class="nav-zone-center">${resetBtn}${saveCloseBtn}</span>` +
+            `<span class="nav-zone-right">${nextBtn}</span>`;
+    });
+}
+
+// Local escapers (escapeHtml/escapeAttr are defined later in the file; these
+// keep the footer renderer self-contained and hoisting-safe).
+function escHtmlNav(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function escAttr(s) {
+    return escHtmlNav(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// ── Step completion signal ("action button turns black, Next turns pink") ───
+// step -> id of that step's primary action button.
+const STEP_ACTION_BTN = {
+    1:'s1-fetch-btn', 2:'s2-auto-btn', 3:'s3-run-btn', 4:'s4-run-btn',
+    5:'s5-run-btn', 6:'s6-run-btn', 7:'s7-run-btn', 8:'s8-run-btn'
+};
+
+// On a step's primary success: flip its action button to the black "completed"
+// state and re-render the footers so this step's Next lights up pink.
+function markStepActionDone(step) {
+    const btn = document.getElementById(STEP_ACTION_BTN[step]);
+    if (btn) { btn.classList.remove('btn-magenta'); btn.classList.add('btn-done'); }
+    renderStepNavFooters();
+}
+
+// ── Open-UI loading overlay (sub-app spin-up feedback) ─────────────────────
+
+function showOpenUiOverlay(label) {
+    const ov = document.getElementById('open-ui-overlay');
+    const modal = document.getElementById('open-ui-modal');
+    const msg = document.getElementById('open-ui-msg');
+    const sub = document.getElementById('open-ui-sub');
+    if (!ov || !modal) return;
+    modal.classList.remove('error');
+    if (msg) msg.innerHTML = `Starting ${escHtmlNav(label || '')} UI, waiting for it to come up&hellip;`;
+    if (sub) sub.textContent = 'This can take a moment while models load.';
+    ov.classList.add('visible');
+    ov.setAttribute('aria-hidden', 'false');
+}
+
+function setOpenUiError(text) {
+    const modal = document.getElementById('open-ui-modal');
+    const msg = document.getElementById('open-ui-msg');
+    const sub = document.getElementById('open-ui-sub');
+    if (!modal) return;
+    modal.classList.add('error');
+    if (msg) msg.textContent = text || 'The UI did not come up in time.';
+    if (sub) sub.textContent = 'Give it another moment, then try Open again.';
+}
+
+function hideOpenUiOverlay() {
+    const ov = document.getElementById('open-ui-overlay');
+    if (!ov) return;
+    ov.classList.remove('visible');
+    ov.setAttribute('aria-hidden', 'true');
 }
 
 // ── Populate configs from project state ─────────────────────────────────────
@@ -185,12 +310,22 @@ function populateConfigs() {
 
     // Step 3
     const s3 = state.steps['3'].config;
-    setVal('s3-species', s3.target_species || 'OFRA, PA, OA, OFAV, AL, MC, AA');
+    // Default to EMPTY so a brand-new project starts with NOTHING selected
+    // (no checked rows, no chips). A saved project still restores whatever
+    // target_species the user previously picked. The old build seeded every
+    // project with a hardcoded 7-species default; treat that exact legacy
+    // string as "not a deliberate choice" so projects created before this
+    // change also open with nothing checked.
+    const LEGACY_S3_DEFAULT = 'OFRA, PA, OA, OFAV, AL, MC, AA';
+    let savedS3 = (s3.target_species || '').trim();
+    if (savedS3 === LEGACY_S3_DEFAULT) savedS3 = '';
+    setVal('s3-species', savedS3);
     setVal('s3-target', s3.target_instances || 1000);
     setVal('s3-min-year', s3.min_year || 2014);
     setVal('s3-max-year', s3.max_year || 2025);
-    setVal('s3-category', s3.category_filter || 'Coral');
-    if (s3.skip_image_check) document.getElementById('s3-skip-check').checked = true;
+    // Auto-hydrate the label picker if master_codes_recoded.csv exists.
+    // loadStep3Labels pre-checks rows matching the hidden s3-species CSV.
+    loadStep3Labels(false);
 
     // Step 4
     const s4 = state.steps['4'].config;
@@ -228,7 +363,10 @@ function populateConfigs() {
     const s6 = (state.steps['6'] && state.steps['6'].config) || {};
     const s6set = (id, v, fallback) => setVal(id, (v !== undefined && v !== null) ? v : fallback);
     // Core
-    s6set('s6-run-name', s6.run_name, '');
+    // run_name is ALWAYS blank by default — blank signifies "new run".
+    // Only surface what the user typed for this session (non-empty strings
+    // only); never rehydrate the auto-stamped name from prior state.
+    setVal('s6-run-name', (typeof s6.run_name === 'string' && s6.run_name) ? s6.run_name : '');
     s6set('s6-epochs', s6.epochs, 500);
     s6set('s6-imgsz', s6.imgsz, 512);
     s6set('s6-batch', s6.batch, -1);
@@ -311,13 +449,14 @@ function populateConfigs() {
     // Populate run dropdowns (async)
     refreshRunList();
     // Populate step-6 preset list (always — presets are static YAML files).
-    refreshStep6Presets();
+    // autoApply=true fills in the form from the default preset on first load
+    // when the user has not yet manually imported one.
+    refreshStep6Presets({ autoApply: true });
     // Populate step-7 eval-preset list too.
     refreshStep7Presets();
-    // Populate step-6 class picker if step 5 has run.
-    if (state.steps['5'] && state.steps['5'].status === 'completed') {
-        refreshStep6Classes();
-    }
+    // Populate step-6 class picker. Backend falls back to step 3
+    // target_species if step 5 hasn't produced data.yaml yet.
+    refreshStep6Classes();
 
     // If an evaluation has already been run, auto-load the report.
     if (state.steps['7'] && state.steps['7'].outputs && state.steps['7'].outputs.report_md) {
@@ -352,12 +491,13 @@ function collectConfig(step) {
     if (step === 1) {
         cfg.input_dir = document.getElementById('s1-input-dir').value.trim();
     } else if (step === 3) {
+        // Rebuild target_species from the checked label-picker rows so the
+        // hidden store is always in sync before we POST the config.
+        syncStep3SpeciesField();
         cfg.target_species = document.getElementById('s3-species').value.trim();
         cfg.target_instances = parseInt(document.getElementById('s3-target').value) || 1000;
         cfg.min_year = parseInt(document.getElementById('s3-min-year').value) || 2014;
         cfg.max_year = parseInt(document.getElementById('s3-max-year').value) || 2025;
-        cfg.category_filter = document.getElementById('s3-category').value.trim() || 'Coral';
-        cfg.skip_image_check = document.getElementById('s3-skip-check').checked;
     } else if (step === 4) {
         cfg.port = parseInt(document.getElementById('s4-port').value) || 5065;
         cfg.clip_dir = document.getElementById('s4-clip-dir').value.trim();
@@ -539,6 +679,11 @@ async function runStep(step) {
 
     // Save config first
     const cfg = collectConfig(step);
+    // Step 3 needs at least one target label (nothing is selected by default).
+    if (step === 3 && (!cfg.target_species || !cfg.target_species.trim())) {
+        alert('Select at least one target label before running image selection.');
+        return;
+    }
     await put(`/api/project/config/${step}`, cfg);
     Object.assign(state.steps[step].config, cfg);
 
@@ -585,6 +730,7 @@ async function linkExistingStep1() {
     updateSidebar();
     populateConfigs();
     showResult(1, true, `Linked existing output: ${data.rows ? data.rows.toLocaleString() + ' rows' : 'OK'}. Ready for Step 2.`);
+    markStepActionDone(1);
 }
 
 // ── Polling ─────────────────────────────────────────────────────────────────
@@ -603,6 +749,36 @@ function stopSam3Polling() {
     if (sam3PollTimer) { clearInterval(sam3PollTimer); sam3PollTimer = null; }
 }
 
+// Update a "batches: X done / Y left" readout from per-frame SAM3 progress.
+// `prefix` is 's4' or 's5'. We translate the frame counts the orchestrator
+// already reports into batches using the panel's configured review batch size.
+// TODO: the orchestrator's sam3_status reports frames, not review batches —
+// when a dedicated batch-count field is added to the status payload, read it
+// directly instead of dividing frames by the configured batch size.
+function updateBatchReadout(prefix, processed, total) {
+    const doneEl = document.getElementById(`${prefix}-batch-done`);
+    const leftEl = document.getElementById(`${prefix}-batch-left`);
+    if (!doneEl || !leftEl) return;
+    const sel = document.getElementById(`${prefix}-batch-size`);
+    let size = sel ? parseInt(sel.value, 10) : NaN;
+    if (!Number.isFinite(size) || size <= 0) size = 1; // 'all' or unset -> per-frame
+    const totalBatches = total > 0 ? Math.ceil(total / size) : 0;
+    // When every frame is processed, every batch is done — including the final
+    // partial batch that floor() would otherwise round down (e.g. 25/25 frames
+    // at size 10 is 3 of 3, not 2). Mid-run, never let the done count exceed
+    // the total batch count.
+    let doneBatches;
+    if (total > 0 && processed >= total) {
+        doneBatches = totalBatches;
+    } else {
+        doneBatches = processed > 0 ? Math.floor(processed / size) : 0;
+        doneBatches = Math.min(doneBatches, totalBatches);
+    }
+    const left = Math.max(0, totalBatches - doneBatches);
+    doneEl.textContent = String(doneBatches);
+    leftEl.textContent = String(left);
+}
+
 async function updateSam3MiniPanel() {
     const phaseEl = document.getElementById('s4-sam3-phase');
     if (!phaseEl) return;
@@ -619,6 +795,7 @@ async function updateSam3MiniPanel() {
     const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
     if (fillEl) fillEl.style.width = pct + '%';
     if (countsEl) countsEl.textContent = total ? `${processed}/${total} (${pct}%)` : '';
+    updateBatchReadout('s4', processed, total);
     if (errEl) {
         if (s.error) { errEl.textContent = 'Error: ' + s.error; errEl.style.display = 'block'; }
         else errEl.style.display = 'none';
@@ -643,7 +820,6 @@ async function updateSam3Panel() {
     const fillEl = document.getElementById('s5-sam3-fill');
     const countsEl = document.getElementById('s5-sam3-counts');
     const errEl = document.getElementById('s5-sam3-error');
-    const openBtn = document.getElementById('s5-open-window');
 
     if (phaseEl) phaseEl.textContent = s.phase || 'idle';
     if (msgEl) msgEl.textContent = s.message || '';
@@ -651,25 +827,12 @@ async function updateSam3Panel() {
     const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
     if (fillEl) fillEl.style.width = pct + '%';
     if (countsEl) countsEl.textContent = `${processed} / ${total}` + (total ? ` (${pct}%)` : '');
+    updateBatchReadout('s5', processed, total);
 
     if (s.error) {
         if (errEl) { errEl.textContent = 'Error: ' + s.error; errEl.style.display = 'block'; }
     } else if (errEl) {
         errEl.style.display = 'none';
-    }
-
-    // Gate the Review UI button: only enable once at least one frame has been
-    // segmented, OR the queue had nothing to process (already done).
-    if (openBtn) {
-        const readyForReview = processed >= 1 || s.phase === 'review_ready';
-        openBtn.disabled = !readyForReview;
-        if (s.phase === 'review_ready') {
-            openBtn.textContent = 'Open Review UI (segmentation complete)';
-        } else if (readyForReview) {
-            openBtn.textContent = `Open Review UI (${processed} frames ready — SAM3 still running)`;
-        } else {
-            openBtn.textContent = 'Open Review UI (waiting for first segmentation)';
-        }
     }
 
     if (s.phase === 'review_ready' || s.phase === 'error') {
@@ -687,24 +850,50 @@ function startPolling(step) {
     pollTimers[step] = setInterval(async () => {
         const status = await api(`/api/step/${step}/status`);
 
-        // Update log
+        // Update log — server caps its in-memory buffer, but returns a
+        // `total` offset + `dropped` count so we keep advancing even when
+        // older lines roll off. Client also caps its DOM so long runs don't
+        // bog down the page.
         const logData = await api(`/api/step/${step}/log?offset=${logOffset}`);
         if (logData.lines && logData.lines.length > 0) {
             const logEl = document.getElementById(`s${step}-log`);
             if (logEl) {
                 logEl.style.display = 'block';
-                for (const line of logData.lines) {
+                // DOM-side rolling window. If a single response carries more
+                // lines than we want to keep, clip to the tail before
+                // rendering so we don't build DOM we're about to drop.
+                const MAX_DOM_LINES = 2500;
+                let incoming = logData.lines;
+                let predrop = 0;
+                if (incoming.length > MAX_DOM_LINES) {
+                    predrop = incoming.length - MAX_DOM_LINES;
+                    incoming = incoming.slice(predrop);
+                }
+                const serverDropped = logData.dropped || 0;
+                const totalDropped = serverDropped + predrop;
+                if (totalDropped > 0) {
+                    const dropDiv = document.createElement('div');
+                    dropDiv.className = 'log-line log-line-dropped';
+                    dropDiv.textContent = `... (${totalDropped} earlier lines rolled off)`;
+                    logEl.appendChild(dropDiv);
+                }
+                for (const line of incoming) {
                     const div = document.createElement('div');
                     div.className = 'log-line';
                     div.textContent = line;
                     logEl.appendChild(div);
                 }
+                // Final trim in case we were already near the cap.
+                while (logEl.childElementCount > MAX_DOM_LINES) {
+                    logEl.removeChild(logEl.firstChild);
+                }
                 logEl.scrollTop = logEl.scrollHeight;
+                parseProgressFromLog(step, incoming);
             }
             logOffset = logData.offset;
-
-            // Parse log for progress hints
-            parseProgressFromLog(step, logData.lines);
+        } else if (typeof logData.offset === 'number' && logData.offset > logOffset) {
+            // No new lines this tick but server advanced the total — keep in sync.
+            logOffset = logData.offset;
         }
 
         // Flask stage health
@@ -715,12 +904,8 @@ function startPolling(step) {
             if (status.healthy) {
                 if (healthDot) healthDot.className = 'health-dot healthy';
                 if (healthText) healthText.textContent = 'Service running on port ' + status.port;
-                // Enable the open window button — except for step 5, which is
-                // gated on SAM3 progress by updateSam3Panel().
-                if (step !== 5) {
-                    const btn = document.getElementById(`s${step}-open-window`);
-                    if (btn) btn.disabled = false;
-                }
+                // (Live launch path is openStepService; no per-step open-window
+                // button exists, so nothing to enable here.)
             } else if (status.running) {
                 if (healthDot) healthDot.className = 'health-dot checking';
                 if (healthText) healthText.textContent = 'Starting up (loading models)...';
@@ -746,6 +931,7 @@ function startPolling(step) {
                 showProgress(step, 'Complete!', 100);
                 setTimeout(() => hideProgress(step), 3000);
                 showResult(step, true, 'Step completed successfully.');
+                markStepActionDone(step);
                 // Step-specific post-completion hooks
                 if (step === 7) loadStep7Report();
                 if (step === 8) refreshStep8Gallery();
@@ -765,23 +951,121 @@ function showResult(step, success, message) {
     el.innerHTML = `<div class="badge ${success ? 'badge-success' : 'badge-error'}" style="margin-top:12px">${message}</div>`;
 }
 
-// ── Open service in new window ──────────────────────────────────────────────
+// ── Open service step (single-button flow: run-if-needed -> open tab) ──────
 
-function openServiceWindow(step) {
-    const port = state.steps[step] && state.steps[step].config && state.steps[step].config.port;
-    if (!port) return alert('Service port not set. Launch the service first.');
+// One button per service step (2, 4, 5): if not running yet, start it. Show a
+// loading overlay while we poll status for up to ~10s until the port is healthy
+// (or at least running). Only window.open() once it's actually up — never open a
+// dead tab. If it never comes up, surface an error in the overlay instead.
+const OPEN_UI_LABELS = { 2: 'Recode', 4: 'Place Points', 5: 'SAM3 Review' };
 
-    const url = `http://localhost:${port}`;
-    const name = `tcrmp_step${step}`;
+async function openStepService(step) {
+    if (!state) return;
+    const st = state.steps[step];
+    const status = st && st.status;
 
-    // Try to open a proper new window (not a tab)
-    const w = window.open(url, name, 'width=1400,height=900,menubar=no,toolbar=yes,location=yes,status=yes,scrollbars=yes,resizable=yes');
-    if (w) {
-        serviceWindows[step] = w;
-        w.focus();
-    } else {
-        // Popup blocked, fall back to new tab
-        window.open(url, '_blank');
+    showOpenUiOverlay(OPEN_UI_LABELS[step] || `Step ${step}`);
+
+    // If not running yet (and not already completed), start it.
+    if (status !== 'running') {
+        try {
+            await runStep(step);
+        } catch (e) {
+            setOpenUiError('Failed to start the service: ' + (e && e.message || e));
+            return;
+        }
+    }
+
+    // Poll status for up to ~10 seconds until healthy or at least running.
+    const deadline = Date.now() + 10000;
+    let port = null;
+    let healthy = false;
+    while (Date.now() < deadline) {
+        let s;
+        try { s = await api(`/api/step/${step}/status`); } catch (e) { s = null; }
+        if (s && s.port) port = s.port;
+        if (s && s.healthy) { healthy = true; break; }
+        // "running but not yet healthy" keeps us waiting until the deadline so
+        // we don't open a tab before the sub-app's HTTP server is actually up.
+        await new Promise(r => setTimeout(r, 400));
+    }
+
+    // Fall back to the config-stored port if status didn't surface one yet.
+    if (!port) {
+        port = state.steps[step] && state.steps[step].config && state.steps[step].config.port;
+    }
+
+    if (!port) {
+        setOpenUiError('Service port not set yet — the UI did not come up in time.');
+        return;
+    }
+    if (!healthy) {
+        // Port known but health never confirmed within the window. Don't open a
+        // potentially-dead tab; let the user retry once it's warmed up.
+        setOpenUiError(`The ${OPEN_UI_LABELS[step] || 'service'} UI is still starting (port ${port}) and did not respond in ~10s.`);
+        return;
+    }
+
+    // Step 5 (SAM3 Review) is additionally gated on segmentation progress: the
+    // review UI is only meaningful once SAM3 has produced at least one frame
+    // (or the queue finished). Port-health alone is not enough for this step.
+    if (step === 5) {
+        let sam3 = null;
+        try { sam3 = await api('/api/step/5/sam3_status'); } catch (e) { sam3 = null; }
+        const processed = (sam3 && sam3.processed) || 0;
+        const phase = sam3 && sam3.phase;
+        const readyForReview = processed >= 1 || phase === 'review_ready';
+        if (!readyForReview) {
+            setOpenUiError('SAM3 has not segmented any frames yet — the Review UI opens once the first frame is ready.');
+            return;
+        }
+    }
+
+    hideOpenUiOverlay();
+    const url = `http://localhost:${port}/`;
+    // Open every sub-tool UI in a real new WINDOW, never a tab, so this main
+    // orchestrator window is always there to return to (Lauren: never a tab).
+    // One named popup per step lets several sub-tools coexist without clobbering
+    // each other. No 'noopener' — we keep the handle so markDone()/saveAndClose()
+    // can close the window on cleanup (guard for null if a popup blocker withholds it).
+    const win = window.open(url, `reefpointseg_step${step}`,
+        'popup,width=1500,height=980,scrollbars=yes,resizable=yes');
+    if (win) { serviceWindows[step] = win; try { win.focus(); } catch (e) {} }
+}
+
+// Add Expert IDs is now a native panel (the _expertids blueprint + expertids.js).
+// switchStep('expertids') calls window.ExpertIDs.onShow() to refresh it; there is
+// no longer any subprocess/iframe wiring here.
+
+// ── Open folder helpers (xdg-open on server) ──────────────────────────────
+
+async function openStepFolder(step) {
+    if (!state) return;
+    const dir = state.steps && state.steps[String(step)] && state.steps[String(step)].dir;
+    if (!dir) {
+        alert(`Step ${step} has no output folder yet.`);
+        return;
+    }
+    try {
+        const resp = await post('/api/fs/open', { path: dir });
+        if (resp && resp.error) alert('Open folder failed: ' + resp.error);
+    } catch (e) {
+        alert('Open folder failed: ' + e);
+    }
+}
+
+async function openProjectFolder() {
+    if (!state) return;
+    const dir = state.project_dir || state.dir;
+    if (!dir) {
+        alert('No project folder path available in state.');
+        return;
+    }
+    try {
+        const resp = await post('/api/fs/open', { path: dir });
+        if (resp && resp.error) alert('Open folder failed: ' + resp.error);
+    } catch (e) {
+        alert('Open folder failed: ' + e);
     }
 }
 
@@ -823,14 +1107,25 @@ async function markDone(step) {
     updateSidebar();
     populateConfigs();
     showResult(step, true, 'Step completed.');
-    // Auto-advance to next step
-    if (step < 5) {
-        setTimeout(() => switchStep(step + 1), 500);
-    }
+    markStepActionDone(step);
 }
 
-async function resetStep(step) {
-    if (!confirm(`Reset step ${step}? This will clear all outputs for this step and lock subsequent steps.`)) return;
+// Per-step "this removes XYZ" copy, shown in the reset-confirm modal so the user
+// knows exactly what a reset clears before they confirm.
+const RESET_DESCRIPTIONS = {
+    1: "This removes the linked or parsed all_points.csv and master_codes.csv and re-locks Steps 2 through 8.",
+    2: "This removes the recoded outputs (all_points_recoded.csv, master_codes_recoded.csv, remap_log.json) and re-locks Steps 3 through 8.",
+    3: "This removes selected_frames.csv and the route files, and re-locks Steps 4 through 8.",
+    4: "This clears placed-point exports for this step and re-locks Steps 5 through 8.",
+    5: "This removes the SAM3 masks and YOLO export for this step and re-locks Steps 6 through 8.",
+    6: "This removes the dataset split and training runs produced by this step and re-locks Steps 7 and 8.",
+    7: "This removes the evaluation report and metrics produced by this step.",
+    8: "This removes the inference run outputs and gallery produced by this step.",
+};
+
+// The actual reset network/DOM work. Called only after the confirm modal is
+// accepted (openResetConfirm wires this to #confirm-ok-btn).
+async function doResetStep(step) {
     const data = await post(`/api/step/${step}/reset`, {});
     if (data.error) return alert('Error: ' + data.error);
     if (data.state) state = data.state;
@@ -842,6 +1137,40 @@ async function resetStep(step) {
     const svc = document.getElementById(`s${step}-service`);
     if (svc) svc.style.display = 'none';
     hideProgress(step);
+}
+
+// Open the styled reset-confirm modal for a step, describing what will be
+// cleared and wiring the Confirm button to run the reset.
+function openResetConfirm(step) {
+    const msgEl = document.getElementById('confirm-msg');
+    if (msgEl) {
+        msgEl.textContent = (RESET_DESCRIPTIONS[step] || 'This clears this step\'s outputs.') +
+            ' This cannot be undone.';
+    }
+    const okBtn = document.getElementById('confirm-ok-btn');
+    if (okBtn) okBtn.onclick = () => { closeConfirmModal(); doResetStep(step); };
+    const ov = document.getElementById('confirm-overlay');
+    if (ov) ov.classList.add('visible');
+}
+
+function closeConfirmModal() {
+    const ov = document.getElementById('confirm-overlay');
+    if (ov) ov.classList.remove('visible');
+}
+
+// Save the project and close this window. Stops running sub-tools server-side
+// (/api/project/quit calls pm.save_project + runner.kill_all) and returns to
+// the setup screen; window.close() succeeds when this was a script-opened window.
+async function saveAndClose() {
+    try { Object.values(serviceWindows).forEach(w => { try { w.close(); } catch(e){} }); } catch(e){}
+    serviceWindows = {};
+    await post('/api/project/quit', {});
+    state = null;
+    // This window was opened by the VICARIUS UI; close it to return there. If the
+    // browser refuses (tab not script-opened), bounce so the user never lands on
+    // a local home screen.
+    try { window.close(); } catch(e) {}
+    bounceToVicarius();
 }
 
 // ── Remap browsing (Step 2) ─────────────────────────────────────────────────
@@ -883,7 +1212,7 @@ async function selectRemap(path) {
     previewEl.style.display = 'block';
 
     let html = `<p style="margin-bottom:8px;color:var(--text-dim)">${log.remaps.length} remaps, ${(log.excludes||[]).length} excludes</p>`;
-    html += '<table class="remap-table"><tr><th>Old Code</th><th>New Code</th><th>Species Name</th><th>Action</th><th>Points Affected</th></tr>';
+    html += '<table class="remap-table"><tr><th>Old Code</th><th>New Code</th><th>Label Name</th><th>Action</th><th>Points Affected</th></tr>';
     for (const rm of (log.remaps || []).slice(0, 20)) {
         html += `<tr>
             <td>${rm.old_code}</td>
@@ -920,8 +1249,7 @@ async function autoApplyRemap() {
         `Auto-applied ${data.remaps_applied} remaps to ${data.points_processed.toLocaleString()} points. ` +
         `${data.excludes} codes excluded. Output files: ${(data.output_files || []).join(', ')}`);
 
-    // Auto-advance to step 3
-    setTimeout(() => switchStep(3), 800);
+    markStepActionDone(2);
 }
 
 // ── Initialize ──────────────────────────────────────────────────────────────
@@ -973,7 +1301,8 @@ const STEP6_PRESET_APPLIERS = {
     label_smoothing:v => setVal('s6-label-smoothing', v),
 };
 
-async function refreshStep6Presets() {
+async function refreshStep6Presets(opts) {
+    opts = opts || {};
     const sel = document.getElementById('s6-preset-select');
     const desc = document.getElementById('s6-preset-desc');
     if (!sel) return;
@@ -987,6 +1316,7 @@ async function refreshStep6Presets() {
             opt.value = p.id;
             opt.textContent = p.error ? `${p.id} [error: ${p.error}]` : p.name;
             opt.dataset.description = p.description || '';
+            if (p.default) opt.dataset.isDefault = '1';
             sel.appendChild(opt);
         }
         if (prev) sel.value = prev;
@@ -995,23 +1325,41 @@ async function refreshStep6Presets() {
             if (desc) desc.textContent = opt ? (opt.dataset.description || '') : '';
         };
         sel.onchange();
+
+        // Auto-apply the default preset on first panel load (or when caller
+        // explicitly asks for autoApply), unless the user has already
+        // imported or selected one. Selection rule: server's default_id,
+        // which honors `default: true` in the preset YAML and falls back to
+        // alphabetical-first.
+        const defaultId = data.default_id || null;
+        if (opts.autoApply && defaultId && !window._step6PresetAutoApplied && !prev) {
+            sel.value = defaultId;
+            sel.onchange();
+            try {
+                await importStep6Preset({ auto: true });
+                window._step6PresetAutoApplied = true;
+            } catch (e) {
+                console.warn('auto-apply preset failed:', e);
+            }
+        }
     } catch (e) {
         console.warn('refreshStep6Presets failed:', e);
         if (desc) desc.textContent = `Error loading presets: ${e}`;
     }
 }
 
-async function importStep6Preset() {
+async function importStep6Preset(opts) {
+    opts = opts || {};
     const sel = document.getElementById('s6-preset-select');
     const desc = document.getElementById('s6-preset-desc');
     if (!sel || !sel.value) {
-        alert('Pick a preset first.');
+        if (!opts.auto) alert('Pick a preset first.');
         return;
     }
     try {
         const data = await api(`/api/step/6/presets/${encodeURIComponent(sel.value)}`);
         if (data.error) {
-            alert(`Preset error: ${data.error}`);
+            if (!opts.auto) alert(`Preset error: ${data.error}`);
             return;
         }
         const params = data.params || {};
@@ -1022,14 +1370,15 @@ async function importStep6Preset() {
             else { skipped.push(key); }
         }
         if (desc) {
-            const msg = `Imported "${data.name}" — ${applied} field(s) updated` +
+            const prefix = opts.auto ? `Auto-loaded default preset "${data.name}"` : `Imported "${data.name}"`;
+            const msg = `${prefix} — ${applied} field(s) updated` +
                 (skipped.length ? ` (ignored: ${skipped.join(', ')})` : '');
             desc.textContent = msg;
             desc.style.color = 'var(--magenta-light)';
             setTimeout(() => { desc.style.color = 'var(--text-dim)'; }, 4000);
         }
     } catch (e) {
-        alert(`Failed to import preset: ${e}`);
+        if (!opts.auto) alert(`Failed to import preset: ${e}`);
     }
 }
 
@@ -1194,7 +1543,8 @@ function applyStep6Device(saved) {
     const custom = document.getElementById('s6-device-custom');
     if (!sel) return;
     const presets = new Set(['0', '1', '0,1', 'cpu']);
-    if (!saved) { sel.value = '0'; if (custom) custom.value = ''; }
+    // DDP across both GPUs is the default for new / unseeded projects.
+    if (!saved) { sel.value = '0,1'; if (custom) custom.value = ''; }
     else if (presets.has(saved)) { sel.value = saved; if (custom) custom.value = ''; }
     else { sel.value = '__custom__'; if (custom) custom.value = saved; }
     onStep6DeviceChange();
@@ -1221,19 +1571,26 @@ async function refreshStep6Classes() {
 function renderStep6Classes(classes, saved) {
     const host = document.getElementById('s6-classes-list');
     if (!host) return;
-    if (!classes.length) {
-        host.innerHTML = '<span style="color:var(--text-dim)">No classes found in Step 5 output. Run Step 5 first.</span>';
+    // Belt-and-suspenders: also drop any name that is empty or literally
+    // "(unnamed)" (case-insensitive) in case an older payload sneaks in.
+    const UNNAMED_RE = /^\(unnamed\)$/i;
+    const filtered = (classes || []).filter(c => {
+        const nm = (c && c.name != null) ? String(c.name).trim() : '';
+        return nm && !UNNAMED_RE.test(nm);
+    });
+    if (!filtered.length) {
+        host.innerHTML = '<span style="color:var(--text-dim)">No usable classes found. Run Step 5 (or set Step 3 target labels) so class names are present.</span>';
         return;
     }
     // saved === null|undefined -> include every class (default).
     // saved is an array of IDs -> include only those.
     const savedSet = Array.isArray(saved) ? new Set(saved.map(Number)) : null;
-    const rows = classes.map(c => {
-        const nm = c.name ? c.name : '(unnamed)';
+    const rows = filtered.map(c => {
+        const nm = String(c.name).trim();
         const checked = (savedSet === null || savedSet.has(c.id)) ? 'checked' : '';
-        const countTxt = `${c.instance_count} instances · ${c.image_count} images`;
+        const countTxt = `${c.instance_count || 0} instances · ${c.image_count || 0} images`;
         return `<label style="display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer">
-            <input type="checkbox" class="s6-class-cb" data-class-id="${c.id}" ${checked}>
+            <input type="checkbox" class="s6-class-cb" data-class-id="${c.id}" data-class-name="${nm}" ${checked}>
             <span style="min-width:2.5em;color:var(--text-dim);font-variant-numeric:tabular-nums">#${c.id}</span>
             <span style="flex:1;font-weight:500">${nm}</span>
             <span style="color:var(--text-dim);font-size:11px">${countTxt}</span>
@@ -1249,12 +1606,20 @@ function selectAllStep6Classes(on) {
 // Returns null (meaning "all classes") if the picker hasn't been loaded yet or
 // every available class is checked. Returns [] if the user has unchecked
 // everything (we treat that as "train nothing" — caller will error out).
+// Drops any class whose name is empty or matches "(unnamed)" (case-insensitive)
+// as a last-line-of-defense so the training payload is never polluted.
 function collectStep6IncludedClasses() {
     const cbs = document.querySelectorAll('.s6-class-cb');
     if (!cbs.length) return null;
-    const total = cbs.length;
+    const UNNAMED_RE = /^\(unnamed\)$/i;
+    let total = 0;
     const selected = [];
-    cbs.forEach(cb => { if (cb.checked) selected.push(parseInt(cb.dataset.classId)); });
+    cbs.forEach(cb => {
+        const nm = (cb.dataset.className || '').trim();
+        if (!nm || UNNAMED_RE.test(nm)) return;  // skip unnamed entirely
+        total++;
+        if (cb.checked) selected.push(parseInt(cb.dataset.classId));
+    });
     if (selected.length === total) return null;
     return selected;
 }
@@ -1392,6 +1757,19 @@ document.addEventListener('change', (e) => {
     if (e.target && e.target.name === 's8-src') toggleStep8SourceFields();
 });
 
+// Track whether the user has typed into the Step 6 run-name field so that
+// subsequent step-6 panel re-entries don't stomp their input. Blank stays
+// blank until the user types a first character.
+document.addEventListener('input', (e) => {
+    if (e.target && e.target.id === 's6-run-name') {
+        if (e.target.value && e.target.value.length > 0) {
+            e.target.dataset.userEdited = '1';
+        } else {
+            delete e.target.dataset.userEdited;
+        }
+    }
+});
+
 async function refreshStep8Gallery() {
     try {
         const data = await api('/api/step/8/manifest');
@@ -1448,19 +1826,352 @@ async function verifyStep8(filenameEnc, verdict, btn) {
     }
 }
 
+// ── Step 3 label picker ───────────────────────────────────────────────────
+// Data for the picker lives here so filter/toggle operations don't need to
+// round-trip to the server. _loaded is the raw server list; _excludedSet is
+// the set of codes flagged excluded in step 2's remap log.
+const step3LabelState = {
+    loaded: [],
+    excludedSet: new Set(),
+    loadedOnce: false,
+};
+
+async function loadStep3Labels(force) {
+    const host = document.getElementById('s3-label-picker');
+    const status = document.getElementById('s3-label-status');
+    if (!host) return;
+    if (step3LabelState.loadedOnce && !force) {
+        // Still render (to re-apply current config's target_species checks).
+        renderStep3Labels();
+        return;
+    }
+    host.innerHTML = '<span style="color:var(--text-dim)">Loading labels from Step 2...</span>';
+    try {
+        const data = await api('/api/step/3/target_labels');
+        if (data.error) {
+            host.innerHTML = `<span style="color:var(--magenta-light)">Error: ${data.error}</span>`;
+            return;
+        }
+        step3LabelState.loaded = data.labels || [];
+        step3LabelState.excludedSet = new Set((data.excludes || []).map(String));
+        step3LabelState.loadedOnce = true;
+        if (status) {
+            const src = data.master_codes_path ? ` (source: ${data.master_codes_path})` : '';
+            status.textContent = `${step3LabelState.loaded.length} labels loaded${src}.`;
+        }
+        renderStep3Labels();
+    } catch (e) {
+        host.innerHTML = `<span style="color:var(--magenta-light)">Error loading labels: ${e}</span>`;
+    }
+}
+
+// Category display order, top to bottom. Matched case-insensitively against the
+// trimmed label.category string. Anything not listed sorts alphabetically AFTER
+// these; empty/missing category becomes 'Uncategorized', placed dead last.
+const CATEGORY_ORDER = [
+    'Coral', 'Macroalgae', 'Sponge', 'Gorgonian', 'Turf', 'Cyanobacteria',
+    'Calcareous', 'Other, Living', 'Coral Condition', 'Non-living'
+];
+const UNCATEGORIZED = 'Uncategorized';
+
+// True if a label should never be shown (excluded by step 2 or by server flag).
+// Excluded labels are ALWAYS hidden — there is no hide-excluded toggle anymore.
+function step3IsExcluded(L) {
+    return !!L.excluded || step3LabelState.excludedSet.has(String(L.code));
+}
+
+// Resolve a code -> full display name from the loaded list (for chip labels).
+function step3NameForCode(code) {
+    const c = String(code);
+    for (const L of step3LabelState.loaded) {
+        if (String(L.code) === c) return L.name || '';
+    }
+    return '';
+}
+
+// Group the (non-excluded) loaded labels by category, returning an ordered
+// array of { category, labels } where labels are sorted points DESC, frames
+// DESC, code ASC, and categories follow CATEGORY_ORDER then alpha then
+// Uncategorized last.
+function step3GroupedLabels() {
+    const groups = new Map(); // displayCategory -> [labels]
+    for (const L of step3LabelState.loaded) {
+        if (step3IsExcluded(L)) continue; // excluded labels are always hidden
+        const raw = (L.category == null ? '' : String(L.category)).trim();
+        const cat = raw || UNCATEGORIZED;
+        if (!groups.has(cat)) groups.set(cat, []);
+        groups.get(cat).push(L);
+    }
+    // Within each group: points DESC, frames DESC, code ASC.
+    for (const arr of groups.values()) {
+        arr.sort((a, b) => {
+            const pa = Number(a.count || 0), pb = Number(b.count || 0);
+            if (pb !== pa) return pb - pa;
+            const fa = Number(a.frames || 0), fb = Number(b.frames || 0);
+            if (fb !== fa) return fb - fa;
+            return String(a.code).localeCompare(String(b.code));
+        });
+    }
+    // Order the categories.
+    const orderIndex = {};
+    CATEGORY_ORDER.forEach((c, i) => { orderIndex[c.toLowerCase()] = i; });
+    const cats = Array.from(groups.keys());
+    cats.sort((a, b) => {
+        // Uncategorized always last.
+        if (a === UNCATEGORIZED && b === UNCATEGORIZED) return 0;
+        if (a === UNCATEGORIZED) return 1;
+        if (b === UNCATEGORIZED) return -1;
+        const ia = orderIndex[a.toLowerCase()];
+        const ib = orderIndex[b.toLowerCase()];
+        const aKnown = ia !== undefined, bKnown = ib !== undefined;
+        if (aKnown && bKnown) return ia - ib;
+        if (aKnown) return -1;          // known categories before unknown
+        if (bKnown) return 1;
+        return a.localeCompare(b);      // unknown categories: alphabetical
+    });
+    return cats.map(c => ({ category: c, labels: groups.get(c) }));
+}
+
+function renderStep3Labels() {
+    const host = document.getElementById('s3-label-picker');
+    if (!host) return;
+    const filterRaw = (document.getElementById('s3-label-filter') || {}).value || '';
+    const filter = filterRaw.trim().toLowerCase();
+
+    // Pre-check set comes from the current hidden s3-species CSV (restores a
+    // saved project's prior selection on return).
+    const speciesEl = document.getElementById('s3-species');
+    const preChecked = new Set(
+        ((speciesEl && speciesEl.value) || '')
+            .split(',').map(s => s.trim()).filter(Boolean)
+    );
+
+    const grouped = step3GroupedLabels();
+    const blocks = [];
+    for (const { category, labels } of grouped) {
+        // Apply the text filter within the group.
+        const visible = filter
+            ? labels.filter(L => {
+                const hay = (`${L.code} ${L.name || ''} ${category}`).toLowerCase();
+                return hay.includes(filter);
+            })
+            : labels;
+        // When filtering, hide groups with zero matches entirely.
+        if (filter && visible.length === 0) continue;
+
+        // Filtering auto-expands matching groups; no filter collapses all.
+        const expanded = !!filter;
+        const selCount = visible.reduce(
+            (n, L) => n + (preChecked.has(String(L.code)) ? 1 : 0), 0);
+
+        const rows = visible.map(L => {
+            const checked = preChecked.has(String(L.code)) ? 'checked' : '';
+            const frames = Number(L.frames || 0);
+            const points = Number(L.count || 0);
+            const tip = `${L.code} - ${L.name || ''} (${category}) · ` +
+                        `${points.toLocaleString()} points across ${frames.toLocaleString()} frames`;
+            const countLabel = frames > 0
+                ? `${frames.toLocaleString()} fr / ${points.toLocaleString()} pt`
+                : `${points.toLocaleString()} pt`;
+            return (
+                `<label class="label-picker-row" title="${escapeAttr(tip)}">
+                    <input type="checkbox" class="s3-label-cb" value="${escapeAttr(String(L.code))}" data-category="${escapeAttr(category)}" data-name="${escapeAttr(L.name || '')}" ${checked}>
+                    <span class="code">${escapeHtml(String(L.code))}</span>
+                    <span class="name">${escapeHtml(L.name || '')}</span>
+                    <span class="count">${escapeHtml(countLabel)}</span>
+                </label>`
+            );
+        }).join('');
+
+        blocks.push(
+            `<div class="label-cat-group" data-category="${escapeAttr(category)}">
+                <button type="button" class="label-cat-header" aria-expanded="${expanded ? 'true' : 'false'}" onclick="toggleStep3Group(this)">
+                    <span class="caret">${expanded ? '&#9660;' : '&#9654;'}</span>
+                    <span class="label-cat-name">${escapeHtml(category)}</span>
+                    <span class="label-cat-meta"><span class="sel-count">${selCount}</span> of <span class="tot-count">${visible.length}</span> selected</span>
+                </button>
+                <div class="label-cat-body"${expanded ? '' : ' hidden'}>
+                    ${rows}
+                </div>
+            </div>`
+        );
+    }
+
+    if (!blocks.length) {
+        host.innerHTML = filter
+            ? '<span style="color:var(--text-dim)">No labels match the current filter.</span>'
+            : '<span style="color:var(--text-dim)">No labels available.</span>';
+    } else {
+        host.innerHTML = blocks.join('');
+    }
+
+    // Wire each checkbox: sync hidden store, repaint chips, update its group meta.
+    host.querySelectorAll('.s3-label-cb').forEach(cb => {
+        cb.addEventListener('change', () => {
+            syncStep3SpeciesField();
+            repaintStep3Chips();
+            const grp = cb.closest('.label-cat-group');
+            if (grp) updateStep3GroupMeta(grp);
+        });
+    });
+
+    syncStep3SpeciesField();
+    repaintStep3Chips();
+}
+
+// Recompute and write the "<sel> of <tot> selected" header meta for one group.
+function updateStep3GroupMeta(grp) {
+    if (!grp) return;
+    const cbs = grp.querySelectorAll('.s3-label-cb');
+    let sel = 0;
+    cbs.forEach(cb => { if (cb.checked) sel++; });
+    const selEl = grp.querySelector('.sel-count');
+    const totEl = grp.querySelector('.tot-count');
+    if (selEl) selEl.textContent = String(sel);
+    if (totEl) totEl.textContent = String(cbs.length);
+}
+
+function updateAllStep3GroupMeta() {
+    const host = document.getElementById('s3-label-picker');
+    if (!host) return;
+    host.querySelectorAll('.label-cat-group').forEach(updateStep3GroupMeta);
+}
+
+// Repaint the selection chips (#s3-label-chips) from the set of currently
+// selected codes — the union of checked visible boxes AND any codes already in
+// the hidden s3-species field that are currently filtered out of the DOM (same
+// preservation logic syncStep3SpeciesField uses). Resolves names from the
+// loaded list for the chip label; falls back to the bare code if unknown.
+function repaintStep3Chips() {
+    const chipsEl = document.getElementById('s3-label-chips');
+    const countEl = document.getElementById('s3-chip-count');
+    const speciesEl = document.getElementById('s3-species');
+    const codes = ((speciesEl && speciesEl.value) || '')
+        .split(',').map(s => s.trim()).filter(Boolean);
+    if (countEl) countEl.textContent = String(codes.length);
+    if (!chipsEl) return;
+    if (!codes.length) {
+        chipsEl.innerHTML = '<span class="muted">None selected yet. Pick labels above.</span>';
+        return;
+    }
+    chipsEl.innerHTML = codes.map(code => {
+        const name = step3NameForCode(code);
+        const nameSpan = name ? `<span class="chip-name">${escapeHtml(name)}</span>` : '';
+        return `<span class="label-chip" data-code="${escapeAttr(code)}"><span class="chip-code">${escapeHtml(code)}</span>${nameSpan}<button type="button" class="chip-x" title="Remove ${escapeAttr(code)}" onclick="removeStep3Chip('${escapeAttr(code).replace(/'/g, "\\'")}')">&times;</button></span>`;
+    }).join('');
+}
+
+// Source of truth feeding collectConfig(3). Merges checked visible boxes with
+// any previously-selected codes that are currently filtered out of the DOM so
+// filtering never silently drops a user's selection.
+function syncStep3SpeciesField() {
+    const host = document.getElementById('s3-label-picker');
+    const speciesEl = document.getElementById('s3-species');
+    if (!host || !speciesEl) return;
+    const existing = (speciesEl.value || '')
+        .split(',').map(s => s.trim()).filter(Boolean);
+    const visibleCodes = new Set();
+    const checkedVisible = [];
+    host.querySelectorAll('.s3-label-cb').forEach(cb => {
+        visibleCodes.add(cb.value);
+        if (cb.checked) checkedVisible.push(cb.value);
+    });
+    const kept = existing.filter(c => !visibleCodes.has(c));
+    const merged = [...new Set([...kept, ...checkedVisible])];
+    speciesEl.value = merged.join(', ');
+}
+
+// Toggle one group's collapsed/expanded state (body hidden + aria + caret glyph).
+function toggleStep3Group(headerEl) {
+    if (!headerEl) return;
+    const grp = headerEl.closest('.label-cat-group');
+    if (!grp) return;
+    const body = grp.querySelector('.label-cat-body');
+    const caret = headerEl.querySelector('.caret');
+    const open = headerEl.getAttribute('aria-expanded') === 'true';
+    const next = !open;
+    headerEl.setAttribute('aria-expanded', next ? 'true' : 'false');
+    if (body) body.hidden = !next;
+    if (caret) caret.innerHTML = next ? '&#9660;' : '&#9654;';
+}
+
+// Expand (open=true) or collapse (false) every group.
+function toggleAllStep3Groups(open) {
+    const host = document.getElementById('s3-label-picker');
+    if (!host) return;
+    host.querySelectorAll('.label-cat-group').forEach(grp => {
+        const header = grp.querySelector('.label-cat-header');
+        const body = grp.querySelector('.label-cat-body');
+        const caret = grp.querySelector('.caret');
+        if (header) header.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (body) body.hidden = !open;
+        if (caret) caret.innerHTML = open ? '&#9660;' : '&#9654;';
+    });
+}
+
+// Check/uncheck every visible row, then sync + repaint chips + refresh meta.
+// HTML now only calls this with false (Clear selection), but keep it general.
+function selectAllStep3Labels(on) {
+    const host = document.getElementById('s3-label-picker');
+    if (!host) return;
+    host.querySelectorAll('.s3-label-cb').forEach(cb => { cb.checked = !!on; });
+    syncStep3SpeciesField();
+    repaintStep3Chips();
+    updateAllStep3GroupMeta();
+}
+
+// Remove a single selected code (chip X). Uncheck its box if present in the DOM,
+// strip it from the hidden s3-species field, then repaint everything.
+function removeStep3Chip(code) {
+    const host = document.getElementById('s3-label-picker');
+    const speciesEl = document.getElementById('s3-species');
+    if (host) {
+        host.querySelectorAll('.s3-label-cb').forEach(cb => {
+            if (cb.value === code) cb.checked = false;
+        });
+    }
+    if (speciesEl) {
+        const remaining = (speciesEl.value || '')
+            .split(',').map(s => s.trim()).filter(Boolean)
+            .filter(c => c !== code);
+        speciesEl.value = remaining.join(', ');
+    }
+    syncStep3SpeciesField();
+    repaintStep3Chips();
+    updateAllStep3GroupMeta();
+}
+
+// Wire the filter input once. Script executes after the DOM is parsed (it's at
+// the bottom of <body>). The hide-excluded toggle is gone, so it is NOT wired.
+(function wireStep3Picker() {
+    const filterEl = document.getElementById('s3-label-filter');
+    if (filterEl) filterEl.addEventListener('input', () => renderStep3Labels());
+})();
+
+function escapeHtml(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function escapeAttr(s) {
+    return escapeHtml(s).replace(/"/g, '&quot;');
+}
+
 // Fire up the background SAM3 mini-poll on page load.
 setTimeout(startSam3MiniPoll, 500);
 
 (async function init() {
-    // Always show the landing screen on page load. If the server still has a
-    // project in memory (e.g. from a prior browser session), offer a Resume
-    // banner rather than silently entering the app.
+    // The VICARIUS UI hands this window a project via ?project_dir= auto-open (or
+    // a prior POST /api/project/open), which pre-renders #app-screen and sets
+    // data-project-loaded="true". In that case go straight to the 8-step view.
+    const preloaded = document.body.dataset.projectLoaded === 'true';
     const data = await api('/api/project/state');
-    if (data.loaded && data.state) {
+    if (preloaded && data.loaded && data.state) {
         state = data.state;
-        const nameEl = document.getElementById('resume-name');
-        if (nameEl) nameEl.textContent = state.name + '  (' + state.id + ')';
-        const card = document.getElementById('resume-card');
-        if (card) card.style.display = '';
+        enterApp();
+        return;
     }
+    // No project was handed to this window (opened bare, or after Save and
+    // Close). Projects are created/opened only in the VICARIUS UI, so bounce
+    // there rather than ever showing a local home/resume screen.
+    bounceToVicarius();
 })();

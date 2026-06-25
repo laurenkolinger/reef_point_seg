@@ -9,9 +9,274 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Syne:wght@500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=20260624">
+    <link rel="stylesheet" href="{{ url_for('expertids.static', filename='expertids.css') }}?v=1">
+    <style>
+        /* ── Label picker (Step 3) ─────────────────────────────── */
+        .picker-hint {
+            font-size: 11px;
+            color: var(--text-dim);
+            line-height: 1.5;
+            margin-bottom: 8px;
+        }
+        .label-picker {
+            max-height: 320px;
+            overflow-y: auto;
+            padding: 6px;
+            background: var(--surface);
+            border: 1px solid #2a2a4e;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+        /* Category group (header bar + collapsible body, injected by orchestrator.js) */
+        .label-cat-group {
+            border-bottom: 1px solid #2a2a4e;
+            margin-bottom: 2px;
+        }
+        .label-cat-group:last-child { border-bottom: none; margin-bottom: 0; }
+        .label-cat-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            padding: 6px 8px;
+            background: transparent;
+            border: none;
+            border-radius: 2px;
+            cursor: pointer;
+            color: var(--text);
+            font-family: 'Space Mono', monospace;
+            font-size: 12px;
+            text-align: left;
+        }
+        .label-cat-header:hover { background: var(--surface-light); }
+        .label-cat-header .caret {
+            color: var(--text-dim);
+            font-size: 10px;
+            width: 12px;
+            flex: 0 0 auto;
+        }
+        .label-cat-header .label-cat-name {
+            color: var(--magenta-light);
+            font-weight: 600;
+        }
+        .label-cat-header .label-cat-meta {
+            margin-left: auto;
+            color: var(--text-dim);
+            font-size: 11px;
+            font-variant-numeric: tabular-nums;
+        }
+        .label-cat-body {
+            padding-left: 14px;
+            padding-bottom: 4px;
+        }
+        .label-picker-row {
+            display: grid;
+            grid-template-columns: 22px 80px 1fr 130px;
+            align-items: center;
+            gap: 8px;
+            padding: 3px 6px;
+            border-radius: 2px;
+            cursor: pointer;
+        }
+        .label-picker-row:hover { background: var(--surface-light); }
+        .label-picker-row .code {
+            font-family: 'Space Mono', monospace;
+            color: var(--magenta-light);
+            font-weight: 600;
+        }
+        .label-picker-row .name { color: var(--text); }
+        .label-picker-row .count {
+            color: var(--text-dim);
+            font-variant-numeric: tabular-nums;
+            text-align: right;
+            font-size: 11px;
+        }
+        .label-picker-row.excluded {
+            opacity: 0.45;
+            font-style: italic;
+        }
+        .label-picker-row.excluded .code { color: var(--text-dim); }
+        .label-picker-toolbar {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 6px;
+        }
+        .label-picker-toolbar input[type="text"] {
+            flex: 1;
+            min-width: 160px;
+        }
+        .label-picker-status {
+            font-size: 11px;
+            color: var(--text-dim);
+            margin-top: 4px;
+        }
+        /* Selected-label chips below the picker */
+        .label-chips-wrap { margin-top: 10px; }
+        .label-chips-title {
+            font-size: 11px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin-bottom: 5px;
+        }
+        .label-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            min-height: 26px;
+        }
+        .label-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 8px;
+            border: 1px solid rgba(226,0,116,0.45);
+            background: rgba(226,0,116,0.10);
+            border-radius: 12px;
+            font-size: 12px;
+        }
+        .label-chip .chip-code {
+            font-family: 'Space Mono', monospace;
+            color: var(--magenta-light);
+            font-weight: 600;
+        }
+        .label-chip .chip-name { color: var(--text); }
+        .label-chip .chip-x {
+            border: none;
+            background: transparent;
+            color: var(--text-dim);
+            font-size: 14px;
+            line-height: 1;
+            padding: 0 0 0 2px;
+            cursor: pointer;
+        }
+        .label-chip .chip-x:hover { color: var(--error); }
+        .muted { color: var(--text-dim); }
+
+        /* ── Tooltip popover (CSS-only, complements title) ───────── */
+        .has-tip { position: relative; }
+        .has-tip::after {
+            content: attr(data-tip);
+            position: absolute;
+            left: 0;
+            bottom: calc(100% + 4px);
+            z-index: 1000;
+            background: #0b0b1d;
+            color: var(--text);
+            border: 1px solid var(--magenta);
+            border-radius: 3px;
+            padding: 6px 8px;
+            font-size: 11px;
+            line-height: 1.35;
+            width: max-content;
+            max-width: 360px;
+            white-space: normal;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.12s;
+        }
+        .has-tip:hover::after,
+        .has-tip:focus-within::after { opacity: 1; }
+
+        /* ── Inline info-circle tooltip (ⓘ next to visible settings) ──── */
+        .info-circle {
+            display: inline-block;
+            margin-left: 4px;
+            color: var(--magenta-light);
+            cursor: help;
+            font-size: 12px;
+            vertical-align: baseline;
+            opacity: 0.85;
+        }
+        .info-circle:hover { opacity: 1; }
+
+        /* ── Collapsed "Advanced" disclosure inside step panels ──────── */
+        details.advanced {
+            margin: 4px 0 12px;
+            padding: 6px 10px;
+            background: var(--surface-light);
+            border: 1px solid #2a2a4e;
+            border-radius: 4px;
+        }
+        details.advanced > summary {
+            cursor: pointer;
+            color: var(--magenta-light);
+            font-weight: 600;
+            padding: 2px 0;
+            list-style: revert;
+        }
+        details.advanced[open] > summary { margin-bottom: 8px; }
+
+        /* ── Step Prev / Next navigation footer ──────────────────────── */
+        .step-nav-footer {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            margin-top: 18px;
+            padding-top: 12px;
+            border-top: 1px solid #2a2a4e;
+        }
+        .step-nav-footer .btn[disabled] { opacity: 0.35; pointer-events: none; }
+
+        /* ── Batch progress readout (Step 4 / Step 5) ────────────────── */
+        .batch-readout {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 8px;
+            padding: 4px 10px;
+            background: var(--surface-light);
+            border-radius: 3px;
+            font-family: 'Space Mono', monospace;
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+        .batch-readout strong { color: var(--magenta-light); }
+
+        /* ── Open-UI loading overlay/modal ───────────────────────────── */
+        .open-ui-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 5000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(4, 4, 16, 0.78);
+        }
+        .open-ui-overlay.visible { display: flex; }
+        .open-ui-modal {
+            background: var(--surface);
+            border: 1px solid var(--magenta);
+            border-radius: 6px;
+            padding: 22px 26px;
+            max-width: 420px;
+            width: calc(100% - 48px);
+            text-align: center;
+            box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+        }
+        .open-ui-modal .spinner {
+            width: 34px;
+            height: 34px;
+            margin: 0 auto 14px;
+            border: 3px solid #2a2a4e;
+            border-top-color: var(--magenta);
+            border-radius: 50%;
+            animation: open-ui-spin 0.8s linear infinite;
+        }
+        @keyframes open-ui-spin { to { transform: rotate(360deg); } }
+        .open-ui-modal .msg { color: var(--text); font-size: 14px; line-height: 1.4; }
+        .open-ui-modal .sub { color: var(--text-dim); font-size: 12px; margin-top: 8px; }
+        .open-ui-modal.error { border-color: var(--error); }
+        .open-ui-modal.error .spinner { display: none; }
+        .open-ui-modal.error .msg { color: var(--error); }
+        .open-ui-modal .actions { margin-top: 16px; display: none; }
+        .open-ui-modal.error .actions { display: block; }
+    </style>
 </head>
-<body>
+<body{% if project_loaded %} data-project-loaded="true"{% endif %}>
 
 <!-- ── Top Bar ──────────────────────────────────────────────── -->
 <div class="topbar">
@@ -22,63 +287,36 @@
         </span>
         <span class="project-name" id="topbar-project-name"></span>
     </div>
-    <div class="topbar-actions" id="topbar-actions" style="display:none">
-        <button class="btn btn-outline btn-sm" onclick="showSetup()">Switch Project</button>
-        <button class="btn btn-danger btn-sm" onclick="quitProject()">Quit</button>
+    <div class="topbar-actions" id="topbar-actions" style="display:{% if project_loaded %}flex{% else %}none{% endif %}">
+        <button class="btn btn-outline btn-sm" onclick="openProjectFolder()" title="Open the project directory in the system file manager">Open Project Folder</button>
     </div>
 </div>
 
-<!-- ── Setup Screen (no project loaded) ────────────────────── -->
-<div id="setup-screen" class="setup-container">
+<!-- ── No-project bounce notice ─────────────────────────────────
+     Creating and opening projects lives entirely in the VICARIUS UI launcher.
+     This orchestrator window only ever shows the 8-step view for the project
+     VICARIUS hands it. If it is somehow loaded without a project, orchestrator.js
+     bounces back to the VICARIUS UI rather than showing any local home screen.
+     This block is just the brief "returning..." placeholder shown during that
+     bounce; it carries no create/open forms. -->
+<div id="setup-screen" class="setup-container"{% if project_loaded %} style="display:none" data-state="hidden"{% endif %}>
     <div class="logo">
         <h1>REEF POINT SEG</h1>
         <p>CVR &rarr; CLIP &rarr; SAM3 &rarr; YOLO11</p>
     </div>
-
-    <!-- Resume banner (only shown when server already has a project loaded) -->
-    <div id="resume-card" class="card" style="display:none;border:1px solid var(--magenta)">
-        <h2>Resume Previous Session</h2>
+    <div class="card" style="text-align:center">
         <p style="color:var(--text-dim);margin-bottom:12px">
-            The orchestrator still has a project loaded from an earlier session:
-            <strong id="resume-name"></strong>
+            Projects are created and opened from the VICARIUS UI. Returning you there&hellip;
         </p>
-        <div class="btn-group">
-            <button class="btn btn-magenta" onclick="resumeLoaded()">Resume</button>
-            <button class="btn btn-outline" onclick="discardLoaded()">Discard &amp; Start Fresh</button>
-        </div>
-    </div>
-
-    <div class="card">
-        <h2>New Project</h2>
-        <div class="form-group">
-            <label>Project Name</label>
-            <input type="text" id="new-name" placeholder="e.g. OFRA_PA_demo">
-        </div>
-        <div class="form-group">
-            <label>Base Directory</label>
-            <input type="text" id="new-basedir" placeholder="/path/to/projects/" value="{{ projects_dir }}">
-        </div>
-        <div class="btn-group">
-            <button class="btn btn-magenta" onclick="createProject()">Create Project</button>
-        </div>
-    </div>
-
-    <div class="divider">or</div>
-
-    <div class="card">
-        <h2>Open Existing Project</h2>
-        <div class="form-group">
-            <label>Project Directory</label>
-            <input type="text" id="open-dir" placeholder="/path/to/project_20260415_abc123/">
-        </div>
-        <div class="btn-group">
-            <button class="btn btn-magenta" onclick="openProject()">Open Project</button>
+        <div class="btn-group" style="justify-content:center">
+            <button class="btn btn-magenta" onclick="bounceToVicarius()"
+                title="Go back to the VICARIUS UI to create or open a Reef Point Seg project.">Back to VICARIUS UI</button>
         </div>
     </div>
 </div>
 
 <!-- ── Main App (project loaded) ───────────────────────────── -->
-<div id="app-screen" class="app-container" style="display:none">
+<div id="app-screen" class="app-container" style="display:{% if project_loaded %}flex{% else %}none{% endif %}">
 
     <!-- Sidebar -->
     <div class="sidebar visible">
@@ -86,14 +324,14 @@
             <li data-step="1" onclick="switchStep(1)">
                 <div class="step-circle">1</div>
                 <div class="step-info">
-                    <div class="step-title">Make All Points</div>
+                    <div class="step-title">Fetch Points</div>
                     <div class="step-status" id="step1-status-text">locked</div>
                 </div>
             </li>
             <li data-step="2" onclick="switchStep(2)">
                 <div class="step-circle">2</div>
                 <div class="step-info">
-                    <div class="step-title">Recode Species</div>
+                    <div class="step-title">Fetch Labels</div>
                     <div class="step-status" id="step2-status-text">locked</div>
                 </div>
             </li>
@@ -107,7 +345,7 @@
             <li data-step="4" onclick="switchStep(4)">
                 <div class="step-circle">4</div>
                 <div class="step-info">
-                    <div class="step-title">Route Images (OCR)</div>
+                    <div class="step-title">Place Points</div>
                     <div class="step-status" id="step4-status-text">locked</div>
                 </div>
             </li>
@@ -139,6 +377,20 @@
                     <div class="step-status" id="step8-status-text">locked</div>
                 </div>
             </li>
+            <li class="nav-section" aria-hidden="true"
+                style="pointer-events:none;padding-top:14px;margin-top:8px;border-top:1px solid rgba(255,255,255,0.08)">
+                <div class="step-info"><div class="step-title"
+                    style="opacity:.55;font-size:11px;letter-spacing:.09em;text-transform:uppercase">Review</div></div>
+            </li>
+            <li data-step="expertids" onclick="switchStep('expertids')"
+                style="cursor:pointer;border-left:3px solid #00c8dc"
+                title="Send the masks you flagged REVIEW to an outside taxonomic expert and fold their answers back in. Publishes flagged masks to the GitHub Pages review site, gives you the email request text, and ingests the reviewer CSV they return into consensus and accept. Re-runnable any time; never blocks training.">
+                <div class="step-circle" style="background:#00c8dc;color:#06222a">&#9733;</div>
+                <div class="step-info">
+                    <div class="step-title">Expert Review I/O</div>
+                    <div class="step-status">review I/O &middot; run any time</div>
+                </div>
+            </li>
         </ul>
     </div>
 
@@ -148,39 +400,49 @@
         <!-- ── Step 1: makeAllPoints ──────────────────────── -->
         <div class="step-panel" id="panel-1">
             <div class="card">
-                <h2>Step 1: Make All Points</h2>
+                <h2>Step 1: Fetch Points</h2>
                 <div class="step-description">
-                    <p><strong>What this does:</strong> Parses ~839 TCRMP Coral Video Review (CVR) Excel workbooks spanning 2001&ndash;2025 into a single unified CSV dataset. Each row represents one benthic point observation (species ID at a specific frame/transect/site/date). This is the foundation dataset for all downstream steps.</p>
-                    <p><strong>Produces:</strong> <code>all_points.csv</code> (~2.3M rows), <code>master_codes.csv</code> (~130 species codes), and a <code>parse_log.txt</code>.</p>
-                    <p><strong>Runtime:</strong> ~2&ndash;5 minutes depending on disk speed.</p>
+                    <p>Step 1 makes the point dataset every later step reads: <code>all_points.csv</code>, one row per benthic point annotation, plus <code>master_codes.csv</code>, the label-code lookup. Without it there are no points to balance, place, or segment.</p>
+                    <p><strong>Do this:</strong> paste the paths to an existing <code>all_points.csv</code> and <code>master_codes.csv</code> from a previous run and press Fetch Points. Build from raw workbooks only when no such CSV exists yet, under "Make points from scratch".</p>
+                    <p><strong>What happens:</strong> Fetch Points symlinks the two CSVs into this project with no re-parsing. Make points from scratch parses about 839 raw CVR Excel workbooks (2001&ndash;2025) into a fresh <code>all_points.csv</code> (about 2.3M point rows) and <code>master_codes.csv</code> (about 130 label codes), which takes 2 to 5 minutes.</p>
+                    <p><strong>Next:</strong> Step 2 reads <code>all_points.csv</code> and <code>master_codes.csv</code> to recode the label codes.</p>
+                    <details class="advanced">
+                        <summary>Background: why this step exists</summary>
+                        <p>The TCRMP reef monitoring program records benthic point counts from video transects. Each survey is stored as an Excel CVR (Coral Visual Record) workbook, about 839 of them spanning 2001 to 2025, one workbook per survey. A workbook holds the per-frame, per-transect label code at each point (20 points, A to T, per frame). The workbooks use three different layouts across the years, so the points live in spreadsheets that downstream code cannot read directly. This step parses every workbook into one flat table, <code>all_points.csv</code> (about 2.3M point rows), and aggregates the per-code lookup into <code>master_codes.csv</code> (about 130 label codes), so the rest of the pipeline works from CSV instead of Excel.</p>
+                    </details>
                 </div>
 
-                <div class="divider">Option A: Run from scratch</div>
-                <div class="form-group">
-                    <label>Input Directory (CVR Excel files)</label>
-                    <input type="text" id="s1-input-dir">
-                </div>
-                <div class="btn-group">
-                    <button class="btn btn-magenta" id="s1-run-btn" onclick="runStep(1)">Run makeAllPoints</button>
-                </div>
-
-                <div class="divider">Option B: Link existing output</div>
-                <p style="color:var(--text-dim);font-size:13px;margin-bottom:8px">Already have all_points.csv from a previous run? Paste the path to skip re-parsing.</p>
-                <div class="form-group">
-                    <label>Existing all_points.csv</label>
-                    <input type="text" id="s1-existing-ap" placeholder="e.g. /path/to/all_points.csv" value="{{ all_points_csv }}">
-                </div>
-                <div class="form-group">
-                    <label>Existing master_codes.csv</label>
-                    <input type="text" id="s1-existing-mc" placeholder="e.g. /path/to/master_codes.csv" value="{{ master_codes_csv }}">
-                </div>
-                <div class="btn-group">
-                    <button class="btn btn-outline" onclick="linkExistingStep1()">Link Existing &amp; Skip to Step 2</button>
+                <div class="divider">Fetch Points <span style="color:var(--magenta-light)">(default)</span></div>
+                <div style="border:1px solid var(--magenta);border-radius:6px;padding:12px 14px;margin-bottom:8px">
+                    <p style="color:var(--text-dim);font-size:13px;margin-bottom:8px">Paste the paths to an <code>all_points.csv</code> and <code>master_codes.csv</code> from a previous run. We symlink them so downstream steps use them with no re-parsing. This is the usual path.</p>
+                    <div class="form-group">
+                        <label>Existing all_points.csv</label>
+                        <input type="text" id="s1-existing-ap" placeholder="e.g. /path/to/all_points.csv" value="{{ all_points_csv }}"
+                            title="Absolute path to an existing all_points.csv produced by a previous run. Default: empty. Used by /api/step/1/link to symlink instead of re-parsing.">
+                    </div>
+                    <div class="form-group">
+                        <label>Existing master_codes.csv</label>
+                        <input type="text" id="s1-existing-mc" placeholder="e.g. /path/to/master_codes.csv" value="{{ master_codes_csv }}"
+                            title="Absolute path to an existing master_codes.csv. Default: empty. Used by /api/step/1/link alongside the all_points link.">
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-magenta" id="s1-fetch-btn" onclick="linkExistingStep1()" title="Symlink the existing all_points.csv and master_codes.csv into this project so downstream steps can use them - no re-parsing. Press Next when done.">Fetch Points</button>
+                    </div>
                 </div>
 
-                <div class="btn-group" style="margin-top:8px">
-                    <button class="btn btn-outline btn-sm" onclick="resetStep(1)">Reset Step</button>
-                </div>
+                <details class="advanced">
+                    <summary>Make points from scratch (run occasionally)</summary>
+                    <p style="color:var(--text-dim);font-size:13px;margin-bottom:8px">Only needed when no <code>all_points.csv</code> exists yet. Parses the raw CVR Excel workbooks (about 2 to 5 min).</p>
+                    <div class="form-group">
+                        <label>Input Directory (CVR Excel files)</label>
+                        <input type="text" id="s1-input-dir"
+                            title="Directory containing TCRMP CVR Excel workbooks. Default: empty. Passed to makeAllPoints.py as --input-dir; every .xlsx below is parsed into all_points.csv.">
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-outline" id="s1-run-btn" onclick="runStep(1)" title="Parse every CVR .xlsx below the input directory into all_points.csv and master_codes.csv.">Run makeAllPoints</button>
+                        <button class="btn btn-outline btn-sm" onclick="openStepFolder(1)" title="Open this step's output folder in the system file manager.">Open Folder</button>
+                    </div>
+                </details>
 
                 <div id="s1-progress" class="progress-bar-container" style="display:none">
                     <div class="progress-bar"><div class="progress-fill" id="s1-progress-fill"></div></div>
@@ -188,17 +450,23 @@
                 </div>
                 <div id="s1-result"></div>
                 <div class="log-output" id="s1-log" style="display:none"></div>
+                <div class="step-nav-footer" id="nav-footer-1"></div>
             </div>
         </div>
 
         <!-- ── Step 2: recodeSpecies ──────────────────────── -->
         <div class="step-panel" id="panel-2">
             <div class="card">
-                <h2>Step 2: Recode Species</h2>
+                <h2>Step 2: Fetch Labels</h2>
                 <div class="step-description">
-                    <p><strong>What this does:</strong> Coral taxonomy has changed over the years (e.g., <em>Montastraea</em> &rarr; <em>Orbicella</em>). This step applies species code remappings so that old and new names map to a single consistent code. You can also exclude ambiguous codes from top-10 coral ranking.</p>
-                    <p><strong>Produces:</strong> <code>all_points_recoded.csv</code>, <code>master_codes_recoded.csv</code>, and <code>remap_log.json</code> (audit trail).</p>
-                    <p><strong>Tip:</strong> If you've already done this once, load a previous remap log to auto-apply the same settings instantly.</p>
+                    <p>Step 2 collapses the historical label codes onto one consistent code per organism, so a species counted under several old codes is counted once. This is what makes downstream label counts and the trained classes coherent.</p>
+                    <p><strong>Do this:</strong> Browse to a <code>remap_log.json</code> from a previous recode and press Load Labels, or open the recode UI to build a new remap.</p>
+                    <p><strong>What happens:</strong> the remap is applied to Step 1's <code>all_points.csv</code> (about 2.3M point rows), reassigning renamed codes (for example <em>Montastraea</em> &rarr; <em>Orbicella</em>) onto one code and writing <code>all_points_recoded.csv</code>, <code>master_codes_recoded.csv</code>, and <code>remap_log.json</code> as an audit trail.</p>
+                    <p><strong>Next:</strong> Step 3 reads <code>master_codes_recoded.csv</code> to build the target-label list and <code>all_points_recoded.csv</code> to count frames per label.</p>
+                    <details class="advanced">
+                        <summary>Background: why this step exists</summary>
+                        <p>Coral taxonomy was revised over the 2001 to 2025 survey span, so the same organism appears under several historical codes. For example the <em>Montastraea</em> genus was reclassified to <em>Orbicella</em> in 2012, and the older workbooks kept the old codes while newer ones used the new codes. The makeAllPoints parse in Step 1 preserves every code as written in its source workbook, so <code>all_points.csv</code> still carries those drifted codes side by side. If they were left split, one species would be scattered across multiple labels and its point count would read low. Step 2 applies a remap that reassigns each old code to one current code and records every change in <code>remap_log.json</code>, so the recoded dataset has one code per organism and the change is auditable.</p>
+                    </details>
                 </div>
 
                 <h3>Load Previous Remap Settings</h3>
@@ -207,7 +475,8 @@
                     <div style="display:flex;gap:8px">
                         <input type="text" id="s2-remap-path" style="flex:1"
                             value=""
-                            placeholder="Click Browse to find remap logs...">
+                            placeholder="Click Browse to find remap logs..."
+                            title="Path to a remap_log.json from a previous recode session. Default: empty. Feeds /api/remap/load and /api/remap/apply so you skip the interactive UI.">
                         <button class="btn btn-outline btn-sm" onclick="browseRemaps()">Browse</button>
                     </div>
                 </div>
@@ -215,8 +484,9 @@
                 <div id="s2-remap-preview" style="display:none"></div>
 
                 <div class="btn-group">
-                    <button class="btn btn-magenta" id="s2-auto-btn" onclick="autoApplyRemap()">Auto-Apply Loaded Remaps</button>
-                    <button class="btn btn-outline" id="s2-interactive-btn" onclick="runStep(2)">Open Interactive UI</button>
+                    <button class="btn btn-magenta" id="s2-auto-btn" onclick="autoApplyRemap()" title="Apply the loaded remap log to Step 1's points and write the recoded outputs. No interactive UI.">Load Labels</button>
+                    <button class="btn btn-outline" id="s2-interactive-btn" onclick="openStepService(2)" title="Launch the interactive recode UI in a new browser tab.">Open Recode UI</button>
+                    <button class="btn btn-outline btn-sm" onclick="openStepFolder(2)" title="Open this step's output folder in the system file manager.">Open Folder</button>
                 </div>
 
                 <div id="s2-service" style="display:none;margin-top:16px">
@@ -224,7 +494,6 @@
                         <span class="health-dot" id="s2-health"></span>
                         <span id="s2-health-text">Starting...</span>
                     </div>
-                    <button class="btn btn-magenta btn-sm" id="s2-open-window" onclick="openServiceWindow(2)" style="margin:8px 0">Open Recode UI in New Window</button>
                     <div class="btn-group">
                         <button class="btn btn-success btn-sm" onclick="markDone(2)">Mark Complete &amp; Continue</button>
                         <button class="btn btn-danger btn-sm" onclick="stopStep(2)">Stop Service</button>
@@ -237,6 +506,7 @@
                 </div>
                 <div id="s2-result"></div>
                 <div class="log-output" id="s2-log" style="display:none"></div>
+                <div class="step-nav-footer" id="nav-footer-2"></div>
             </div>
         </div>
 
@@ -245,41 +515,70 @@
             <div class="card">
                 <h2>Step 3: Choose Images</h2>
                 <div class="step-description">
-                    <p><strong>What this does:</strong> Selects a balanced set of video still frames for building a training dataset. Frames are chosen so that each target coral species is equally represented across years, sites, and transects. This prevents temporal, spatial, or species bias in the final dataset.</p>
-                    <p><strong>Key settings:</strong> Choose which species to target, how many frame-instances per species, and the year range. More instances = larger dataset but longer processing downstream.</p>
-                    <p><strong>Produces:</strong> <code>selected_frames.csv</code> (master list), route files for CPC vs OCR processing, diagnostic plots.</p>
+                    <p>Step 3 builds a balanced training set of video still frames. It chooses frames so each label you target is represented evenly across years, sites, and transects, which stops the model from learning a year or a site instead of the species.</p>
+                    <p><strong>Do this:</strong> pick the labels to target below, set how many frame-instances you want per label, and set the year range, then run the selection.</p>
+                    <p><strong>What happens:</strong> the selector reads the recoded points from Step 2 (<code>all_points_recoded.csv</code>) and chooses frames toward your per-label target, writing <code>selected_frames.csv</code> plus the CPC and OCR route files and diagnostic plots.</p>
+                    <p><strong>Next:</strong> Step 4 reads <code>selected_frames.csv</code> to pull the exact point coordinates for each frame.</p>
                 </div>
+
                 <div class="form-group">
-                    <label>Target Species (comma-separated codes)</label>
-                    <input type="text" id="s3-species">
+                    <label>Target labels</label>
+                    <p class="picker-hint">Labels are grouped by category and collapsed. Click a category to expand it, then check the labels you want. Nothing is selected until you choose. Your picks appear as chips below.</p>
+                    <div class="label-picker-toolbar">
+                        <input type="text" id="s3-label-filter" placeholder="Filter by code / name / category"
+                            title="Type to filter labels by code, full name, or category. Matching categories expand automatically. Default: empty.">
+                        <button type="button" class="btn btn-outline btn-sm" id="s3-expand-all" onclick="toggleAllStep3Groups(true)"
+                            title="Open every category group so all labels are visible.">Expand all</button>
+                        <button type="button" class="btn btn-outline btn-sm" id="s3-collapse-all" onclick="toggleAllStep3Groups(false)"
+                            title="Collapse every category group back to headers only.">Collapse all</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="selectAllStep3Labels(false)"
+                            title="Uncheck every label and clear all chips.">Clear selection</button>
+                    </div>
+                    <div id="s3-label-picker" class="label-picker">
+                        <span class="muted">Loading labels from Step 2...</span>
+                    </div>
+                    <div id="s3-label-status" class="label-picker-status"></div>
+                    <div class="label-chips-wrap">
+                        <div class="label-chips-title">Selected labels (<span id="s3-chip-count">0</span>)</div>
+                        <div id="s3-label-chips" class="label-chips"><span class="muted">None selected yet. Pick labels above.</span></div>
+                    </div>
+                    <!-- Hidden store read by collectConfig(); keeps the target_species wire format. -->
+                    <input type="hidden" id="s3-species">
                 </div>
+
                 <div class="form-row">
                     <div class="form-group">
-                        <label>Instances per Species</label>
-                        <input type="number" id="s3-target" value="1000">
+                        <label>Instances per Label</label>
+                        <input type="number" id="s3-target" value="1000"
+                            title="Target number of frame-instances per selected label. Default: 1000. Passed to select_images.py as --target-instances; larger = bigger dataset and slower downstream steps.">
                     </div>
                     <div class="form-group">
                         <label>Min Year</label>
-                        <input type="number" id="s3-min-year" value="2014">
+                        <input type="number" id="s3-min-year" value="2014"
+                            title="Earliest survey year to sample frames from. Default: 2014. Passed to select_images.py as --min-year.">
                     </div>
                     <div class="form-group">
                         <label>Max Year</label>
-                        <input type="number" id="s3-max-year" value="2025">
+                        <input type="number" id="s3-max-year" value="2025"
+                            title="Latest survey year to sample frames from. Default: 2025. Passed to select_images.py as --max-year.">
                     </div>
                 </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Category Filter</label>
-                        <input type="text" id="s3-category" value="Coral">
-                    </div>
-                </div>
-                <div class="checkbox-group">
-                    <input type="checkbox" id="s3-skip-check">
-                    <label for="s3-skip-check">Skip image verification (faster, recommended for demo)</label>
-                </div>
+
+                <details class="advanced">
+                    <summary>Why a label sometimes does not reach its target</summary>
+                    <p>The selector counts one instance per frame that contains a label, not per point. It keeps pulling frames for a label until the target is met or it runs out of frames that contain that label. A label can finish below target for reasons that are about the data, not a fault in the selection:</p>
+                    <ul>
+                        <li><strong>Not enough frames exist.</strong> A rare label may appear in fewer frames than the target, so every available frame is taken and the count still falls short.</li>
+                        <li><strong>Year range.</strong> Min Year and Max Year shrink the pool. A label common only outside that window will be scarce inside it.</li>
+                        <li><strong>Pre-2020 frames without point coordinates.</strong> Older frames are kept only when their CPC point coordinates are on file; frames missing those coordinates are dropped before selection, which lowers the available count for labels concentrated in early years.</li>
+                    </ul>
+                    <p>When a label finishes short, the selection log reports it as short and states how many frames actually exist for it.</p>
+                </details>
+
                 <div class="btn-group">
-                    <button class="btn btn-magenta" id="s3-run-btn" onclick="runStep(3)">Run Image Selection</button>
-                    <button class="btn btn-outline btn-sm" onclick="resetStep(3)">Reset Step</button>
+                    <button class="btn btn-magenta" id="s3-run-btn" onclick="runStep(3)"
+                        title="Run select_images.py with the current target labels, instance count, and year range. Image availability is always verified.">Run Image Selection</button>
+                    <button class="btn btn-outline btn-sm" onclick="openStepFolder(3)" title="Open this step's output folder in the system file manager.">Open Folder</button>
                 </div>
                 <div id="s3-progress" class="progress-bar-container" style="display:none">
                     <div class="progress-bar"><div class="progress-fill" id="s3-progress-fill"></div></div>
@@ -287,34 +586,29 @@
                 </div>
                 <div id="s3-result"></div>
                 <div class="log-output" id="s3-log" style="display:none"></div>
+                <div class="step-nav-footer" id="nav-footer-3"></div>
             </div>
         </div>
 
-        <!-- ── Step 4: routeChosenImages ──────────────────── -->
+        <!-- ── Step 4: placePoints ──────────────────── -->
         <div class="step-panel" id="panel-4">
             <div class="card">
-                <h2>Step 4: Route Chosen Images (OCR)</h2>
+                <h2>Step 4: Place Points</h2>
                 <div class="step-description">
-                    <p><strong>What this does:</strong> Takes selected frames and extracts exact (x,y) pixel coordinates for each benthic point annotation. Pre-2020 frames use existing CPC point coordinates. Post-2020 frames are processed through a GPU-accelerated OCR pipeline that detects letter labels (A&ndash;T) and crosshair markers in annotated images.</p>
-                    <p><strong>Interactive:</strong> Opens a review UI where you can verify and correct point detections, then export verified data in SAM3-compatible format. Process batches, review, and export iteratively.</p>
-                    <p><strong>Requires:</strong> NVIDIA GPU (CUDA) for OCR processing.</p>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Port</label>
-                        <input type="number" id="s4-port" value="5065">
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label>TCRMP Clip Directory (source images, read-only)</label>
-                    <input type="text" id="s4-clip-dir">
+                    <p>Step 4 fixes the exact (x,y) pixel location of each benthic point in every selected frame, which is what SAM3 needs as a click to segment the right colony. It exports those verified points in SAM3-compatible format.</p>
+                    <p><strong>Do this:</strong> open the Place Points review UI, work through each batch verifying and correcting the detected points, then export each batch.</p>
+                    <p><strong>What happens:</strong> the review UI loads the frames in <code>selected_frames.csv</code> from Step 3. Pre-2020 frames reuse their existing CPC point coordinates; post-2020 frames run through a GPU OCR pass that reads the letter labels (A&ndash;T) and crosshair markers in the annotated images. Export writes the verified point coordinates per frame.</p>
+                    <p><strong>Next:</strong> Step 5 reads the exported points and uses each as a SAM3 prompt to segment the colony at that location.</p>
+                    <p><strong>Requires:</strong> NVIDIA GPU (CUDA) for the OCR pass.</p>
                 </div>
                 <div class="checkbox-group">
-                    <input type="checkbox" id="s4-target-only" checked>
-                    <label for="s4-target-only">Target species only</label>
+                    <input type="checkbox" id="s4-target-only" checked
+                        title="Limit OCR to frames whose labels are in Step 3's target list. Default: on. Turn off to OCR every selected frame regardless of label.">
+                    <label for="s4-target-only">Target labels only</label>
                 </div>
                 <div class="checkbox-group">
-                    <input type="checkbox" id="s4-auto-sam3" checked>
+                    <input type="checkbox" id="s4-auto-sam3" checked
+                        title="After every Export Batch, auto-kick Step 5 (SAM3) to segment the new frames. Default: on. Turn off if you want to export without running segmentation.">
                     <label for="s4-auto-sam3">
                         Auto-start SAM3 segmentation on each batch export
                         <span style="color:var(--text-dim);font-size:12px;display:block;margin-left:22px">
@@ -329,7 +623,8 @@
                      which the orchestrator auto-boot now skips. Moved here so
                      they're actually reachable. -->
                 <div class="checkbox-group">
-                    <input type="checkbox" id="s4-reference">
+                    <input type="checkbox" id="s4-reference"
+                        title="Render pre-existing OCR/CPC points read-only on the canvas. Default: off. When on, points do not populate the Labels panel or get exported.">
                     <label for="s4-reference">
                         Show existing points as read-only reference (don't register as labels)
                         <span style="color:var(--text-dim);font-size:12px;display:block;margin-left:22px">
@@ -340,7 +635,8 @@
                     </label>
                 </div>
                 <div class="checkbox-group">
-                    <input type="checkbox" id="s4-shuffle">
+                    <input type="checkbox" id="s4-shuffle"
+                        title="Randomize the order frames appear for review. Default: off. Per-frame progress is still tracked on disk regardless.">
                     <label for="s4-shuffle">
                         Shuffle review queue
                         <span style="color:var(--text-dim);font-size:12px;display:block;margin-left:22px">
@@ -353,7 +649,8 @@
                 <div class="form-row">
                     <div class="form-group">
                         <label>Review batch size</label>
-                        <select id="s4-batch-size">
+                        <select id="s4-batch-size"
+                            title="Frames pulled into the review UI per batch. Default: 10. 'All' loads everything — fine for small sets, heavy for large ones.">
                             <option value="5">5 frames</option>
                             <option value="10" selected>10 frames (default)</option>
                             <option value="20">20 frames</option>
@@ -365,9 +662,31 @@
                         </div>
                     </div>
                 </div>
+                <details class="advanced">
+                    <summary>Advanced</summary>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Port</label>
+                            <input type="number" id="s4-port" value="5065"
+                                title="TCP port for the OCR review sub-app. Default: 5065. Bound only on localhost.">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>TCRMP Clip Directory (source images, read-only)</label>
+                        <input type="text" id="s4-clip-dir"
+                            title="Absolute path to the Dropbox TCRMP_clip directory holding original video stills. Default: empty. Read-only source for the OCR pipeline.">
+                    </div>
+                </details>
                 <div class="btn-group">
-                    <button class="btn btn-magenta" id="s4-run-btn" onclick="runStep(4)">Launch OCR Service</button>
-                    <button class="btn btn-outline btn-sm" onclick="resetStep(4)">Reset Step</button>
+                    <button class="btn btn-magenta" id="s4-run-btn" onclick="openStepService(4)" title="Start the Place Points review service if needed, then open it in a new browser tab.">Open Place Points UI</button>
+                    <button class="btn btn-outline btn-sm" onclick="openStepFolder(4)" title="Open this step's output folder in the system file manager.">Open Folder</button>
+                </div>
+                <!-- Live batch progress — reuses the SAM3 status the orchestrator
+                     already polls. TODO: a true per-frame "review batches done/left"
+                     count needs a dedicated step-4 review-queue status field; until
+                     then this mirrors SAM3 frame progress as the closest signal. -->
+                <div class="batch-readout" id="s4-batch-readout" title="batches done / left — derived from SAM3 frame progress (see TODO in template)">
+                    batches: <strong id="s4-batch-done">0</strong> done / <strong id="s4-batch-left">0</strong> left
                 </div>
                 <!-- Compact SAM3 status — visible here too so you can track
                      background progress while annotating instead of switching tabs. -->
@@ -391,14 +710,25 @@
                         <span id="s4-health-text">Starting...</span>
                         <span class="elapsed-timer" id="s4-elapsed"></span>
                     </div>
-                    <button class="btn btn-magenta btn-sm" id="s4-open-window" onclick="openServiceWindow(4)" style="margin:8px 0">Open OCR Review UI in New Window</button>
-                    <p style="color:var(--text-dim);font-size:12px;margin:4px 0">Use the review UI to process batches, verify points, and export. Come back here when done.</p>
+                    <p style="color:var(--text-dim);font-size:12px;margin:4px 0">Use the review UI (opened in a new tab) to process batches, verify points, and export. Come back here when done.</p>
                     <div class="btn-group">
                         <button class="btn btn-success btn-sm" onclick="markDone(4)">Mark Complete &amp; Continue to Step 5</button>
                         <button class="btn btn-danger btn-sm" onclick="stopStep(4)">Stop Service</button>
                     </div>
                 </div>
                 <div class="log-output" id="s4-log" style="display:none"></div>
+                <div class="step-nav-footer" id="nav-footer-4"></div>
+            </div>
+        </div>
+
+        <!-- ── Expert Review I/O (optional, re-runnable; lives in the Review group) ── -->
+        <div class="step-panel" id="panel-expertids">
+            <div class="card">
+                <h2>Expert Review I/O <span style="font-size:13px;color:#00c8dc">(send REVIEW masks out, fold expert IDs back in)</span></h2>
+                {# Native panel — the Add-Expert-IDs UI is part of this page (its
+                   routes live under /expertids via the shared blueprint). No iframe. #}
+                {% include 'expertids/panel.html' %}
+                <div class="step-nav-footer" id="nav-footer-expertids"></div>
             </div>
         </div>
 
@@ -407,64 +737,69 @@
             <div class="card">
                 <h2>Step 5: Segment Images (SAM3)</h2>
                 <div class="step-description">
-                    <p><strong>What this does:</strong> Uses Meta's Segment Anything Model 3 (SAM3) to generate pixel-level instance segmentation masks for each coral colony. Each verified point click from Step 4 becomes a SAM3 prompt. The model segments the coral at that point, producing a polygon mask.</p>
-                    <p><strong>Interactive:</strong> Opens a review UI where you can accept/reject masks, refine boundaries with additional clicks, merge overlapping masks, and scan for similar colonies. Export produces YOLO-format labels for training object detection models.</p>
-                    <p><strong>Requires:</strong> Dual NVIDIA GPUs (CUDA) &mdash; one for point prompts, one for exemplar scanning.</p>
+                    <p>Step 5 turns each verified point into a per-colony segmentation mask, the pixel outlines a detector trains on. It exports those masks as YOLO-format labels.</p>
+                    <p><strong>Do this:</strong> open the SAM3 review UI, then per batch accept or reject masks, refine boundaries with extra clicks, merge overlapping masks, and export.</p>
+                    <p><strong>What happens:</strong> each verified point from Step 4 becomes a SAM3 prompt; Meta's Segment Anything Model 3 segments the colony at that point into a polygon mask. Export writes YOLO-format label files (<code>all_images/</code>, <code>all_labels/</code>, <code>data.yaml</code>).</p>
+                    <p><strong>Next:</strong> Step 6 reads <code>all_images/</code>, <code>all_labels/</code>, and <code>data.yaml</code> to train the segmentation model.</p>
+                    <p><strong>Requires:</strong> dual NVIDIA GPUs (CUDA), one for point prompts and one for exemplar scanning.</p>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>Port</label>
-                        <input type="number" id="s5-port" value="5070">
+                        <label>Confidence Threshold
+                            <span class="info-circle" title="Minimum SAM3 mask score to accept. Default: 0.5. Lower = more masks survive (noisier); higher = stricter.">&#9432;</span>
+                        </label>
+                        <input type="number" id="s5-confidence" value="0.5" step="0.05"
+                            title="Minimum SAM3 mask score to accept. Default: 0.5. Lower = more masks survive (noisier); higher = stricter.">
                     </div>
                     <div class="form-group">
-                        <label>SAM3 Tracker Device</label>
-                        <input type="text" id="s5-tracker-device" value="cuda:1">
+                        <label>Min Mask Area (px)
+                            <span class="info-circle" title="Drop masks smaller than this many pixels. Default: 500. Filters spurious tiny segments.">&#9432;</span>
+                        </label>
+                        <input type="number" id="s5-min-area" value="500"
+                            title="Drop masks smaller than this many pixels. Default: 500. Filters spurious tiny segments.">
                     </div>
                     <div class="form-group">
-                        <label>SAM3 Exemplar Device</label>
-                        <input type="text" id="s5-exemplar-device" value="cuda:0">
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Confidence Threshold</label>
-                        <input type="number" id="s5-confidence" value="0.5" step="0.05">
-                    </div>
-                    <div class="form-group">
-                        <label>Min Mask Area (px)</label>
-                        <input type="number" id="s5-min-area" value="500">
-                    </div>
-                    <div class="form-group">
-                        <label>Merge Distance (px)</label>
-                        <input type="number" id="s5-merge-dist" value="30">
+                        <label>Merge Distance (px)
+                            <span class="info-circle" title="Merge nearby masks of the same class whose centroids are within this pixel distance. Default: 30. 0 disables merging.">&#9432;</span>
+                        </label>
+                        <input type="number" id="s5-merge-dist" value="30"
+                            title="Merge nearby masks of the same class whose centroids are within this pixel distance. Default: 30. 0 disables merging.">
                     </div>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>Overlap Strategy</label>
-                        <select id="s5-overlap">
+                        <label>Overlap Strategy
+                            <span class="info-circle" title="How to resolve overlapping masks. Default: larger_wins. 'higher_score' prefers higher-confidence; 'first_wins' keeps the earlier mask.">&#9432;</span>
+                        </label>
+                        <select id="s5-overlap"
+                            title="How to resolve overlapping masks. Default: larger_wins. 'higher_score' prefers higher-confidence; 'first_wins' keeps the earlier mask.">
                             <option value="larger_wins">larger_wins</option>
                             <option value="higher_score">higher_score</option>
                             <option value="first_wins">first_wins</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Thin Mask Ratio</label>
-                        <input type="number" id="s5-thin-ratio" value="0.10" step="0.01">
+                        <label>Thin Mask Ratio
+                            <span class="info-circle" title="Drop masks whose min-side / max-side bbox ratio falls below this. Default: 0.10. Filters slivers/strips.">&#9432;</span>
+                        </label>
+                        <input type="number" id="s5-thin-ratio" value="0.10" step="0.01"
+                            title="Drop masks whose min-side / max-side bbox ratio falls below this. Default: 0.10. Filters slivers/strips.">
                     </div>
                     <div class="form-group">
-                        <label>Polygon Simplify Epsilon</label>
-                        <input type="number" id="s5-simplify" value="0.001" step="0.0005">
+                        <label>Polygon Simplify Epsilon
+                            <span class="info-circle" title="Ramer-Douglas-Peucker epsilon (relative to perimeter) used to simplify exported polygons. Default: 0.001. Raise for coarser polygons, lower for faithful curves.">&#9432;</span>
+                        </label>
+                        <input type="number" id="s5-simplify" value="0.001" step="0.0005"
+                            title="Ramer-Douglas-Peucker epsilon (relative to perimeter) used to simplify exported polygons. Default: 0.001. Raise for coarser polygons, lower for faithful curves.">
                     </div>
-                </div>
-                <div class="checkbox-group">
-                    <input type="checkbox" id="s5-symlink" checked>
-                    <label for="s5-symlink">Symlink images (saves disk space)</label>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>Review batch size</label>
-                        <select id="s5-batch-size">
+                        <label>Review batch size
+                            <span class="info-circle" title="Frames pulled into the SAM3 review UI per batch. Default: 10. Only takes effect on the next Start. Mirrors Step 4.">&#9432;</span>
+                        </label>
+                        <select id="s5-batch-size"
+                            title="Frames pulled into the SAM3 review UI per batch. Default: 10. Only takes effect on the next Start.">
                             <option value="5">5 frames</option>
                             <option value="10" selected>10 frames (default)</option>
                             <option value="20">20 frames</option>
@@ -476,9 +811,41 @@
                         </div>
                     </div>
                 </div>
+                <details class="advanced">
+                    <summary>Advanced</summary>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Port</label>
+                            <input type="number" id="s5-port" value="5070"
+                                title="TCP port for the SAM3 review sub-app. Default: 5070. Bound only on localhost.">
+                        </div>
+                        <div class="form-group">
+                            <label>SAM3 Tracker Device</label>
+                            <input type="text" id="s5-tracker-device" value="cuda:1"
+                                title="CUDA device for the SAM3 point-prompt tracker. Default: cuda:1. Use a different index than the exemplar device so the two can run concurrently.">
+                        </div>
+                        <div class="form-group">
+                            <label>SAM3 Exemplar Device</label>
+                            <input type="text" id="s5-exemplar-device" value="cuda:0"
+                                title="CUDA device for the SAM3 exemplar/scan pass. Default: cuda:0. Keep distinct from the tracker device to avoid contention.">
+                        </div>
+                    </div>
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="s5-symlink" checked
+                            title="When enabled, step 5 symlinks training images from the originals (in the Dropbox TCRMP_clip directory) instead of copying them. Faster, saves ~100x disk. Disable only if you need an independent copy.">
+                        <label for="s5-symlink">Symlink images (saves disk space)</label>
+                    </div>
+                </details>
                 <div class="btn-group">
-                    <button class="btn btn-magenta" id="s5-run-btn" onclick="runStep(5)">Start SAM3 Segmentation</button>
-                    <button class="btn btn-outline btn-sm" onclick="resetStep(5)">Reset Step</button>
+                    <button class="btn btn-magenta" id="s5-run-btn" onclick="openStepService(5)" title="Start SAM3 segmentation if needed, then open the review UI in a new browser tab when it's ready.">Open SAM3 Review UI</button>
+                    <button class="btn btn-outline btn-sm" onclick="openStepFolder(5)" title="Open this step's output folder in the system file manager.">Open Folder</button>
+                </div>
+                <!-- Live batch progress — reuses the SAM3 status the orchestrator
+                     already polls (processed/total frames). TODO: a true "review
+                     batches" count needs the review-queue batch size folded into
+                     the status payload; until then this tracks SAM3 frame progress. -->
+                <div class="batch-readout" id="s5-batch-readout" title="batches done / left — derived from SAM3 frame progress (see TODO in template)">
+                    batches: <strong id="s5-batch-done">0</strong> done / <strong id="s5-batch-left">0</strong> left
                 </div>
                 <div id="s5-service" style="display:none;margin-top:16px">
                     <div class="service-status-row">
@@ -501,13 +868,9 @@
                         <div id="s5-sam3-error" style="font-size:12px;color:var(--error);margin-top:4px;display:none"></div>
                     </div>
 
-                    <button class="btn btn-magenta btn-sm" id="s5-open-window" onclick="openServiceWindow(5)"
-                            style="margin:8px 0" disabled title="Available when segmentation has produced at least one frame">
-                        Open Review UI (waiting for first segmentation)
-                    </button>
                     <p style="color:var(--text-dim);font-size:12px;margin:4px 0">
-                        SAM3 runs in the background on the orchestrator side. The review UI stays closed until
-                        frames are ready — you can step away and come back.
+                        SAM3 runs in the background on the orchestrator side. The review UI (opened in a new tab
+                        above) becomes usable once frames are ready — you can step away and come back.
                     </p>
                     <div class="btn-group">
                         <button class="btn btn-success btn-sm" onclick="markDone(5)">Mark Complete &amp; Finish</button>
@@ -515,6 +878,7 @@
                     </div>
                 </div>
                 <div class="log-output" id="s5-log" style="display:none"></div>
+                <div class="step-nav-footer" id="nav-footer-5"></div>
             </div>
         </div>
 
@@ -523,9 +887,10 @@
             <div class="card">
                 <h2>Step 6: Train Segmentation Model</h2>
                 <div class="step-description">
-                    <p><strong>What this does:</strong> Takes the YOLO-format segmentation dataset exported by Step 5 (<code>all_images/</code> + <code>all_labels/</code> + <code>data.yaml</code>), splits it into train/valid/test using stratified sampling, then trains an Ultralytics YOLO segmentation model.</p>
-                    <p><strong>Runtime:</strong> Training is long — tens of minutes to hours depending on dataset size, epochs, imgsz, and GPU. You can close the orchestrator and come back; logs are persisted.</p>
-                    <p><strong>Outputs:</strong> <code>{step6_dir}/dataset/</code> (splits) and <code>{step6_dir}/runs/&lt;run_name&gt;/</code> (weights, plots, metrics).</p>
+                    <p>Step 6 trains the YOLO segmentation model that does the actual coral detection. Its weights are the deliverable the later steps evaluate and run.</p>
+                    <p><strong>Do this:</strong> name the run (or leave it blank for an auto-stamped name), pick the base model, epochs, image size, and device, then start training.</p>
+                    <p><strong>What happens:</strong> the trainer reads the YOLO-format dataset from Step 5 (<code>all_images/</code>, <code>all_labels/</code>, <code>data.yaml</code>), splits it into train/valid/test by stratified sampling, then trains an Ultralytics YOLO segmentation model. Training runs tens of minutes to hours depending on dataset size, epochs, imgsz, and GPU; logs persist, so you can close the orchestrator and come back. Outputs land in <code>{step6_dir}/dataset/</code> (splits) and <code>{step6_dir}/runs/&lt;run_name&gt;/</code> (weights, plots, metrics).</p>
+                    <p><strong>Next:</strong> Step 7 reads <code>runs/&lt;run_name&gt;/weights/best.pt</code> to evaluate the trained model on the held-out test split.</p>
                     <p style="color:var(--text-dim);font-size:12px">
                         <strong>Time-impact legend</strong> below each field:
                         <span style="color:#4ecca3">★ free</span> (bounds/naming, no compute cost) &nbsp;
@@ -542,7 +907,7 @@
                                 Load preset
                                 <span style="color:#4ecca3;font-size:10px">★ free</span>
                             </label>
-                            <select id="s6-preset-select">
+                            <select id="s6-preset-select" title="Preset YAML to bulk-fill this form. Default: empty. Refreshed from pipeline_orchestrator/presets/; Import copies its values into the form.">
                                 <option value="">(none selected)</option>
                             </select>
                             <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
@@ -562,7 +927,8 @@
                         Run name (subdir of <code>runs/</code>)
                         <span style="color:#4ecca3;font-size:10px">★ free</span>
                     </label>
-                    <input type="text" id="s6-run-name" placeholder="leave blank for auto-timestamped">
+                    <input type="text" id="s6-run-name" placeholder="leave blank for auto-timestamped"
+                        title="Folder name for this training run under runs/. Default: empty (auto-stamped {project}_YYYYMMDD_HHMMSS). Becomes ultralytics `name=`.">
                     <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
                         Unit: string. Names the run folder under <code>runs/</code>. Blank -> auto-stamped
                         <code>&lt;project_name&gt;_YYYYMMDD_HHMMSS</code>.
@@ -575,7 +941,7 @@
                             Base model
                             <span style="color:#ff6b7f;font-size:10px">★★★ major</span>
                         </label>
-                        <select id="s6-model">
+                        <select id="s6-model" title="Base seg model weights. Default: yolo11m-seg.pt. Passed to ultralytics as the weights initializer; n->x = ~4x more params + wall time.">
                             <optgroup label="YOLO11 segmentation (stable, default)">
                                 <option value="yolo11n-seg.pt">yolo11n-seg (fastest, ~2.6M params)</option>
                                 <option value="yolo11s-seg.pt">yolo11s-seg (~10M)</option>
@@ -601,7 +967,8 @@
                             Epochs
                             <span style="color:#ff6b7f;font-size:10px">★★★ major</span>
                         </label>
-                        <input type="number" id="s6-epochs" value="500" min="1">
+                        <input type="number" id="s6-epochs" value="500" min="1"
+                            title="Number of full passes over the training set. Default: 500. Linear time impact; early-stop patience cuts it short in practice.">
                         <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
                             Unit: integer count of passes over the training set. Linear time impact.
                             Use <em>patience</em> (below) to early-stop — effective epochs are usually far fewer.
@@ -612,7 +979,8 @@
                             Image size (px)
                             <span style="color:#ff6b7f;font-size:10px">★★★ major</span>
                         </label>
-                        <input type="number" id="s6-imgsz" value="512" min="128" step="32">
+                        <input type="number" id="s6-imgsz" value="512" min="128" step="32"
+                            title="Square training image size in pixels. Default: 512. GPU memory grows as imgsz^2. Passed as ultralytics `imgsz=`.">
                         <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
                             Unit: pixels (square). GPU memory grows as imgsz² ; time per epoch roughly doubles
                             when you double imgsz. 512 is a good default for coral quadrats; 640–1024 only if
@@ -624,7 +992,8 @@
                             Batch (<code>-1</code> = auto)
                             <span style="color:#f0a500;font-size:10px">★★ minor</span>
                         </label>
-                        <input type="number" id="s6-batch" value="-1" step="1">
+                        <input type="number" id="s6-batch" value="-1" step="1"
+                            title="Images per GPU step. Default: -1 (auto-size). DDP (multi-GPU) requires an explicit multiple of GPU count, e.g. 16.">
                         <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
                             Unit: images per GPU step. <code>-1</code> lets ultralytics auto-size to fit GPU memory.
                             Larger = faster per epoch but more memory. Very small (&lt;4) can destabilize training.
@@ -641,7 +1010,8 @@
                             Validation fraction
                             <span style="color:#4ecca3;font-size:10px">★ free</span>
                         </label>
-                        <input type="number" id="s6-valid" value="0.2" step="0.05" min="0" max="0.9">
+                        <input type="number" id="s6-valid" value="0.2" step="0.05" min="0" max="0.9"
+                            title="Fraction of labeled frames held out for val metrics each epoch. Default: 0.2. Passed to the pre-train splitter.">
                         <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
                             Unit: fraction in [0, 0.9]. Portion of labeled frames held out for val-set metrics
                             each epoch. 0.15–0.25 is typical.
@@ -652,7 +1022,8 @@
                             Test fraction
                             <span style="color:#4ecca3;font-size:10px">★ free</span>
                         </label>
-                        <input type="number" id="s6-test" value="0.1" step="0.05" min="0" max="0.9">
+                        <input type="number" id="s6-test" value="0.1" step="0.05" min="0" max="0.9"
+                            title="Fraction held out of training entirely for final generalization check. Default: 0.1. 0 disables the test split.">
                         <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
                             Unit: fraction in [0, 0.9]. Held out entirely from training; used for final
                             generalization check. 0 disables test-split; fine for small datasets.
@@ -663,7 +1034,8 @@
                             Min samples per class
                             <span style="color:#4ecca3;font-size:10px">★ free</span>
                         </label>
-                        <input type="number" id="s6-min-samples" value="10" min="1">
+                        <input type="number" id="s6-min-samples" value="10" min="1"
+                            title="Classes with fewer than this many labeled instances fall back to random split. Default: 10.">
                         <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
                             Unit: integer. Classes with fewer than this many labeled instances fall back to
                             random (non-stratified) split. Raise for balanced reporting; lower for sparse datasets.
@@ -674,7 +1046,8 @@
                             Early-stop patience
                             <span style="color:#f0a500;font-size:10px">★★ minor</span>
                         </label>
-                        <input type="number" id="s6-patience" value="50" min="1">
+                        <input type="number" id="s6-patience" value="50" min="1"
+                            title="Stop early if val metric doesn't improve for this many epochs. Default: 50. Passed as ultralytics `patience=`.">
                         <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
                             Unit: integer epochs. Training stops if val metric doesn't improve for this many
                             epochs. Lower = shorter real runtime but risk stopping before convergence. 30–100 typical.
@@ -691,14 +1064,16 @@
                                 Device
                                 <span style="color:#f0a500;font-size:10px">★★ minor -> ★★★ major</span>
                             </label>
-                            <select id="s6-device-preset" onchange="onStep6DeviceChange()">
-                                <option value="0" selected>Single GPU — cuda:0 (default)</option>
+                            <select id="s6-device-preset" onchange="onStep6DeviceChange()"
+                                title="Target GPU(s) for this run. Default: 0,1 (DDP across both). Passed to ultralytics as `device=`.">
+                                <option value="0">Single GPU — cuda:0</option>
                                 <option value="1">Single GPU — cuda:1</option>
-                                <option value="0,1">Dual GPU — DDP across cuda:0 + cuda:1</option>
+                                <option value="0,1" selected>Dual GPU — DDP across cuda:0 + cuda:1 (default)</option>
                                 <option value="cpu">CPU (debug only — extremely slow)</option>
                                 <option value="__custom__">Custom device string...</option>
                             </select>
-                            <input type="text" id="s6-device-custom" placeholder='e.g. "0,1,2" or "cuda:0"' style="margin-top:4px;display:none">
+                            <input type="text" id="s6-device-custom" placeholder='e.g. "0,1,2" or "cuda:0"' style="margin-top:4px;display:none"
+                                title="Free-form device string passed to ultralytics when the preset is 'Custom'. Default: empty.">
                         </div>
                         <div class="form-group" style="flex:2">
                             <label style="color:var(--magenta-light)">What is DDP?</label>
@@ -767,19 +1142,23 @@
                         <div class="form-row">
                             <div class="form-group">
                                 <label>Hue jitter<br><span style="font-size:10px;color:#666">range 0–1 · underwater tip: 0.02–0.05</span></label>
-                                <input type="number" id="s6-hsv-h" value="0.2" step="0.01" min="0" max="1">
+                                <input type="number" id="s6-hsv-h" value="0.2" step="0.01" min="0" max="1"
+                                    title="Hue jitter fraction (0-1). Default: 0.2. Passed as ultralytics `hsv_h=`; underwater tip 0.02-0.05.">
                             </div>
                             <div class="form-group">
                                 <label>Saturation jitter<br><span style="font-size:10px;color:#666">range 0–1 · underwater tip: 0.6–0.9</span></label>
-                                <input type="number" id="s6-hsv-s" value="0.3" step="0.05" min="0" max="1">
+                                <input type="number" id="s6-hsv-s" value="0.3" step="0.05" min="0" max="1"
+                                    title="Saturation jitter fraction (0-1). Default: 0.3. Passed as ultralytics `hsv_s=`.">
                             </div>
                             <div class="form-group">
                                 <label>Brightness jitter<br><span style="font-size:10px;color:#666">range 0–1 · underwater tip: 0.5–0.6</span></label>
-                                <input type="number" id="s6-hsv-v" value="0.3" step="0.05" min="0" max="1">
+                                <input type="number" id="s6-hsv-v" value="0.3" step="0.05" min="0" max="1"
+                                    title="Brightness jitter fraction (0-1). Default: 0.3. Passed as ultralytics `hsv_v=`.">
                             </div>
                             <div class="form-group">
                                 <label>P(BGR<->RGB swap)<br><span style="font-size:10px;color:#666">range 0–1 · leave 0 unless mixing conventions</span></label>
-                                <input type="number" id="s6-bgr" value="0.0" step="0.1" min="0" max="1">
+                                <input type="number" id="s6-bgr" value="0.0" step="0.1" min="0" max="1"
+                                    title="Probability of swapping BGR<->RGB per image. Default: 0. Leave 0 unless mixing channel conventions.">
                             </div>
                         </div>
                     </div>
@@ -796,33 +1175,40 @@
                         <div class="form-row">
                             <div class="form-group">
                                 <label>Rotation ±deg<br><span style="font-size:10px;color:#666">unit: degrees · 0–180 · coral tip: 5–15</span></label>
-                                <input type="number" id="s6-degrees" value="0" step="1">
+                                <input type="number" id="s6-degrees" value="0" step="1"
+                                    title="Max random rotation in degrees. Default: 0. Passed as ultralytics `degrees=`.">
                             </div>
                             <div class="form-group">
                                 <label>Translate ±fraction<br><span style="font-size:10px;color:#666">range 0–1 of image size · typical 0.1–0.2</span></label>
-                                <input type="number" id="s6-translate" value="0" step="0.05" min="0" max="1">
+                                <input type="number" id="s6-translate" value="0" step="0.05" min="0" max="1"
+                                    title="Max random translation as a fraction of image size. Default: 0. Passed as ultralytics `translate=`.">
                             </div>
                             <div class="form-group">
                                 <label>Scale ±gain<br><span style="font-size:10px;color:#666">range 0–1 · 0.3–0.6 for varied quadrat distance</span></label>
-                                <input type="number" id="s6-scale" value="0.2" step="0.05" min="0" max="1">
+                                <input type="number" id="s6-scale" value="0.2" step="0.05" min="0" max="1"
+                                    title="Max random scale gain. Default: 0.2. Passed as ultralytics `scale=`.">
                             </div>
                             <div class="form-group">
                                 <label>Shear ±deg<br><span style="font-size:10px;color:#666">unit: degrees · 0–2 is plenty</span></label>
-                                <input type="number" id="s6-shear" value="0" step="0.5">
+                                <input type="number" id="s6-shear" value="0" step="0.5"
+                                    title="Max random shear in degrees. Default: 0. Passed as ultralytics `shear=`.">
                             </div>
                         </div>
                         <div class="form-row">
                             <div class="form-group">
                                 <label>Perspective<br><span style="font-size:10px;color:#666">range 0–0.001 · tiny tilt</span></label>
-                                <input type="number" id="s6-perspective" value="0" step="0.0001" min="0" max="0.001">
+                                <input type="number" id="s6-perspective" value="0" step="0.0001" min="0" max="0.001"
+                                    title="Perspective warp factor. Default: 0. Passed as ultralytics `perspective=`.">
                             </div>
                             <div class="form-group">
                                 <label>P(flip up-down)<br><span style="font-size:10px;color:#666">range 0–1 · 0.5 safe for top-down quadrats</span></label>
-                                <input type="number" id="s6-flipud" value="0.5" step="0.05" min="0" max="1">
+                                <input type="number" id="s6-flipud" value="0.5" step="0.05" min="0" max="1"
+                                    title="Probability of vertical flip per image. Default: 0.5. Passed as ultralytics `flipud=`.">
                             </div>
                             <div class="form-group">
                                 <label>P(flip left-right)<br><span style="font-size:10px;color:#666">range 0–1 · 0.5 safe for coral</span></label>
-                                <input type="number" id="s6-fliplr" value="0.5" step="0.05" min="0" max="1">
+                                <input type="number" id="s6-fliplr" value="0.5" step="0.05" min="0" max="1"
+                                    title="Probability of horizontal flip per image. Default: 0.5. Passed as ultralytics `fliplr=`.">
                             </div>
                         </div>
                     </div>
@@ -839,32 +1225,38 @@
                         <div class="form-row">
                             <div class="form-group">
                                 <label>P(mosaic)<br><span style="font-size:10px;color:#666">range 0–1 · 4-image mosaic; 0 off, 1 always</span></label>
-                                <input type="number" id="s6-mosaic" value="0.0" step="0.1" min="0" max="1">
+                                <input type="number" id="s6-mosaic" value="0.0" step="0.1" min="0" max="1"
+                                    title="Probability of 4-image mosaic mixing per sample. Default: 0. Passed as ultralytics `mosaic=`.">
                             </div>
                             <div class="form-group">
                                 <label>P(mixup)<br><span style="font-size:10px;color:#666">range 0–1 · seg typical 0.0–0.15</span></label>
-                                <input type="number" id="s6-mixup" value="0.0" step="0.05" min="0" max="1">
+                                <input type="number" id="s6-mixup" value="0.0" step="0.05" min="0" max="1"
+                                    title="Probability of mixup blending per sample. Default: 0. Passed as ultralytics `mixup=`.">
                             </div>
                             <div class="form-group">
                                 <label>P(cutmix)<br><span style="font-size:10px;color:#666">range 0–1 · seg typical 0.0–0.1</span></label>
-                                <input type="number" id="s6-cutmix" value="0.0" step="0.05" min="0" max="1">
+                                <input type="number" id="s6-cutmix" value="0.0" step="0.05" min="0" max="1"
+                                    title="Probability of cutmix per sample. Default: 0. Passed as ultralytics `cutmix=`.">
                             </div>
                             <div class="form-group">
                                 <label>P(copy-paste)<br><span style="font-size:10px;color:#666">range 0–1 · sparse coral: 0.1–0.3</span></label>
-                                <input type="number" id="s6-copy-paste" value="0.0" step="0.05" min="0" max="1">
+                                <input type="number" id="s6-copy-paste" value="0.0" step="0.05" min="0" max="1"
+                                    title="Probability of seg copy-paste per sample. Default: 0. Passed as ultralytics `copy_paste=`; biggest lever for rare coral classes.">
                             </div>
                         </div>
                         <div class="form-row">
                             <div class="form-group">
                                 <label>copy-paste mode<br><span style="font-size:10px;color:#666">flip: mirror-paste; mixup: blend</span></label>
-                                <select id="s6-copy-paste-mode">
+                                <select id="s6-copy-paste-mode"
+                                    title="Copy-paste mode: 'flip' mirror-pastes, 'mixup' blends. Default: flip. Passed as ultralytics `copy_paste_mode=`.">
                                     <option value="flip" selected>flip</option>
                                     <option value="mixup">mixup</option>
                                 </select>
                             </div>
                             <div class="form-group">
                                 <label>close_mosaic<br><span style="font-size:10px;color:#666">unit: epochs · disable mosaic during last N · 10–20</span></label>
-                                <input type="number" id="s6-close-mosaic" value="10" min="0">
+                                <input type="number" id="s6-close-mosaic" value="10" min="0"
+                                    title="Disable mosaic augmentation for the final N epochs. Default: 10. Passed as ultralytics `close_mosaic=`.">
                             </div>
                         </div>
                     </div>
@@ -880,7 +1272,7 @@
                         <div class="form-row">
                             <div class="form-group">
                                 <label>Optimizer<br><span style="font-size:10px;color:#666">auto picks AdamW for small datasets, SGD for large</span></label>
-                                <select id="s6-optimizer">
+                                <select id="s6-optimizer" title="Which optimizer to use. Default: auto (AdamW for small datasets, SGD for large). Passed as ultralytics `optimizer=`.">
                                     <option value="auto" selected>auto (recommended)</option>
                                     <option value="SGD">SGD</option>
                                     <option value="AdamW">AdamW</option>
@@ -891,28 +1283,34 @@
                             </div>
                             <div class="form-group">
                                 <label>Initial LR (lr0)<br><span style="font-size:10px;color:#666">SGD≈0.01, Adam≈1e-3</span></label>
-                                <input type="number" id="s6-lr0" value="0.01" step="0.001" min="0">
+                                <input type="number" id="s6-lr0" value="0.01" step="0.001" min="0"
+                                    title="Initial learning rate. Default: 0.01. Passed as ultralytics `lr0=`; SGD ~0.01, Adam ~1e-3.">
                             </div>
                             <div class="form-group">
                                 <label>LR final factor (lrf)<br><span style="font-size:10px;color:#666">final_lr = lr0 * lrf · typical 0.01</span></label>
-                                <input type="number" id="s6-lrf" value="0.01" step="0.001" min="0">
+                                <input type="number" id="s6-lrf" value="0.01" step="0.001" min="0"
+                                    title="Final LR factor: final_lr = lr0 * lrf. Default: 0.01. Passed as ultralytics `lrf=`.">
                             </div>
                             <div class="form-group">
                                 <label>Momentum / β₁<br><span style="font-size:10px;color:#666">range 0–1 · SGD momentum, Adam β₁</span></label>
-                                <input type="number" id="s6-momentum" value="0.937" step="0.001" min="0" max="1">
+                                <input type="number" id="s6-momentum" value="0.937" step="0.001" min="0" max="1"
+                                    title="SGD momentum or Adam beta1. Default: 0.937. Passed as ultralytics `momentum=`.">
                             </div>
                         </div>
                         <div class="form-row">
                             <div class="form-group">
                                 <label>Weight decay<br><span style="font-size:10px;color:#666">typical 5e-4</span></label>
-                                <input type="number" id="s6-weight-decay" value="0.0005" step="0.00005" min="0">
+                                <input type="number" id="s6-weight-decay" value="0.0005" step="0.00005" min="0"
+                                    title="L2 weight-decay coefficient. Default: 5e-4. Passed as ultralytics `weight_decay=`.">
                             </div>
                             <div class="form-group">
                                 <label>Warmup epochs<br><span style="font-size:10px;color:#666">unit: epochs · gently ramp LR from 0 · 0–5</span></label>
-                                <input type="number" id="s6-warmup-epochs" value="3.0" step="0.5" min="0">
+                                <input type="number" id="s6-warmup-epochs" value="3.0" step="0.5" min="0"
+                                    title="Epochs of LR warmup from 0 before the main schedule. Default: 3.0. Passed as ultralytics `warmup_epochs=`.">
                             </div>
                             <div class="checkbox-group" style="align-self:flex-end;padding-bottom:6px">
-                                <input type="checkbox" id="s6-cos-lr">
+                                <input type="checkbox" id="s6-cos-lr"
+                                    title="Cosine LR decay instead of linear. Default: off. Passed as ultralytics `cos_lr=`.">
                                 <label for="s6-cos-lr" title="Use cosine decay instead of linear">Cosine LR schedule</label>
                             </div>
                         </div>
@@ -929,27 +1327,31 @@
                         <div class="form-row">
                             <div class="form-group">
                                 <label>Box loss<br><span style="font-size:10px;color:#666">bounding-box regression weight · 7.5</span></label>
-                                <input type="number" id="s6-box" value="7.5" step="0.5" min="0">
+                                <input type="number" id="s6-box" value="7.5" step="0.5" min="0"
+                                    title="Bounding-box regression loss weight. Default: 7.5. Passed as ultralytics `box=`.">
                             </div>
                             <div class="form-group">
                                 <label>Class loss<br><span style="font-size:10px;color:#666">classification weight · 0.5 · raise if many classes</span></label>
-                                <input type="number" id="s6-cls" value="0.5" step="0.1" min="0">
+                                <input type="number" id="s6-cls" value="0.5" step="0.1" min="0"
+                                    title="Classification loss weight. Default: 0.5. Passed as ultralytics `cls=`; raise if many classes.">
                             </div>
                             <div class="form-group">
                                 <label>DFL loss<br><span style="font-size:10px;color:#666">distribution focal loss · 1.5</span></label>
-                                <input type="number" id="s6-dfl" value="1.5" step="0.1" min="0">
+                                <input type="number" id="s6-dfl" value="1.5" step="0.1" min="0"
+                                    title="Distribution Focal Loss weight. Default: 1.5. Passed as ultralytics `dfl=`.">
                             </div>
                             <div class="form-group">
                                 <label>Label smoothing<br><span style="font-size:10px;color:#666">range 0–1 · softens one-hot targets · typical 0–0.1</span></label>
-                                <input type="number" id="s6-label-smoothing" value="0.0" step="0.05" min="0" max="1">
+                                <input type="number" id="s6-label-smoothing" value="0.0" step="0.05" min="0" max="1"
+                                    title="Label smoothing for classification targets. Default: 0. Passed as ultralytics `label_smoothing=`.">
                             </div>
                         </div>
                     </div>
                 </details>
 
                 <div class="btn-group" style="margin-top:12px">
-                    <button class="btn btn-magenta" id="s6-run-btn" onclick="runStep(6)">Start Training</button>
-                    <button class="btn btn-outline btn-sm" onclick="resetStep(6)">Reset Step</button>
+                    <button class="btn btn-magenta" id="s6-run-btn" onclick="runStep(6)" title="Launch the Ultralytics training run with the settings above. CLI step — output streams to the log below.">Start Training</button>
+                    <button class="btn btn-outline btn-sm" onclick="openStepFolder(6)" title="Open this step's output folder in the system file manager.">Open Folder</button>
                 </div>
 
                 <div id="s6-progress" class="progress-bar-container" style="display:none">
@@ -958,6 +1360,7 @@
                 </div>
                 <div id="s6-result"></div>
                 <div class="log-output" id="s6-log" style="display:none"></div>
+                <div class="step-nav-footer" id="nav-footer-6"></div>
             </div>
         </div>
 
@@ -966,8 +1369,10 @@
             <div class="card">
                 <h2>Step 7: Evaluate Model</h2>
                 <div class="step-description">
-                    <p><strong>What this does:</strong> Runs Ultralytics <code>val</code> on a chosen training run against the <em>held-out test split</em> from Step 6, then assembles an educational report with every metric defined in plain English, a per-class breakdown, sample overlay imagery, and the training curves from the run.</p>
-                    <p><strong>Outputs:</strong> <code>report.md</code>, <code>metrics.json</code>, <code>report.pdf</code>, and a <code>previews/</code> folder with rendered sample predictions, all inside <code>{step7_dir}/eval_&lt;run&gt;/</code>. You can also export a copy of the PDF to any folder you choose.</p>
+                    <p>Step 7 measures how well the trained model performs on frames it never saw during training, so you can judge whether it is good enough to run. It assembles a report you can read and share.</p>
+                    <p><strong>Do this:</strong> pick a completed Step 6 training run, keep the split on <code>test</code>, and run the evaluation (or press Use recommended defaults first).</p>
+                    <p><strong>What happens:</strong> Ultralytics <code>val</code> runs the chosen run against the held-out test split from Step 6, then the report is built with each metric defined in plain English, a per-class breakdown, sample overlay imagery, and the run's training curves. Outputs are <code>report.md</code>, <code>metrics.json</code>, <code>report.pdf</code>, and a <code>previews/</code> folder, all under <code>{step7_dir}/eval_&lt;run&gt;/</code>; you can also copy the PDF to a folder you choose.</p>
+                    <p><strong>Next:</strong> Step 8 reads the same run's <code>weights/best.pt</code> to run inference on new frames.</p>
                 </div>
 
                 <!-- Quick-start banner — one-click sensible defaults. -->
@@ -993,7 +1398,7 @@
                     <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap">
                         <div style="flex:1;min-width:260px">
                             <label style="font-weight:600">Load preset</label>
-                            <select id="s7-preset-select">
+                            <select id="s7-preset-select" title="Preset YAML to bulk-fill this form. Default: empty. Loaded from pipeline_orchestrator/eval_presets/.">
                                 <option value="">(none selected)</option>
                             </select>
                             <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
@@ -1012,7 +1417,8 @@
                     <div class="form-group" style="flex:2">
                         <label>Training run to evaluate</label>
                         <div style="display:flex;gap:6px">
-                            <select id="s7-run-dir" style="flex:1" onchange="onStep7RunChange()"></select>
+                            <select id="s7-run-dir" style="flex:1" onchange="onStep7RunChange()"
+                                title="Pick a completed Step 6 training run (subdir with weights/best.pt). Default: empty. Passed as the evaluation target."></select>
                             <button class="btn btn-outline btn-sm" onclick="refreshRunList()">Refresh</button>
                         </div>
                         <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
@@ -1022,7 +1428,7 @@
                     </div>
                     <div class="form-group">
                         <label>Split</label>
-                        <select id="s7-split">
+                        <select id="s7-split" title="Which split to evaluate on. Default: test. Passed to ultralytics val as `split=`.">
                             <option value="test" selected>test (unseen during training)</option>
                             <option value="val">valid</option>
                             <option value="train">train (sanity check)</option>
@@ -1036,7 +1442,8 @@
                     </div>
                     <div class="form-group">
                         <label>Image size</label>
-                        <input type="number" id="s7-imgsz" value="1024" min="128" step="32">
+                        <input type="number" id="s7-imgsz" value="1024" min="128" step="32"
+                            title="Square image size for evaluation. Default: 1024. Auto-synced to the run's training imgsz when known; passed as ultralytics val `imgsz=`.">
                         <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
                             Use the same <code>imgsz</code> the run trained at — check the run's
                             <code>args.yaml</code>. Mismatch distorts metrics.
@@ -1047,7 +1454,8 @@
                 <div class="form-row">
                     <div class="form-group">
                         <label>Confidence threshold</label>
-                        <input type="number" id="s7-conf" value="0.25" step="0.05" min="0" max="1">
+                        <input type="number" id="s7-conf" value="0.25" step="0.05" min="0" max="1"
+                            title="Minimum prediction confidence to count. Default: 0.25. Passed as ultralytics val `conf=`.">
                         <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
                             Drop predictions below this confidence. Lower -> more predictions
                             (higher recall, lower precision). <code>0.25</code> is the
@@ -1056,7 +1464,8 @@
                     </div>
                     <div class="form-group">
                         <label>IoU threshold</label>
-                        <input type="number" id="s7-iou" value="0.6" step="0.05" min="0" max="1">
+                        <input type="number" id="s7-iou" value="0.6" step="0.05" min="0" max="1"
+                            title="NMS IoU threshold for merging overlapping predictions. Default: 0.6. Passed as ultralytics val `iou=`.">
                         <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
                             NMS merge threshold — predictions overlapping more than this on
                             the same object get deduplicated. <code>0.6</code> is standard.
@@ -1064,7 +1473,8 @@
                     </div>
                     <div class="form-group">
                         <label>Preview images</label>
-                        <input type="number" id="s7-preview-count" value="8" min="0" max="40">
+                        <input type="number" id="s7-preview-count" value="8" min="0" max="40"
+                            title="Number of sample preview images (with GT + predictions) embedded in the PDF report. Default: 8.">
                         <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
                             Sample images from the chosen split overlaid with GT + predictions
                             in the PDF. <code>8</code> gives enough to eyeball behavior.
@@ -1074,7 +1484,8 @@
 
                 <div class="form-group">
                     <label>Export folder (optional)</label>
-                    <input type="text" id="s7-pdf-export-dir" placeholder="/path/to/presentation/deck/">
+                    <input type="text" id="s7-pdf-export-dir" placeholder="/path/to/presentation/deck/"
+                        title="Optional absolute directory to also copy the PDF report into. Default: empty (PDF stays under step7_dir).">
                     <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
                         Optional. Drops an extra PDF copy at
                         <code>&lt;folder&gt;/&lt;run_name&gt;_report.pdf</code> for sharing.
@@ -1083,8 +1494,8 @@
                 </div>
 
                 <div class="btn-group">
-                    <button class="btn btn-magenta" id="s7-run-btn" onclick="runStep(7)">Run Evaluation</button>
-                    <button class="btn btn-outline btn-sm" onclick="resetStep(7)">Reset Step</button>
+                    <button class="btn btn-magenta" id="s7-run-btn" onclick="runStep(7)" title="Run ultralytics val on the chosen run + split and build the markdown / PDF report.">Run Evaluation</button>
+                    <button class="btn btn-outline btn-sm" onclick="openStepFolder(7)" title="Open this step's output folder in the system file manager.">Open Folder</button>
                 </div>
 
                 <div id="s7-result"></div>
@@ -1101,6 +1512,7 @@
                     <div id="s7-report" style="font-size:13px;line-height:1.45;max-height:640px;overflow-y:auto;padding:8px 14px;background:var(--surface);border-radius:3px">
                     </div>
                 </div>
+                <div class="step-nav-footer" id="nav-footer-7"></div>
             </div>
         </div>
 
@@ -1109,18 +1521,20 @@
             <div class="card">
                 <h2>Step 8: Model Inference</h2>
                 <div class="step-description">
-                    <p><strong>What this does:</strong> Runs a trained model over <em>new</em> frames and saves overlay renderings + a manifest of predictions. Pick one of four sources:</p>
+                    <p>Step 8 runs the trained model over new frames it was never trained on, so you can see how it behaves on real unseen data and find where it struggles. It saves overlay renderings and a manifest of predictions.</p>
+                    <p><strong>Do this:</strong> pick the trained run, choose a source of frames, and run inference. Sources:</p>
                     <ul style="color:var(--text-dim);font-size:13px;margin-left:20px">
                         <li><strong>Directory</strong> — any folder of .jpg/.png images.</li>
-                        <li><strong>Unused TCRMP frames</strong> — random or systematic sample of images in <code>TCRMP_clip/</code> that are NOT in this project's Step 3 <code>selected_frames.csv</code>. Great for finding blind spots in the training set.</li>
+                        <li><strong>Unused TCRMP frames</strong> — random or systematic sample of images in <code>TCRMP_clip/</code> that are NOT in this project's Step 3 <code>selected_frames.csv</code>. Useful for finding blind spots in the training set.</li>
                         <li><strong>Full TCRMP image set</strong> — every raw frame under <code>TCRMP_clip/</code>.</li>
                     </ul>
-                    <p>After inference, a gallery of predictions renders below. You can optionally tag each frame <strong>yes / no / skip</strong> to quickly flag where the model is struggling — mirrors the Step 5 flow but just a verdict, no mask editing.</p>
+                    <p><strong>What happens:</strong> the model runs over the chosen frames using <code>weights/best.pt</code> from the selected Step 6 run, writing overlay images and a prediction manifest to the output folder, then a gallery renders below. You can tag each frame <strong>yes / no / skip</strong> to flag where the model is struggling, a verdict only, no mask editing.</p>
                 </div>
 
                 <div class="form-group">
                     <label>Inference run name (stamped into the output folder &amp; footer)</label>
-                    <input type="text" id="s8-run-name" placeholder="leave blank for auto-timestamped">
+                    <input type="text" id="s8-run-name" placeholder="leave blank for auto-timestamped"
+                        title="Name stamped into the inference output folder and footer. Default: empty (auto-stamped infer_YYYYMMDD_HHMMSS).">
                     <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
                         Output folder = <code>{step8_dir}/&lt;run_name&gt;_YYYYMMDD_HHMMSS/</code>.
                         Blank -> <code>infer_YYYYMMDD_HHMMSS</code>.
@@ -1131,44 +1545,53 @@
                     <div class="form-group" style="flex:2">
                         <label>Model run to use</label>
                         <div style="display:flex;gap:6px">
-                            <select id="s8-run-dir" style="flex:1"></select>
+                            <select id="s8-run-dir" style="flex:1"
+                                title="Trained Step 6 run to use for inference. Default: empty. weights/best.pt is picked automatically."></select>
                             <button class="btn btn-outline btn-sm" onclick="refreshRunList()">Refresh</button>
                         </div>
                     </div>
                     <div class="form-group">
                         <label>Image size</label>
-                        <input type="number" id="s8-imgsz" value="512" min="128" step="32">
+                        <input type="number" id="s8-imgsz" value="512" min="128" step="32"
+                            title="Square image size for inference. Default: 512. Passed to ultralytics predict as `imgsz=`.">
                     </div>
                 </div>
 
                 <div class="form-group">
                     <label>Source</label>
                     <div class="field-row" style="gap:12px">
-                        <label><input type="radio" name="s8-src" value="dir"> Directory</label>
-                        <label><input type="radio" name="s8-src" value="unused" checked> Unused TCRMP frames</label>
-                        <label><input type="radio" name="s8-src" value="full"> Full TCRMP image set</label>
+                        <label><input type="radio" name="s8-src" value="dir"
+                            title="Arbitrary folder of .jpg/.png images."> Directory</label>
+                        <label><input type="radio" name="s8-src" value="unused" checked
+                            title="Random / systematic sample of TCRMP_clip frames NOT selected by Step 3. Great for finding blind spots."> Unused TCRMP frames</label>
+                        <label><input type="radio" name="s8-src" value="full"
+                            title="Every raw frame under TCRMP_clip/. Slow for large datasets."> Full TCRMP image set</label>
                     </div>
                 </div>
 
                 <div class="form-group" id="s8-dir-wrap" style="display:none">
                     <label>Source directory</label>
-                    <input type="text" id="s8-source-dir" placeholder="/path/to/images/">
+                    <input type="text" id="s8-source-dir" placeholder="/path/to/images/"
+                        title="Absolute path to the directory to run inference over. Default: empty. Only used when Source = Directory.">
                 </div>
 
                 <div class="form-row" id="s8-sample-wrap">
                     <div class="form-group">
                         <label>Sample count<br><span style="font-size:10px;color:#666">ignored for "full"</span></label>
-                        <input type="number" id="s8-sample-count" value="100" min="1">
+                        <input type="number" id="s8-sample-count" value="100" min="1"
+                            title="How many unused-TCRMP frames to infer on. Default: 100. Ignored when Source = full.">
                     </div>
                     <div class="form-group">
                         <label>Sample mode</label>
-                        <select id="s8-sample-mode">
+                        <select id="s8-sample-mode"
+                            title="How to pick sample frames from the unused-TCRMP pool. Default: random. 'systematic' is every Nth sorted frame.">
                             <option value="random" selected>random</option>
                             <option value="systematic">systematic (every Nth)</option>
                         </select>
                     </div>
                     <div class="checkbox-group" style="align-self:flex-end;padding-bottom:6px">
-                        <input type="checkbox" id="s8-include-pts">
+                        <input type="checkbox" id="s8-include-pts"
+                            title="Also include _pts.jpg overlay variants in the sample pool. Default: off.">
                         <label for="s8-include-pts">include _pts.jpg variants</label>
                     </div>
                 </div>
@@ -1176,36 +1599,42 @@
                 <div class="form-row">
                     <div class="form-group">
                         <label>Confidence threshold</label>
-                        <input type="number" id="s8-conf" value="0.25" step="0.05" min="0" max="1">
+                        <input type="number" id="s8-conf" value="0.25" step="0.05" min="0" max="1"
+                            title="Minimum prediction confidence kept during inference. Default: 0.25. Passed as ultralytics predict `conf=`.">
                     </div>
                     <div class="form-group">
                         <label>IoU threshold</label>
-                        <input type="number" id="s8-iou" value="0.7" step="0.05" min="0" max="1">
+                        <input type="number" id="s8-iou" value="0.7" step="0.05" min="0" max="1"
+                            title="NMS IoU threshold for inference. Default: 0.7. Passed as ultralytics predict `iou=`.">
                     </div>
                     <div class="form-group">
                         <label>Mask opacity<br><span style="font-size:10px;color:#666">0 = invisible, 1 = solid · 0.4–0.6 usually readable</span></label>
-                        <input type="number" id="s8-mask-alpha" value="0.45" step="0.05" min="0" max="1">
+                        <input type="number" id="s8-mask-alpha" value="0.45" step="0.05" min="0" max="1"
+                            title="Alpha blend for mask overlay on saved images. Default: 0.45. 0 = invisible, 1 = solid.">
                     </div>
                     <div class="checkbox-group" style="align-self:flex-end;padding-bottom:6px">
-                        <input type="checkbox" id="s8-draw-boxes">
+                        <input type="checkbox" id="s8-draw-boxes"
+                            title="Draw bounding boxes on overlays in addition to masks. Default: off.">
                         <label for="s8-draw-boxes">draw bounding boxes</label>
                     </div>
                 </div>
 
                 <div class="form-row">
                     <div class="checkbox-group" style="align-self:flex-end;padding-bottom:6px">
-                        <input type="checkbox" id="s8-save-overlays" checked>
+                        <input type="checkbox" id="s8-save-overlays" checked
+                            title="Save full-frame overlay images to the output folder. Default: on.">
                         <label for="s8-save-overlays">save overlay images</label>
                     </div>
                     <div class="checkbox-group" style="align-self:flex-end;padding-bottom:6px">
-                        <input type="checkbox" id="s8-save-crops">
+                        <input type="checkbox" id="s8-save-crops"
+                            title="Save per-mask tight crops (one PNG per detection). Default: off.">
                         <label for="s8-save-crops">save per-mask crops</label>
                     </div>
                 </div>
 
                 <div class="btn-group">
-                    <button class="btn btn-magenta" id="s8-run-btn" onclick="runStep(8)">Run Inference</button>
-                    <button class="btn btn-outline btn-sm" onclick="resetStep(8)">Reset Step</button>
+                    <button class="btn btn-magenta" id="s8-run-btn" onclick="runStep(8)" title="Run the chosen model over the chosen source and populate the gallery.">Run Inference</button>
+                    <button class="btn btn-outline btn-sm" onclick="openStepFolder(8)" title="Open this step's output folder in the system file manager.">Open Folder</button>
                 </div>
 
                 <div id="s8-result"></div>
@@ -1223,12 +1652,39 @@
                     </div>
                     <div id="s8-gallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px"></div>
                 </div>
+                <div class="step-nav-footer" id="nav-footer-8"></div>
             </div>
         </div>
 
     </div>
 </div>
 
-<script src="/static/orchestrator.js"></script>
+<!-- ── Open-UI loading overlay (shown while a sub-app service spins up) ── -->
+<div class="open-ui-overlay" id="open-ui-overlay" aria-hidden="true">
+    <div class="open-ui-modal" id="open-ui-modal">
+        <div class="spinner"></div>
+        <div class="msg" id="open-ui-msg">Starting UI, waiting for it to come up&hellip;</div>
+        <div class="sub" id="open-ui-sub"></div>
+        <div class="actions">
+            <button class="btn btn-outline btn-sm" onclick="hideOpenUiOverlay()">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Reset-confirm modal (styled replacement for the browser confirm()) -->
+<div class="confirm-overlay" id="confirm-overlay" aria-hidden="true">
+    <div class="confirm-modal">
+        <div class="confirm-title">Reset this step?</div>
+        <div class="confirm-msg" id="confirm-msg"></div>
+        <div class="confirm-actions">
+            <button class="btn btn-outline btn-sm" onclick="closeConfirmModal()">Cancel</button>
+            <button class="btn btn-danger btn-sm" id="confirm-ok-btn">Confirm Reset</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/orchestrator.js?v=20260624-review-io"></script>
+<script>window.EXPERTIDS_BASE = '/expertids';</script>
+<script src="{{ url_for('expertids.static', filename='expertids.js') }}?v=1"></script>
 </body>
 </html>
