@@ -366,6 +366,13 @@ body::after {
   font-size: 12px; font-family: 'Space Mono', monospace;
 }
 .mask-list li .m-species { flex: 1; color: var(--text); font-size: 13px; }
+/* expert/pending review tags in the mask list + the header legend */
+.mask-list li .m-rev { font-size: 9px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 9px; flex-shrink: 0; }
+.m-rev.expert, .rev-chip.expert { background: hsla(152,62%,45%,0.22); color: hsl(152,62%,62%); }
+.m-rev.pending, .rev-chip.pending { background: hsla(40,92%,55%,0.20); color: hsl(40,92%,68%); }
+.rev-legend { display: inline-flex; gap: 6px; align-items: center; margin-left: 12px; }
+.rev-chip { font-size: 9px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 9px; }
 .mask-list li .m-area { color: var(--text-dim); font-size: 11px; width: 50px; text-align: right; font-family: 'Space Mono', monospace; }
 .mask-list li .m-score { color: var(--text-dim); font-size: 11px; width: 38px; text-align: right; font-family: 'Space Mono', monospace; }
 
@@ -376,16 +383,76 @@ body::after {
 
 .panel-actions { padding: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
 
-.help-text {
+.help-hint {
   padding: 8px 10px; font-size: 11px; color: var(--text-dim);
-  line-height: 1.7; border-top: 1px solid var(--border); flex-shrink: 0;
-  font-family: 'Inter', sans-serif;
+  border-top: 1px solid var(--border); flex-shrink: 0; text-align: center;
+  font-family: 'Space Mono', monospace; letter-spacing: 0.04em;
 }
-.help-text kbd {
-  background: var(--input-bg); padding: 2px 5px; border: 1px solid var(--border);
-  border-radius: 1px; font-size: 10px; color: var(--pink);
-  font-family: 'Space Mono', monospace;
+
+/* Always-visible refine discoverability hint above the panel actions. */
+.refine-hint {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 8px 10px; border-top: 1px solid var(--border);
+  flex-shrink: 0; font-size: 10.5px; color: var(--text-dim);
+  font-family: 'Space Mono', monospace; line-height: 1.5;
 }
+.refine-hint .rh-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.refine-hint .rh-pan { color: var(--cyan); }
+.refine-hint kbd {
+  background: var(--input-bg); padding: 1px 5px; border: 1px solid var(--border);
+  border-radius: 1px; color: var(--pink); font-family: 'Space Mono', monospace;
+  font-size: 10px;
+}
+.help-hint kbd {
+  background: var(--input-bg); padding: 2px 6px; border: 1px solid var(--border);
+  border-radius: 1px; color: var(--pink); font-family: 'Space Mono', monospace;
+}
+
+/* ── Keyboard cheat sheet (K toggles — sticky) ── */
+#kbd-help {
+  position: fixed; inset: 0; z-index: 400; display: none;
+  align-items: center; justify-content: center;
+  background: rgba(5, 5, 8, 0.82); backdrop-filter: blur(2px);
+}
+#kbd-help.visible { display: flex; }
+#kbd-help .kh-card {
+  background: var(--surface); border: 1px solid var(--magenta); border-radius: var(--radius-lg);
+  padding: 22px 26px; width: min(880px, 92vw); max-height: 88vh; overflow-y: auto;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.8);
+}
+#kbd-help .kh-head {
+  display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px;
+  border-bottom: 1px solid var(--border); padding-bottom: 10px;
+}
+#kbd-help .kh-head h2 {
+  font-family: 'Syne', sans-serif; color: var(--pink); font-size: 18px;
+  text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;
+}
+#kbd-help .kh-head .kh-sub { font-size: 11px; color: var(--text-dim); font-family: 'Space Mono', monospace; }
+#kbd-help .kh-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 28px; }
+#kbd-help .kh-group { break-inside: avoid; }
+#kbd-help .kh-group h3 {
+  font-family: 'Silkscreen', 'Space Mono', monospace; font-weight: 700;
+  font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--magenta-light); margin: 4px 0 8px;
+}
+#kbd-help .kh-group.primary h3 { color: var(--pink); }
+#kbd-help .kh-group.primary {
+  border: 1px solid rgba(226,0,116,0.4); border-radius: var(--radius);
+  padding: 8px 12px 10px; background: rgba(226,0,116,0.06);
+}
+#kbd-help .kh-row {
+  display: flex; align-items: baseline; gap: 10px; padding: 3px 0;
+  font-size: 12px; font-family: 'Inter', sans-serif;
+}
+#kbd-help .kh-row .kh-keys { flex: 0 0 132px; text-align: right; }
+#kbd-help .kh-row .kh-desc { color: var(--text-dim); }
+#kbd-help kbd {
+  background: var(--input-bg); padding: 2px 6px; border: 1px solid var(--border);
+  border-radius: 1px; font-size: 11px; color: var(--pink);
+  font-family: 'Space Mono', monospace; white-space: nowrap;
+}
+#kbd-help .kh-foot { margin-top: 14px; font-size: 11px; color: var(--text-dim); font-family: 'Space Mono', monospace; text-align: center; }
 
 /* ── Overlays ── */
 .overlay {
@@ -470,7 +537,7 @@ body::after {
 
     <div class="mode-buttons">
       <div class="mode-btn active" id="mode-new" onclick="setMode('new')">
-        <div class="mode-title">Load from routeChosenImages</div>
+        <div class="mode-title">Load from Place Points</div>
         <div class="mode-desc">Import sam_click_prompts + raw images</div>
       </div>
       <div class="mode-btn" id="mode-resume" onclick="setMode('resume')">
@@ -481,7 +548,7 @@ body::after {
 
     <div id="new-fields">
       <div class="field">
-        <label>Input Directory (routeChosenImages output)</label>
+        <label>Input Directory (Place Points output)</label>
         <input type="text" id="inp-input" value="{{ default_input }}">
       </div>
       <div class="field">
@@ -527,6 +594,20 @@ body::after {
         still tracked on disk, so you can come back later and pick up the
         unprocessed ones.
       </div>
+    </div>
+
+    <div class="field">
+      <label title="Local working tree of the standalone public review repo (a git clone of laurenkolinger/reefpointseg-review with GitHub Pages on). REVIEW-flagged masks are exported here and auto-pushed so an expert can review them at the Pages URL. Default /mnt/tear/REVIEW_reefpointseg.">
+        Expert-review folder (pushed to GitHub Pages)
+      </label>
+      <input type="text" id="inp-review-dir" value="{{ default_review_dir }}">
+    </div>
+    <div class="field">
+      <label title="Comma-separated emails the expert reviewer is told to send their results CSV to. Add YOUR address and your student's; lauren.olinger@uvi.edu is included by default.">
+        Review result recipients (comma-separated emails)
+      </label>
+      <input type="text" id="inp-contacts" value="{{ default_contacts }}"
+             placeholder="you@uni.edu, student@uni.edu, lauren.olinger@uvi.edu">
     </div>
 
     <div class="setup-info" id="setup-info"></div>
@@ -577,17 +658,22 @@ body::after {
   </div>
   <div class="toolbar-bar">
     <span class="tool-label">Opacity:</span>
-    <input type="range" id="opacity-slider" min="0" max="100" value="50" oninput="setOpacity(this.value)">
+    <input type="range" id="opacity-slider" min="0" max="100" value="50"
+           title="Mask fill opacity. Drag, or press O to cycle 30/60/90 percent. Keyboard shortcuts keep working while this slider is focused."
+           oninput="setOpacity(this.value)" onchange="this.blur()">
     <span class="tool-val" id="opacity-val">50%</span>
     <div class="sep"></div>
     <label><input type="checkbox" id="chk-points" onchange="render()"> Show Points</label>
     <div class="sep"></div>
     <span class="tool-label">Edit:</span>
-    <button class="btn" id="btn-mode-refine" onclick="setInteractionMode('refine')">Refine (R)</button>
-    <button class="btn" id="btn-mode-box" onclick="setInteractionMode('box')">Box (B)</button>
-    <button class="btn" id="btn-mode-merge" onclick="setInteractionMode('merge')">Merge (M)</button>
-    <button class="btn" id="btn-mode-add" onclick="setInteractionMode('add')">Add (A)</button>
-    <button class="btn" id="btn-mode-draw" onclick="setInteractionMode('draw')">Draw (D)</button>
+    <button class="btn" id="btn-mode-refine" onclick="setInteractionMode('refine')"
+            title="Refine mode (R): pick a mask, then left-click on the image to grow it; right-click to remove a region.">Refine (R)</button>
+    <button class="btn" id="btn-mode-merge" onclick="setInteractionMode('merge')"
+            title="Merge mode (M): click one mask, then click another to fuse them into a single mask.">Merge (M)</button>
+    <button class="btn" id="btn-mode-add" onclick="setInteractionMode('add')"
+            title="Add mode (A): click on the image to drop a new mask, then choose its species/category.">Add (A)</button>
+    <button class="btn" id="btn-mode-draw" onclick="setInteractionMode('draw')"
+            title="Draw mode (D): freehand-edit the selected mask — drag inside to carve, outside to extend. Pick a mask first.">Draw (D)</button>
   </div>
   <div class="quickadd-bar" id="quickadd-bar">
     <span class="qa-label">Hold number + click (Add mode):</span>
@@ -610,47 +696,63 @@ body::after {
     <div class="panel">
       <div class="panel-header">
         <h3>Masks</h3>
+        <span class="rev-legend" title="REVIEW masks are colored by expert-ID state: amber = flagged, awaiting an expert; green = an expert returned its ID.">
+          <span class="rev-chip pending">REVIEW pending</span>
+          <span class="rev-chip expert">expert ID</span>
+        </span>
         <span class="summary" id="panel-summary"></span>
       </div>
       <ul class="mask-list" id="mask-list"></ul>
+      <!-- Always-visible refine cheatsheet: the negative-refine (right-click)
+           behavior is easy to miss, so we surface it near the panel. Behavior
+           itself is unchanged — this is purely discoverability. -->
+      <div class="refine-hint" title="These work on the selected mask. Right-click removes a region (negative refine); Refine + left-click adds one.">
+        <span class="rh-line"><kbd>Right-click</kbd> remove / shrink region</span>
+        <span class="rh-line"><kbd>R</kbd>+<kbd>left-click</kbd> add region</span>
+        <span class="rh-line"><kbd>U</kbd> undo · <kbd>Ctrl</kbd>+<kbd>Z</kbd> reset · <kbd>Enter</kbd> accept</span>
+        <span class="rh-line"><kbd>Shift</kbd>+<kbd>drag</kbd> redraw mask from a box</span>
+        <span class="rh-line rh-pan"><kbd>Click-hold + drag</kbd> pan anywhere</span>
+      </div>
       <div class="panel-actions">
-        <button class="btn" onclick="acceptAllMasks()">Accept All Pending</button>
-        <button class="btn" onclick="undoRefine()">Undo (U)</button>
-        <button class="btn" onclick="resetMask()">Reset Mask (Ctrl+Z)</button>
+        <button class="btn" onclick="acceptAllMasks()"
+                title="Accept every still-pending mask on this frame in one click.">Accept All Pending</button>
+        <button class="btn" onclick="undoRefine()"
+                title="Undo the last refine edit (add/remove region) on the selected mask.">Undo (U)</button>
+        <button class="btn" onclick="resetMask()"
+                title="Reset the selected mask back to its original SAM3 segmentation, discarding edits.">Reset Mask (Ctrl+Z)</button>
+        <button class="btn" onclick="mergeSameId()"
+                title="Union overlapping masks that share the same species/label into one. Useful when two clicks on one colony left it split (segmentation drops the smaller overlap instead of merging it).">
+          Merge same-ID masks
+        </button>
+        <button class="btn" id="btn-reload-ids" onclick="reloadSegmentations()"
+                title="Re-read this frame's segmentations.json from disk and merge in any imported expert IDs / pending-review flags (without losing your unsaved edits), so expert/pending colors appear without a restart.">
+          Reload IDs
+        </button>
         <button class="btn" style="border-color:var(--error);color:var(--error)"
                 onclick="scrapFrame()" title="Exclude this frame from review and export — reversible via /unscrap">
           Scrap Frame
         </button>
         <div style="display:flex; gap:4px;">
-          <button class="btn" onclick="doExemplarScan('this')" style="flex:1">Scan This</button>
-          <button class="btn" onclick="doExemplarScan('all')" style="flex:1">Scan All</button>
+          <button class="btn" onclick="doExemplarScan('this')" style="flex:1"
+                  title="Find masks on this frame that resemble the selected mask (its species) above the threshold, and add them as candidates. Pick a mask first.">Scan This</button>
+          <button class="btn" onclick="doExemplarScan('all')" style="flex:1"
+                  title="Scan this frame for masks resembling any accepted exemplar across all target species, and add them as candidates.">Scan All</button>
         </div>
-        <div style="display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-dim); font-family:'Space Mono',monospace;">
+        <div style="display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-dim); font-family:'Space Mono',monospace;"
+             title="Similarity cutoff for the Scan buttons: higher = stricter (fewer, closer matches), lower = looser (more candidates).">
           <span>Threshold:</span>
-          <input type="range" id="scan-threshold" min="10" max="90" value="50" style="flex:1; accent-color:var(--magenta);">
+          <input type="range" id="scan-threshold" min="10" max="90" value="50" style="flex:1; accent-color:var(--magenta);"
+                 title="Similarity cutoff for the Scan buttons: higher = stricter (fewer, closer matches), lower = looser (more candidates).">
           <span id="scan-threshold-val" style="color:var(--success); min-width:32px;">0.5</span>
         </div>
-        <button class="btn" onclick="fitImage(); render();">Fit View (F)</button>
+        <button class="btn" onclick="fitImage(); render();"
+                title="Fit the whole frame in the view (F).">Fit View (F)</button>
+        <button class="btn" id="btn-done-return" onclick="doneAndReturn()"
+                title="Save this frame and return to the main menu (closes the tab or returns to the orchestrator).">
+          Done — close &amp; return to main menu
+        </button>
       </div>
-      <div class="help-text">
-        <kbd>Space</kbd> next mask &nbsp;
-        <kbd>Enter</kbd> accept<br>
-        <kbd>X</kbd>/<kbd>Del</kbd> reject &nbsp;
-        <kbd>N</kbd> next &nbsp;
-        <kbd>B</kbd> prev<br>
-        <kbd>R</kbd> refine (L=add, R=remove)<br>
-        <kbd>A</kbd> add new mask &nbsp;
-        <kbd>M</kbd> merge<br>
-        <kbd>U</kbd> undo refine &nbsp;
-        <kbd>Ctrl+Z</kbd> reset mask<br>
-        <kbd>Shift+drag</kbd> box redraw<br>
-        <kbd>O</kbd> opacity &nbsp;
-        <kbd>P</kbd> points &nbsp;
-        <kbd>F</kbd> fit<br>
-        <kbd>Z</kbd> auto-center &nbsp;
-        <kbd>Scroll</kbd> zoom<br>
-        <kbd>Alt+drag</kbd> pan
-      </div>
+      <div class="help-hint">Press <kbd>K</kbd> for keyboard shortcuts</div>
     </div>
   </div>
 </div>
@@ -670,6 +772,58 @@ body::after {
   <div class="cat-btn" onclick="assignNewMaskCategory('')"><kbd>0</kbd>Unlabel</div>
 </div>
 <div id="mode-indicator"></div>
+
+<!-- ════════════ KEYBOARD CHEAT SHEET (K toggles — sticky) ════════════ -->
+<div id="kbd-help">
+  <div class="kh-card">
+    <div class="kh-head">
+      <h2>Keyboard</h2>
+      <span class="kh-sub"><kbd>K</kbd> toggles this panel · <kbd>K</kbd> or <kbd>Esc</kbd> to close</span>
+    </div>
+    <div class="kh-cols">
+
+      <div class="kh-group primary">
+        <h3>Masks — the main flow</h3>
+        <div class="kh-row"><span class="kh-keys"><kbd>A</kbd></span><span class="kh-desc">sticky Add mode — click to place a new mask, refine, accept; stays in Add</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>1</kbd>…<kbd>9</kbd> + click</span><span class="kh-desc">in Add mode, label the new mask with that species</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>R</kbd></span><span class="kh-desc">toggle Refine ↔ Select</span></div>
+        <div class="kh-row"><span class="kh-keys">click / right-click</span><span class="kh-desc">in Refine: add region / remove region</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>D</kbd></span><span class="kh-desc">Draw mode (manual mask)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>M</kbd></span><span class="kh-desc">merge mode (or merge 2+ selected masks)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Ctrl</kbd>+click row</span><span class="kh-desc">multi-select masks in the list (Shift+click = range)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Enter</kbd></span><span class="kh-desc">accept current mask</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>X</kbd> / <kbd>Del</kbd></span><span class="kh-desc">reject current mask · delete the whole multi-selected set</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>U</kbd> · <kbd>Ctrl</kbd>+<kbd>Z</kbd></span><span class="kh-desc">undo refine · reset mask to original</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Tab</kbd></span><span class="kh-desc">select next mask</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Esc</kbd></span><span class="kh-desc">deselect → select mode</span></div>
+      </div>
+
+      <div class="kh-group">
+        <h3>Move through frames</h3>
+        <div class="kh-row"><span class="kh-keys"><kbd>N</kbd></span><span class="kh-desc">next frame</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>B</kbd></span><span class="kh-desc">previous frame</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Space</kbd></span><span class="kh-desc">toggle auto-advance (jump to next mask after accept/reject)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>P</kbd></span><span class="kh-desc">pause / resume the frame timer</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Ctrl</kbd>+<kbd>S</kbd></span><span class="kh-desc">save this frame now</span></div>
+      </div>
+
+      <div class="kh-group">
+        <h3>View</h3>
+        <div class="kh-row"><span class="kh-keys">scroll</span><span class="kh-desc">zoom</span></div>
+        <div class="kh-row"><span class="kh-keys">click-hold + drag</span><span class="kh-desc">pan anywhere (quick tap = normal action)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Alt</kbd>+drag · middle-drag</span><span class="kh-desc">pan (alternatives)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>F</kbd></span><span class="kh-desc">fit frame to view</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Z</kbd></span><span class="kh-desc">auto-center on selected mask</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>O</kbd></span><span class="kh-desc">cycle mask opacity</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Shift</kbd>+<kbd>P</kbd></span><span class="kh-desc">toggle source-point visibility</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>H</kbd></span><span class="kh-desc">toggle magnifier loupe</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Shift</kbd>+drag</span><span class="kh-desc">box redraw</span></div>
+      </div>
+
+    </div>
+    <div class="kh-foot">Most of your time is in <b>Add</b> + <b>Refine</b> — place a mask, clean it up, accept.</div>
+  </div>
+</div>
 
 <!-- Export overlay -->
 <div class="overlay" id="export-overlay">
@@ -709,7 +863,8 @@ let autoCenter = false;
 // Mask opacity (0-1)
 let maskOpacity = 0.5;
 
-// Interaction modes: 'select' | 'refine' | 'merge' | 'box' | 'add'
+// Interaction modes: 'select' | 'refine' | 'merge' | 'add' | 'draw'
+// (box redraw is not a mode — it is the Shift+drag gesture on a selected mask)
 let interactionMode = 'select';
 let mergeFirstId = -1;
 
@@ -741,10 +896,36 @@ const CATEGORY_COLORS = {
   'Calcareous':    {h: 50,  s: 40, l: 60},
 };
 
+// Review state of a mask for semantic coloring:
+//   'expert'  = an outside expert returned its ID (expert_id.mode === 'EXPERT')
+//   'pending' = flagged REVIEW, awaiting an expert ID
+//   null      = an ordinary target mask (per-id hue palette)
+function maskReviewState(mask) {
+  if (!mask) return null;
+  const eid = mask.expert_id;
+  if (eid && eid.mode === 'EXPERT') return 'expert';
+  if (mask.review === true || mask.species === 'REVIEW') return 'pending';
+  return null;
+}
+
+// Semantic review colors (kept in one place so the canvas, swatch, and legend
+// agree). Tunable.
+const REVIEW_COLORS = {
+  expert:  {h: 152, s: 62, l: 45},   // expert-confirmed = green
+  pending: {h: 40,  s: 92, l: 55},   // pending expert review = amber
+};
+
 // Per-mask distinct color. mask.id is stable across saves, so each mask
 // keeps its color identity through refinement, undo, etc. 47 is a coprime
 // with 360 so successive ids step across the hue wheel without collisions.
+// Review/expert masks override the per-id hue with a fixed semantic color so
+// the operator can see at a glance which masks are pending vs expert-confirmed.
 function maskColor(mask, alpha) {
+  const st = maskReviewState(mask);
+  if (st) {
+    const c = REVIEW_COLORS[st];
+    return `hsla(${c.h}, ${c.s}%, ${c.l}%, ${alpha})`;
+  }
   const id = Number(mask && mask.id) || 0;
   const hue = (id * 47) % 360;
   // Slight saturation/lightness jitter so nearby ids don't look identical.
@@ -765,6 +946,16 @@ function getReviewBatchSize() {
 function getShuffleFlag() {
   const el = document.getElementById('chk-shuffle');
   return !!(el && el.checked);
+}
+
+function getReviewDir() {
+  const el = document.getElementById('inp-review-dir');
+  return el ? el.value.trim() : '';
+}
+
+function getContacts() {
+  const el = document.getElementById('inp-contacts');
+  return el ? el.value.trim() : '';
 }
 
 // ══════════════════════════════════════════════
@@ -822,6 +1013,7 @@ async function doStart() {
           input_dir: inputDir, export_dir: exportDir,
           categories: categories, review_batch_size: getReviewBatchSize(),
           shuffle: getShuffleFlag(),
+          review_dir: getReviewDir(), contacts: getContacts(),
         }),
       });
       scanResult = await res.json();
@@ -854,6 +1046,7 @@ async function doStart() {
         body: JSON.stringify({
           export_dir: exportDir, review_batch_size: getReviewBatchSize(),
           shuffle: getShuffleFlag(),
+          review_dir: getReviewDir(), contacts: getContacts(),
         }),
       });
       scanResult = await res.json();
@@ -1119,7 +1312,7 @@ function setInteractionMode(mode) {
   mergeFirstId = -1;
   if (pendingAddMaskIdx < 0) hideCatPopup();
   updateModeButtons();
-  const labels = {refine:'REFINE', merge:'MERGE', box:'BOX', add:'ADD', draw:'DRAW'};
+  const labels = {refine:'REFINE', merge:'MERGE', add:'ADD', draw:'DRAW'};
   if (labels[mode]) flashMode(labels[mode]);
   // Update cursor class
   canvas.classList.remove('add-mode', 'refine-mode', 'draw-mode');
@@ -1150,7 +1343,6 @@ function setInteractionMode(mode) {
 function updateModeButtons() {
   document.getElementById('btn-mode-refine').classList.toggle('active', interactionMode === 'refine');
   document.getElementById('btn-mode-merge').classList.toggle('active', interactionMode === 'merge');
-  document.getElementById('btn-mode-box').classList.toggle('active', interactionMode === 'box');
   document.getElementById('btn-mode-add').classList.toggle('active', interactionMode === 'add');
   const drawBtn = document.getElementById('btn-mode-draw');
   if (drawBtn) drawBtn.classList.toggle('active', interactionMode === 'draw');
@@ -1305,10 +1497,28 @@ function renderMaskList() {
   const nAcc = masks.filter(m => m.status === 'accepted').length;
   const nPend = masks.filter(m => m.status === 'pending').length;
   const nChecked = masks.filter(m => checkedMaskIds.has(m.id)).length;
-  const checkedLabel = nChecked >= 2 ? ` — ${nChecked} checked (press M to merge)` : '';
+  const checkedLabel = nChecked >= 2
+    ? ` — ${nChecked} selected (M=merge, Del=delete)`
+    : nChecked === 1 ? ` — 1 selected` : '';
   sumEl.textContent = `${nAcc}/${masks.length} accepted, ${nPend} pending${checkedLabel}`;
 
-  el.innerHTML = masks.map((m, i) => {
+  // Render order = stable alphabetical by label (spreadsheet order: A, B, …,
+  // Z, AA, …). Falls back to id then storage index so ties never jitter.
+  // `order` holds true indices into currentData.masks; selectedMask /
+  // data-idx keep pointing at those true indices, so click handling and
+  // keyboard cycling (which walk currentData.masks) are unaffected.
+  const order = masks.map((m, i) => i).sort((a, b) => {
+    const la = labelToNum(masks[a].label), lb = labelToNum(masks[b].label);
+    if (la !== lb) return la - lb;
+    const sa = String(masks[a].label || ''), sb = String(masks[b].label || '');
+    if (sa !== sb) return sa < sb ? -1 : 1;
+    const ida = Number(masks[a].id) || 0, idb = Number(masks[b].id) || 0;
+    if (ida !== idb) return ida - idb;
+    return a - b;
+  });
+
+  el.innerHTML = order.map((i) => {
+    const m = masks[i];
     const isSel = i === selectedMask;
     const statusIcon = m.status === 'accepted' ? '&#10003;'
                      : m.status === 'rejected' ? '&#10007;' : '&#9679;';
@@ -1320,6 +1530,11 @@ function renderMaskList() {
     const area = m.area > 1000 ? `${(m.area / 1000).toFixed(1)}k` : m.area;
     const checked = checkedMaskIds.has(m.id) ? 'checked' : '';
     const swatchStyle = `background:${maskColor(m, 0.9)}`;
+    const rev = maskReviewState(m);
+    const revTag = rev === 'expert'
+        ? `<span class="m-rev expert" title="Expert-confirmed ID${m.expert_id && m.expert_id.labeler ? ' — ' + m.expert_id.labeler : ''}">expert</span>`
+        : rev === 'pending'
+        ? '<span class="m-rev pending" title="Flagged REVIEW, awaiting an expert ID">review</span>' : '';
     return `<li class="${cls}" data-idx="${i}" onclick="selectMaskFromList(${i}, event)">
       <input type="checkbox" class="m-check" ${checked}
              data-mask-id="${m.id}"
@@ -1328,6 +1543,7 @@ function renderMaskList() {
       <span class="m-status">${statusIcon}</span>
       <span class="m-label">${m.label}</span>
       <span class="m-species">${m.species || '?'}</span>
+      ${revTag}
       <span class="m-area">${area}px</span>
       <span class="m-score">${(m.score * 100).toFixed(0)}%</span>
     </li>`;
@@ -1351,13 +1567,66 @@ function clearMaskChecks() {
   renderMaskList();
 }
 
-function selectMaskFromList(i) {
+// Anchor index for Shift+click range selection in the mask list (true index
+// into currentData.masks of the last plainly-clicked row).
+let lastListClickIdx = -1;
+
+function selectMaskFromList(i, event) {
+  // Ctrl/Cmd+click → toggle this row's multi-select checkbox (same set the
+  // merge checkboxes use) instead of single-selecting. Lets the operator build
+  // up a set to merge OR delete together. Shift+click extends the set across a
+  // range from the last plain click.
+  if (event && (event.ctrlKey || event.metaKey)) {
+    const m = currentData.masks[i];
+    if (m) toggleMaskChecked(m.id);
+    lastListClickIdx = i;
+    return;
+  }
+  if (event && event.shiftKey && lastListClickIdx >= 0 && currentData) {
+    const lo = Math.min(lastListClickIdx, i), hi = Math.max(lastListClickIdx, i);
+    for (let k = lo; k <= hi; k++) {
+      const m = currentData.masks[k];
+      if (m) checkedMaskIds.add(m.id);
+    }
+    renderMaskList();
+    return;
+  }
+
   if (interactionMode === 'merge' && selectedMask >= 0 && i !== selectedMask) {
     doMerge(selectedMask, i);
     return;
   }
   selectedMask = i;
+  lastListClickIdx = i;
   if (autoCenter) centerOnMask(i);
+  renderMaskList();
+  render();
+}
+
+// Multi-delete: reject every mask in the multi-select set in one action.
+// Rejecting (not hard-removing) matches the rest of the tool — a rejected mask
+// is "deleted" in the operator's mental model, is skipped on export, and can be
+// recovered. Persists each status so Add/Refine stop clipping against them.
+async function deleteCheckedMasks() {
+  if (!currentData || currentIdx < 0) return;
+  if (checkedMaskIds.size < 1) { setStatus('No masks selected (Ctrl+click rows)'); return; }
+  const ids = Array.from(checkedMaskIds);
+  let n = 0;
+  for (const id of ids) {
+    const m = currentData.masks.find(mm => mm.id === id);
+    if (!m || m.status === 'rejected') continue;
+    m.status = 'rejected';
+    persistMaskStatus(m.id, 'rejected');
+    n++;
+  }
+  // If the single selected mask was in the deleted set, drop the selection.
+  if (selectedMask >= 0) {
+    const sel = currentData.masks[selectedMask];
+    if (sel && checkedMaskIds.has(sel.id)) selectedMask = -1;
+  }
+  checkedMaskIds = new Set();
+  flashMode('✗ ' + n);
+  setStatus(`Deleted ${n} mask${n === 1 ? '' : 's'}`);
   renderMaskList();
   render();
 }
@@ -1701,6 +1970,101 @@ async function doMerge(idxA, idxB) {
   }
 }
 
+// Merge overlapping SAME-ID (same species/label) masks into one, on demand.
+// Segmentation-time overlap resolution (larger_wins) drops the smaller of two
+// overlapping same-species masks; this unions them back so a colony split
+// across two clicks becomes a single mask. Server returns the rebuilt list.
+async function mergeSameId() {
+  if (!currentData || currentIdx < 0) return;
+  const filename = images[currentIdx].filename;
+  setStatus('Merging overlapping same-ID masks...');
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/merge_same_id`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+    });
+    const data = await res.json();
+    if (data.ok) {
+      // Preserve the selected mask's identity across the rebuild if possible.
+      const selId = (selectedMask >= 0 && currentData.masks[selectedMask])
+        ? currentData.masks[selectedMask].id : null;
+      currentData.masks = data.masks || [];
+      checkedMaskIds = new Set();
+      selectedMask = selId != null
+        ? currentData.masks.findIndex(m => m.id === selId) : -1;
+      const refused = (data.refused || []).length;
+      let msg = data.merged > 0
+        ? `Merged ${data.merged} overlapping same-ID mask${data.merged === 1 ? '' : 's'}`
+        : 'No overlapping same-ID masks to merge';
+      if (refused > 0) {
+        msg += ` — ${refused} pair${refused === 1 ? '' : 's'} kept apart (conflicting expert IDs)`;
+      }
+      setStatus(msg);
+      renderMaskList(); render();
+    } else {
+      setStatus('Merge same-ID failed: ' + (data.error || ''));
+    }
+  } catch (e) {
+    setStatus('Merge same-ID error: ' + e.message);
+  }
+}
+
+// Re-read this frame's segmentations.json from disk and merge in imported
+// expert/pending review fields WITHOUT clobbering unsaved operator edits, then
+// re-render so expert-green / pending-amber colors appear without a restart.
+async function reloadSegmentations() {
+  if (!currentData || currentIdx < 0) return;
+  const filename = images[currentIdx].filename;
+  setStatus('Reloading IDs from disk...');
+  // Flush the operator's current accept/reject statuses to the server's
+  // in-memory copy first, so the merge preserves them (it merges imported
+  // review fields onto that copy, never the other way around).
+  try { await saveCurrentMasks(); } catch (e) { /* best-effort */ }
+  try {
+    const res = await fetch('/api/reload_segmentations', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ filename }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      // The server merged fields onto its own in-memory masks; pull the fresh
+      // copy so the canvas + list reflect the imported IDs. Keep the current
+      // selection by id.
+      const selId = (selectedMask >= 0 && currentData.masks[selectedMask])
+        ? currentData.masks[selectedMask].id : null;
+      currentData.masks = data.masks || currentData.masks;
+      selectedMask = selId != null
+        ? currentData.masks.findIndex(m => m.id === selId) : -1;
+      setStatus(data.merged > 0
+        ? `Reloaded — ${data.merged} mask${data.merged === 1 ? '' : 's'} updated (${data.expert} expert ID${data.expert === 1 ? '' : 's'})`
+        : 'Reloaded — no imported IDs for this frame yet');
+      renderMaskList(); render();
+    } else {
+      setStatus('Reload failed: ' + (data.error || ''));
+    }
+  } catch (e) {
+    setStatus('Reload error: ' + e.message);
+  }
+}
+
+// Save the current frame, then return to the main menu: navigate to the
+// orchestrator if we were launched from it, otherwise try to close the tab and
+// fall back to the startup screen.
+async function doneAndReturn() {
+  try {
+    if (currentData && currentIdx >= 0) await saveCurrentMasks();
+  } catch (e) { /* save best-effort — still return */ }
+  if (ORCHESTRATOR_URL) {
+    window.location.href = ORCHESTRATOR_URL;
+    return;
+  }
+  window.close();
+  // window.close() is a no-op for tabs the script didn't open — fall back to
+  // the setup screen so the operator isn't stranded on a finished review.
+  setTimeout(() => { showScreen('startup'); }, 100);
+}
+
 // ══════════════════════════════════════════════
 // EXEMPLAR SCAN
 // ══════════════════════════════════════════════
@@ -1712,6 +2076,8 @@ function getScanThreshold() {
 document.getElementById('scan-threshold').addEventListener('input', function() {
   document.getElementById('scan-threshold-val').textContent = (this.value / 100).toFixed(1);
 });
+// Release focus after a committed change so the slider does not trap keyboard shortcuts.
+document.getElementById('scan-threshold').addEventListener('change', function() { this.blur(); });
 
 async function doExemplarScan(mode) {
   if (!currentData || currentIdx < 0) return;
@@ -1765,13 +2131,48 @@ const ADD_LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').concat(
   ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(c => 'A' + c)
 );
 
+// Spreadsheet-style bijective base-26 label helpers (mirror Place Points'
+// pp_core.js so the two steps speak the same label language). 1->A, 26->Z,
+// 27->AA ... unbounded.
+function colLabel(n) {
+  let s = '';
+  n = Math.floor(n);
+  while (n > 0) {
+    const r = (n - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+// Inverse of colLabel: 'A'->1, 'Z'->26, 'AA'->27 ... Non-spreadsheet labels
+// (numeric, exemplar 'E12', etc.) map to 0 so they don't inflate the cursor.
+function labelToNum(label) {
+  const s = String(label || '').toUpperCase();
+  if (!/^[A-Z]+$/.test(s)) return 0;
+  let n = 0;
+  for (let i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64);
+  return n;
+}
+
+// MONOTONIC labels: never reuse a freed label. We hand out the next label
+// strictly above the highest spreadsheet label EVER used on this frame
+// (deleted/rejected masks included), so a reject-then-add sequence keeps
+// climbing instead of recycling 'A'. Consistent with the Place-Points append
+// rule in CONTRACTS §3. Falls back to A on an empty frame.
 function nextAddLabel() {
   if (!currentData) return 'A';
-  const used = new Set(currentData.masks.map(m => m.label));
-  for (const l of ADD_LABELS) {
-    if (!used.has(l)) return l;
+  let hi = 0;
+  for (const m of currentData.masks) {
+    const v = labelToNum(m.label);
+    if (v > hi) hi = v;
   }
-  return 'Z' + currentData.masks.length;
+  if (currentData._labelHighWater && currentData._labelHighWater > hi) {
+    hi = currentData._labelHighWater;
+  }
+  const next = hi + 1;
+  currentData._labelHighWater = next;
+  return colLabel(next);
 }
 
 // Pending add click — stored until species is chosen
@@ -2209,9 +2610,41 @@ async function resetMask() {
 // KEYBOARD
 // ══════════════════════════════════════════════
 document.addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT') return;
+  // Let mask shortcuts keep working even when a range/checkbox control has focus.
+  // The opacity and scan-threshold sliders previously trapped focus, so every
+  // keydown returned here and all shortcuts died until you clicked elsewhere.
+  // Only true text-entry fields swallow keys.
+  const _tag = e.target.tagName, _ty = (e.target.type || '').toLowerCase();
+  const _isTextEntry =
+    (_tag === 'INPUT' && _ty !== 'range' && _ty !== 'checkbox' && _ty !== 'radio')
+    || _tag === 'TEXTAREA' || _tag === 'SELECT';
+  if (_isTextEntry) return;
   const activeScreen = document.querySelector('.screen.active');
   if (!activeScreen || activeScreen.id !== 'review') return;
+
+  // K → STICKY toggle for the keyboard cheat sheet (K opens, K again closes).
+  // Handled first so it works from any mode. e.repeat is ignored so holding K
+  // doesn't flicker the panel.
+  if (e.key === 'k' || e.key === 'K') {
+    if (!e.ctrlKey && !e.metaKey) {
+      if (!e.repeat) {
+        const kh = document.getElementById('kbd-help');
+        if (kh) kh.classList.toggle('visible');
+      }
+      e.preventDefault();
+      return;
+    }
+  }
+  // While the cheat sheet is open, swallow every other key so holding K can't
+  // fire shortcuts by accident. Esc is the fail-safe to close it.
+  {
+    const kh = document.getElementById('kbd-help');
+    if (kh && kh.classList.contains('visible')) {
+      if (e.key === 'Escape') kh.classList.remove('visible');
+      e.preventDefault();
+      return;
+    }
+  }
 
   // When species popup is showing: number keys assign species, letter keys assign category
   if (pendingAddMaskIdx >= 0) {
@@ -2268,7 +2701,10 @@ document.addEventListener('keydown', e => {
     case 'x': case 'X':
     case 'Delete': case 'Backspace':
       e.preventDefault();
-      rejectMask();
+      // If 2+ masks are multi-selected (Ctrl+click), delete the whole set.
+      // Otherwise reject the single selected mask as before.
+      if (checkedMaskIds.size >= 2) deleteCheckedMasks();
+      else rejectMask();
       break;
     case 'n': case 'N':
       if (!e.ctrlKey && !e.metaKey) { saveCurrentMasks(); nextImage(); e.preventDefault(); }
@@ -2376,6 +2812,8 @@ document.addEventListener('keyup', e => {
     numKeyDown = null;
     highlightQuickBtn(-1);
   }
+  // K is now a sticky toggle (handled on keydown) — releasing it must NOT hide
+  // the cheat sheet. Press K again (or Esc) to close.
 });
 
 // Clear held-number + Add-mode latch on focus loss so the user doesn't return
@@ -2385,6 +2823,8 @@ window.addEventListener('blur', () => {
     numKeyDown = null;
     highlightQuickBtn(-1);
   }
+  const kh = document.getElementById('kbd-help');
+  if (kh) kh.classList.remove('visible');
 });
 
 // ══════════════════════════════════════════════
@@ -2754,6 +3194,9 @@ function backToStartup() {
 // land directly in the review view, not see the setup form.
 // ══════════════════════════════════════════════
 const ORCHESTRATED = {{ 'true' if orchestrated else 'false' }};
+// Base URL of the pipeline orchestrator (empty when launched standalone). The
+// "Done — return to main menu" button uses it to navigate back.
+const ORCHESTRATOR_URL = {{ orchestrator_url|tojson }};
 
 async function _bootStep(s) {
   const processed = s.processing_done || 0;
