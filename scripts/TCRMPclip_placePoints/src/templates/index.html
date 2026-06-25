@@ -1,0 +1,2583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TCRMP Place Points</title>
+<!-- VICARIUS-aligned typography: Inter body, Space Mono code,
+     Syne headings, Silkscreen reserved for small pixel kickers only. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Syne:wght@500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --magenta:       #E20074;
+  --magenta-dark:  #B8005C;
+  --magenta-light: #FFB3D9;
+  --pink:          #FFB3D9;
+  --pink-soft:     #FFE6F2;
+  --cyan:          #00D4FF;
+  --bg:            #0a0a0f;
+  --bg-deep:       #050508;
+  --surface:       #11111a;
+  --surface-light: #191926;
+  --input-bg:      #15151f;
+  --text:          #F5EDF0;
+  --text-dim:      #b0a7ab;
+  --success:       #00FFB3;
+  --warning:       #FFB800;
+  --error:         #FF4D6D;
+  --border:        #2a2a38;
+  --border-dim:    #1d1d26;
+  --radius:        2px;
+  --radius-lg:     3px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { background: var(--bg); }
+body {
+  font-family: 'Inter', ui-sans-serif, -apple-system, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  letter-spacing: 0.01em;
+  color: var(--text);
+  background: var(--bg);
+  overflow: hidden;
+  height: 100vh;
+  cursor: crosshair;
+}
+
+/* Pixel grid + scanlines (match orchestrator) ------------------------- */
+body::before {
+  content: ""; position: fixed; inset: 0;
+  background-image:
+    linear-gradient(to right,  rgba(255,179,217,0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,179,217,0.05) 1px, transparent 1px);
+  background-size: 20px 20px;
+  pointer-events: none; z-index: 0; opacity: 0.4;
+}
+body::after {
+  content: ""; position: fixed; inset: 0;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0px, transparent 2px,
+    rgba(255,255,255,0.012) 2px, rgba(255,255,255,0.012) 3px
+  );
+  pointer-events: none; z-index: 1; opacity: 0.22;
+}
+
+/* ── Screens ── */
+.screen { display: none; width: 100%; height: 100%; position: relative; z-index: 2; }
+.screen.active { display: flex; }
+
+#orch-loading { background: var(--bg-deep); align-items: center; justify-content: center; }
+#orch-loading .orch-veil { display: flex; flex-direction: column; align-items: center; gap: 16px; max-width: 480px; padding: 40px 24px; }
+#orch-loading .orch-veil-title {
+  color: var(--pink); font-size: 20px; font-weight: 700;
+  font-family: 'Syne', sans-serif; text-transform: uppercase; letter-spacing: 0.04em;
+}
+#orch-loading .orch-veil-msg { color: var(--text); font-size: 14px; text-align: center; line-height: 1.6; }
+#orch-loading .orch-veil-hint { color: var(--text-dim); font-size: 12px; margin-top: 12px; font-family: 'Space Mono', monospace; }
+
+/* ── STARTUP SCREEN ── */
+#startup { align-items: center; justify-content: center; }
+.setup-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: 32px 40px; width: 620px; max-height: 90vh; overflow-y: auto;
+}
+.setup-card h1 {
+  font-size: 22px; margin-bottom: 22px; color: var(--pink);
+  font-family: 'Syne', sans-serif; text-transform: uppercase; letter-spacing: 0.04em;
+  font-weight: 700;
+}
+.setup-card h2 {
+  font-size: 15px; margin: 16px 0 10px; color: var(--text);
+  font-family: 'Syne', sans-serif; text-transform: uppercase; letter-spacing: 0.03em;
+  font-weight: 600;
+}
+.field { margin-bottom: 16px; }
+.field label {
+  display: block; font-size: 11px; color: var(--text-dim);
+  margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.08em;
+  font-family: 'Space Mono', monospace;
+}
+.field input[type=text] {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--input-bg); color: var(--text);
+  font-size: 13px; font-family: 'Space Mono', 'Consolas', monospace;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.field input[type=text]:focus {
+  border-color: var(--magenta); outline: none;
+  box-shadow: 0 0 0 1px rgba(226,0,116,0.35);
+}
+.field-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.field-row label {
+  font-size: 14px; color: var(--text); cursor: crosshair;
+  display: flex; align-items: center; gap: 6px;
+  font-family: 'Inter', sans-serif; text-transform: none; letter-spacing: 0;
+}
+.field-row input[type=checkbox], .field-row input[type=radio] { accent-color: var(--magenta); }
+.mode-buttons { display: flex; gap: 12px; margin-bottom: 16px; }
+.mode-btn {
+  flex: 1; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--input-bg); color: var(--text); cursor: crosshair; text-align: center;
+  font-size: 13px; transition: all 0.15s;
+}
+.mode-btn:hover { border-color: var(--pink); color: var(--pink); }
+.mode-btn.active {
+  border-color: var(--magenta); background: rgba(226,0,116,0.08);
+  color: var(--pink); font-weight: 600;
+}
+.mode-btn .mode-title {
+  font-size: 14px; font-weight: 600; margin-bottom: 4px;
+  font-family: 'Syne', sans-serif; letter-spacing: 0.02em;
+}
+.mode-btn .mode-desc { font-size: 12px; color: var(--text-dim); font-family: 'Space Mono', monospace; }
+.mode-btn.active .mode-desc { color: var(--text); }
+.setup-card .btn-action {
+  width: 100%; padding: 12px; border: 1px solid var(--magenta); border-radius: var(--radius);
+  background: var(--magenta); color: #fff; font-size: 13px; font-weight: 400;
+  cursor: crosshair; margin-top: 8px;
+  font-family: 'Space Mono', monospace; letter-spacing: 0.06em; text-transform: uppercase;
+  transition: all 0.15s;
+}
+.setup-card .btn-action:hover { background: var(--pink); border-color: var(--pink); color: var(--bg); }
+.setup-card .btn-action:disabled {
+  background: transparent; border-color: var(--border);
+  color: var(--text-dim); opacity: 0.5; cursor: not-allowed;
+}
+.setup-card .btn-scan { background: var(--surface-light); border-color: var(--border); color: var(--text); margin-bottom: 6px; }
+.setup-card .btn-scan:hover { border-color: var(--pink); color: var(--pink); background: var(--surface-light); }
+.setup-error { color: var(--error); font-size: 12px; margin-top: 8px; font-family: 'Space Mono', monospace; }
+.setup-info {
+  color: var(--success); font-size: 13px; margin-top: 8px;
+  background: rgba(0,255,179,0.08); border: 1px solid rgba(0,255,179,0.3);
+  padding: 8px 10px; border-radius: var(--radius); display: none;
+  font-family: 'Space Mono', monospace;
+}
+.setup-info.visible { display: block; }
+.setup-info .num { font-weight: 700; color: var(--success); }
+.year-grid { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.year-grid label {
+  font-size: 14px; color: var(--text); cursor: crosshair;
+  display: flex; align-items: center; gap: 4px; min-width: 80px;
+  font-family: 'Inter', sans-serif;
+}
+.year-grid .select-all {
+  font-size: 12px; color: var(--pink); cursor: crosshair;
+  margin-left: 8px; text-decoration: underline;
+  font-family: 'Space Mono', monospace; text-transform: uppercase; letter-spacing: 0.06em;
+}
+.hidden { display: none !important; }
+
+/* ── PROCESSING SCREEN ── */
+#processing { align-items: center; justify-content: center; flex-direction: column; gap: 16px; }
+.progress-wrap { width: 560px; }
+.progress-wrap h2 {
+  font-size: 18px; margin-bottom: 14px;
+  font-family: 'Syne', sans-serif; color: var(--pink);
+  text-transform: uppercase; letter-spacing: 0.03em; font-weight: 600;
+}
+.progress-bar-outer {
+  width: 100%; height: 8px; background: var(--input-bg);
+  border: 1px solid var(--border-dim); border-radius: 1px; overflow: hidden;
+}
+.progress-bar-inner {
+  height: 100%; background: linear-gradient(90deg, var(--magenta), var(--pink));
+  transition: width 0.2s;
+}
+.progress-text { font-size: 13px; color: var(--text-dim); margin-top: 8px; font-family: 'Space Mono', monospace; }
+.progress-current { font-size: 12px; color: var(--text-dim); margin-top: 4px; font-family: 'Space Mono', monospace; }
+.progress-eta { font-size: 12px; color: var(--success); margin-top: 4px; font-family: 'Space Mono', monospace; }
+
+/* ── REVIEW SCREEN ── */
+#review { flex-direction: column; }
+
+.review-topbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 14px; background: var(--bg-deep); border-bottom: 1px solid var(--border);
+  height: 40px; user-select: none; flex-shrink: 0;
+}
+.review-topbar h1 {
+  font-size: 14px; font-family: 'Syne', sans-serif;
+  color: var(--pink); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;
+}
+.btn {
+  padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: transparent; color: var(--text); cursor: crosshair;
+  font-size: 12px; white-space: nowrap;
+  font-family: 'Space Mono', monospace; letter-spacing: 0.04em;
+  transition: all 0.15s;
+}
+.btn:hover { border-color: var(--pink); color: var(--pink); }
+.btn.primary { background: var(--magenta); border-color: var(--magenta); color: #fff; }
+.btn.primary:hover { background: var(--pink); border-color: var(--pink); color: var(--bg); }
+.spacer { flex: 1; }
+.img-counter {
+  font-size: 14px; font-weight: 700; color: var(--pink);
+  min-width: 80px; text-align: center;
+  font-family: 'Space Mono', monospace;
+}
+.batch-info { font-size: 12px; color: var(--text-dim); font-family: 'Space Mono', monospace; }
+.status { font-size: 12px; color: var(--text-dim); font-family: 'Space Mono', monospace; }
+.status.flash { color: var(--success); }
+
+.review-body { display: flex; flex: 1; overflow: hidden; }
+
+/* Canvas */
+.canvas-wrap { flex: 1; position: relative; overflow: hidden; background: var(--bg-deep); }
+#canvas { position: absolute; top: 0; left: 0; cursor: crosshair; }
+
+/* AUX mode: green border + badge. Side-observation logging, step 4 only. */
+.canvas-wrap.aux-active {
+  box-shadow: inset 0 0 0 4px var(--success), inset 0 0 24px rgba(0, 255, 179, 0.25);
+}
+.canvas-wrap.aux-active::after {
+  content: 'AUX MODE — click to log a side observation (L to exit)';
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  background: var(--success); color: var(--bg); padding: 5px 14px;
+  font-weight: 700; font-size: 11px; letter-spacing: 0.08em;
+  border-radius: var(--radius); pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+  z-index: 50; font-family: 'Space Mono', monospace; text-transform: uppercase;
+}
+
+/* Right panel */
+.panel {
+  width: 280px; min-width: 280px; background: var(--surface);
+  border-left: 1px solid var(--border); display: flex; flex-direction: column;
+  flex-shrink: 0;
+}
+.panel-header {
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+}
+.panel-header h3 {
+  font-size: 11px; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: 0.1em;
+  font-family: 'Silkscreen', 'Space Mono', monospace; font-weight: 700;
+}
+.panel-header .summary { font-size: 11px; color: var(--text-dim); margin-left: auto; font-family: 'Space Mono', monospace; }
+
+.point-list { list-style: none; flex: 1; overflow-y: auto; padding: 4px 6px; }
+.point-list li {
+  padding: 6px 8px; margin-bottom: 2px; border-radius: var(--radius);
+  font-size: 13px; cursor: crosshair; display: flex; align-items: center; gap: 8px;
+  transition: background 0.1s; border: 1px solid transparent;
+  font-family: 'Inter', sans-serif;
+}
+.point-list li:hover { background: var(--surface-light); }
+.point-list li.active {
+  background: rgba(255, 45, 155, 0.18); border-color: #ff2d9b;
+  box-shadow: inset 3px 0 0 0 #ff2d9b;
+}
+/* Ctrl+click multi-selection in the pane — distinct cyan tint so a whole set
+   can be picked and deleted together (Del). */
+.point-list li.multisel {
+  background: rgba(0, 212, 255, 0.16); border-color: var(--cyan);
+  box-shadow: inset 3px 0 0 0 var(--cyan);
+}
+.point-list li.multisel.active {
+  background: rgba(255, 45, 155, 0.20);
+  box-shadow: inset 3px 0 0 0 #ff2d9b, inset -3px 0 0 0 var(--cyan);
+}
+.point-list li.active .plabel { color: #ff7ac2; }
+.point-list li.locked { opacity: 0.7; }
+.point-list li .plabel {
+  font-weight: 700; width: 18px; color: var(--success);
+  font-size: 13px; font-family: 'Space Mono', monospace;
+}
+.point-list li .pspecies { flex: 1; color: var(--text); font-size: 13px; }
+.point-list li .pconf { color: var(--text-dim); font-size: 11px; width: 34px; text-align: right; font-family: 'Space Mono', monospace; }
+.point-list li .pcoord { color: var(--text-dim); font-size: 11px; width: 64px; text-align: right; font-family: 'Space Mono', monospace; }
+.point-list li.no-cross .plabel { color: var(--error); }
+.point-list li.unid .plabel { color: var(--warning); }
+
+.panel-actions { padding: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+
+.help-hint {
+  padding: 8px 10px; font-size: 11px; color: var(--text-dim);
+  border-top: 1px solid var(--border); flex-shrink: 0; text-align: center;
+  font-family: 'Space Mono', monospace; letter-spacing: 0.04em;
+}
+.help-hint kbd {
+  background: var(--input-bg); padding: 2px 6px; border: 1px solid var(--border);
+  border-radius: 1px; color: var(--pink); font-family: 'Space Mono', monospace;
+}
+
+/* ── Hold-K keyboard cheat sheet ── */
+#kbd-help {
+  position: fixed; inset: 0; z-index: 400; display: none;
+  align-items: center; justify-content: center;
+  background: rgba(5, 5, 8, 0.82); backdrop-filter: blur(2px);
+}
+#kbd-help.visible { display: flex; }
+#kbd-help .kh-card {
+  background: var(--surface); border: 1px solid var(--magenta); border-radius: var(--radius-lg);
+  padding: 22px 26px; width: min(880px, 92vw); max-height: 88vh; overflow-y: auto;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.8);
+}
+#kbd-help .kh-head {
+  display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px;
+  border-bottom: 1px solid var(--border); padding-bottom: 10px;
+}
+#kbd-help .kh-head h2 {
+  font-family: 'Syne', sans-serif; color: var(--pink); font-size: 18px;
+  text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;
+}
+#kbd-help .kh-head .kh-sub { font-size: 11px; color: var(--text-dim); font-family: 'Space Mono', monospace; }
+#kbd-help .kh-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 28px; }
+#kbd-help .kh-group { break-inside: avoid; }
+#kbd-help .kh-group h3 {
+  font-family: 'Silkscreen', 'Space Mono', monospace; font-weight: 700;
+  font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--magenta-light); margin: 4px 0 8px;
+}
+#kbd-help .kh-group.primary h3 { color: var(--pink); }
+#kbd-help .kh-group.primary {
+  border: 1px solid rgba(226,0,116,0.4); border-radius: var(--radius);
+  padding: 8px 12px 10px; background: rgba(226,0,116,0.06);
+}
+#kbd-help .kh-row {
+  display: flex; align-items: baseline; gap: 10px; padding: 3px 0;
+  font-size: 12px; font-family: 'Inter', sans-serif;
+}
+#kbd-help .kh-row .kh-keys { flex: 0 0 132px; text-align: right; }
+#kbd-help .kh-row .kh-desc { color: var(--text-dim); }
+#kbd-help kbd {
+  background: var(--input-bg); padding: 2px 6px; border: 1px solid var(--border);
+  border-radius: 1px; font-size: 11px; color: var(--pink);
+  font-family: 'Space Mono', monospace; white-space: nowrap;
+}
+#kbd-help .kh-foot { margin-top: 14px; font-size: 11px; color: var(--text-dim); font-family: 'Space Mono', monospace; text-align: center; }
+
+/* ── Added points ── */
+.point-list li.added .plabel { color: var(--pink); }
+
+/* ── Category popup ── */
+#cat-popup {
+  position: fixed; z-index: 250; display: none;
+  background: var(--surface); border: 1px solid var(--magenta); border-radius: var(--radius-lg);
+  padding: 8px 6px; font-size: 12px; pointer-events: auto;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.8);
+}
+#cat-popup.visible { display: flex; gap: 3px; flex-wrap: wrap; width: 280px; }
+#cat-popup .cat-btn {
+  padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--input-bg); color: var(--text); cursor: crosshair;
+  font-size: 12px; flex: 1; min-width: 64px; text-align: center; white-space: nowrap;
+  font-family: 'Space Mono', monospace; transition: all 0.1s;
+}
+#cat-popup .cat-btn:hover { background: var(--surface-light); border-color: var(--pink); color: var(--pink); }
+#cat-popup .cat-btn kbd { color: var(--magenta); font-weight: 700; margin-right: 3px; font-family: 'Space Mono', monospace; }
+
+/* ── EXPORT DONE overlay ── */
+.overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.78); display: none;
+  align-items: center; justify-content: center; z-index: 200;
+}
+.overlay.visible { display: flex; }
+.overlay-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: 28px 36px; max-width: 520px; text-align: center;
+}
+.overlay-card h2 {
+  color: var(--pink); margin-bottom: 14px;
+  font-family: 'Syne', sans-serif; text-transform: uppercase; letter-spacing: 0.03em;
+  font-size: 18px; font-weight: 600;
+}
+.overlay-card p { font-size: 14px; color: var(--text); margin-bottom: 8px; }
+.overlay-card .btn { margin-top: 12px; }
+
+/* Letter flash */
+#letter-flash {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  font-size: 140px; font-weight: 900; color: rgba(255, 179, 217, 0.7);
+  pointer-events: none; z-index: 300; opacity: 0; transition: opacity 0.15s;
+  text-shadow: 0 0 40px rgba(0,0,0,0.8);
+  font-family: 'Space Mono', monospace;
+}
+#letter-flash.show { opacity: 1; }
+
+/* Quick-add label bar */
+.quickadd-bar {
+  display: flex; align-items: center; gap: 6px; padding: 7px 14px;
+  background: var(--bg-deep); border-bottom: 1px solid var(--border); flex-shrink: 0;
+  font-size: 12px; flex-wrap: wrap;
+}
+.quickadd-bar .qa-label {
+  color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em;
+  font-size: 10px; margin-right: 6px;
+  font-family: 'Silkscreen', 'Space Mono', monospace; font-weight: 700;
+}
+.quickadd-bar .qa-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--input-bg); border: 1px solid var(--border);
+  color: var(--text); padding: 5px 10px; border-radius: var(--radius);
+  cursor: crosshair; font-family: 'Space Mono', monospace; font-size: 12px;
+  transition: all 0.15s;
+}
+.quickadd-bar .qa-btn:hover { background: var(--surface-light); color: var(--pink); border-color: var(--pink); }
+.quickadd-bar .qa-btn.active {
+  background: var(--magenta); border-color: var(--magenta); color: #fff;
+  box-shadow: 0 0 8px rgba(226, 0, 116, 0.45);
+}
+.quickadd-bar .qa-btn .qa-key {
+  background: rgba(0,0,0,0.35); color: var(--success);
+  padding: 1px 5px; border-radius: 1px; font-size: 10px; font-weight: 700;
+}
+.quickadd-bar .qa-off {
+  margin-left: auto; color: var(--pink); cursor: crosshair;
+  font-size: 11px; padding: 4px 8px; font-family: 'Space Mono', monospace;
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.quickadd-bar .qa-off:hover { text-decoration: underline; color: var(--magenta-light); }
+/* REVIEW (flag-for-expert) quick button — cyan, distinct from species labels */
+.quickadd-bar .qa-btn.review-btn { border-color: #2a6f78; }
+.quickadd-bar .qa-btn.review-btn:hover { color: #00e0f0; border-color: #00e0f0; background: var(--surface-light); }
+.quickadd-bar .qa-btn.review-btn.active {
+  background: #00c8dc; border-color: #00c8dc; color: #06222a;
+  box-shadow: 0 0 8px rgba(0, 200, 220, 0.5);
+}
+.quickadd-bar .qa-btn.review-btn .qa-key { color: #06222a; background: rgba(255,255,255,0.55); }
+.point-list .pspecies.review { color: #00e0f0; font-weight: 700; }
+
+/* Hover loupe (magnifier) */
+#loupe {
+  position: fixed; width: 180px; height: 180px;
+  border: 2px solid var(--magenta); border-radius: 50%;
+  pointer-events: none; display: none;
+  background: #000; overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.7);
+  z-index: 250;
+}
+#loupe canvas { display: block; }
+#loupe.visible { display: block; }
+
+/* Scrollbars --------------------------------------------------------- */
+::-webkit-scrollbar       { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg-deep); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 1px; }
+::-webkit-scrollbar-thumb:hover { background: var(--magenta); }
+</style>
+</head>
+<body>
+
+<!-- ════════════ STARTUP ════════════ -->
+<!-- Orchestrator loading veil: shown when the orchestrator launched us so the
+     user never sees the standalone startup form. JS auto-calls doStart(). -->
+{% if orchestrated %}
+<div class="screen active" id="orch-loading">
+  <div class="orch-veil">
+    <div class="orch-veil-title">TCRMP — Loading frames</div>
+    <div id="orch-loading-msg" class="orch-veil-msg">
+      Reading selected_frames.csv, splitting CPC / OCR, loading existing points...
+    </div>
+    <div class="orch-veil-hint">
+      (this view is orchestrator-driven — close the tab and use the Step&nbsp;4 panel if you need to reconfigure)
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="screen{% if not orchestrated %} active{% endif %}" id="startup">
+  <div class="setup-card">
+    <h1>TCRMP Place Points</h1>
+
+    <!-- Mode selection -->
+    <div class="mode-buttons">
+      <div class="mode-btn active" id="mode-new" onclick="setMode('new')">
+        <div class="mode-title">Load Selected Frames</div>
+        <div class="mode-desc">CPC + OCR from TCRMPcvr_chooseImages</div>
+      </div>
+      <div class="mode-btn" id="mode-resume" onclick="setMode('resume')">
+        <div class="mode-title">Continue Existing</div>
+        <div class="mode-desc">Resume from export directory</div>
+      </div>
+    </div>
+
+    <!-- New project fields -->
+    <div id="new-fields">
+      <div class="field">
+        <label>Selected Frames CSV (from TCRMPcvr_chooseImages)</label>
+        <input type="text" id="inp-frames" value="{{ default_frames }}">
+      </div>
+      <div class="field">
+        <label>Export Directory (unified output)</label>
+        <input type="text" id="inp-export" value="{{ default_export }}">
+      </div>
+      <div class="field">
+        <label>Species Filter (uncheck to exclude — empty = all frames)</label>
+        <div class="year-grid" id="species-grid">
+          {% for sp in target_species %}
+          <label title="Include frames containing {{ sp }} in this review session (uncheck to skip them)."><input type="checkbox" class="sp-chk" value="{{ sp }}" checked> {{ sp }}</label>
+          {% endfor %}
+          <span class="select-all" onclick="toggleAllSpecies()">toggle all</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Resume fields -->
+    <div id="resume-fields" class="hidden">
+      <div class="field">
+        <label>Export Directory (with existing detection data)</label>
+        <input type="text" id="inp-resume-export" placeholder="/path/to/existing/export">
+      </div>
+    </div>
+
+    <!-- Common: review batch size -->
+    <div class="field">
+      <label>Review Batch Size</label>
+      <div class="field-row">
+        <label><input type="radio" name="rbatch" value="5"{% if default_batch_size == '5' %} checked{% endif %}> 5</label>
+        <label><input type="radio" name="rbatch" value="10"{% if default_batch_size == '10' or not default_batch_size %} checked{% endif %}> 10</label>
+        <label><input type="radio" name="rbatch" value="20"{% if default_batch_size == '20' %} checked{% endif %}> 20</label>
+        <label><input type="radio" name="rbatch" value="all"{% if default_batch_size == 'all' %} checked{% endif %}> All (no batching)</label>
+      </div>
+    </div>
+
+    <!-- Common: reference mode -->
+    <div class="field">
+      <label>
+        <input type="checkbox" id="chk-reference"{% if default_reference_mode %} checked{% endif %}>
+        Show existing points as read-only reference (place fresh points instead)
+      </label>
+      <div style="color:var(--text-dim); font-size:13px; line-height:1.6; margin-top:6px; margin-left:24px;">
+        Existing OCR / CPC points render larger and grayed on the canvas for reference only.
+        They don't appear in the Labels panel and aren't exported. Use hold-number+click to place
+        your own fresh points.
+      </div>
+    </div>
+
+    <div class="field">
+      <label>
+        <input type="checkbox" id="chk-shuffle"{% if default_shuffle %} checked{% endif %}>
+        Shuffle frames (randomize review order)
+      </label>
+      <div style="color:var(--text-dim); font-size:13px; line-height:1.6; margin-top:6px; margin-left:24px;">
+        Random per-session. Which frames have been processed / exported is
+        still tracked on disk, so you can pick up unprocessed ones later.
+      </div>
+    </div>
+
+    <div class="setup-info" id="setup-info"></div>
+    <button class="btn-action" id="btn-start" onclick="doStart()">Load & Start</button>
+    <div class="setup-error" id="setup-error"></div>
+  </div>
+</div>
+
+<!-- ════════════ PROCESSING ════════════ -->
+<div class="screen" id="processing">
+  <div class="progress-wrap">
+    <h2>Processing all images...</h2>
+    <div class="progress-bar-outer">
+      <div class="progress-bar-inner" id="progress-bar" style="width: 0%"></div>
+    </div>
+    <div class="progress-text" id="progress-text">0 / 0</div>
+    <div class="progress-current" id="progress-current"></div>
+    <div class="progress-eta" id="progress-eta"></div>
+  </div>
+</div>
+
+<!-- ════════════ REVIEW ════════════ -->
+<div class="screen" id="review">
+  <div class="review-topbar">
+    <h1>TCRMP Place Points</h1>
+    <button class="btn" onclick="prevImage()" title="Previous frame (Shift+Space)">&#9664; Prev</button>
+    <span class="img-counter" id="img-counter">0 / 0</span>
+    <button class="btn" onclick="nextImage()" title="Next frame (Space)">Next &#9654;</button>
+    <span class="batch-info" id="batch-info"></span>
+    <span id="image-filename" style="color:var(--success); font-family:'Space Mono',monospace; font-size:13px; margin-left:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:500px;"></span>
+    <span class="spacer"></span>
+    <span id="frame-timer"
+          style="font-family:'Space Mono',monospace; font-size:12px; color:var(--text-dim); margin-right:8px"
+          title="This frame — target 15.0s. Average is the rolling mean for this session.">
+      —
+    </span>
+    <button class="btn" id="frame-timer-pause"
+            onclick="_timerTogglePause()" title="Pause / resume the timer (P)"
+            style="padding:4px 10px;font-size:11px;margin-right:8px">Pause</button>
+    <span class="status" id="status-text"></span>
+    <button class="btn primary" onclick="doExport()" title="Export this review batch to sam_click_prompts.json for SAM3 segmentation. On the last frame this runs automatically (Space).">Export Batch</button>
+    <button class="btn" id="btn-done-exit" onclick="doneAndExit()"
+            title="Close this labeling tool and return to the main menu (orchestrator). If there's no orchestrator, closes the tab.">
+      Done — close &amp; return to main menu
+    </button>
+  </div>
+  <div class="quickadd-bar" id="quickadd-bar">
+    <span class="qa-label">Tap number + click to place:</span>
+    {% for lbl in target_labels %}
+    <button class="qa-btn" data-code="{{ lbl.code }}" data-idx="{{ loop.index0 }}"
+            onclick="toggleQuickLabel({{ loop.index0 }})"
+            title="Tap {{ loop.index }} (or click this button) to arm label {{ lbl.code }}{% if lbl.name %} — {{ lbl.name }}{% endif %}, then click the image to place. Tap/click again to clear.">
+      <span class="qa-key">{{ loop.index }}</span>
+      <span class="qa-code">{{ lbl.code }}</span>
+    </button>
+    {% endfor %}
+    <button class="qa-btn review-btn" id="qa-review" data-code="REVIEW" onclick="toggleQuickLabel(REVIEW_IDX)"
+            title="REVIEW (R): a normal quick-add label — tap R (or click) to arm it, then click the image to place a REVIEW point; tap again to clear. With a point selected, press R to relabel it REVIEW. REVIEW points are segmented and shipped to an outside taxonomic expert for ID; they are NEVER used as training labels.">
+      <span class="qa-key">R</span>
+      <span class="qa-code">REVIEW</span>
+    </button>
+  </div>
+  <div class="review-body">
+    <div class="canvas-wrap" id="canvas-wrap">
+      <canvas id="canvas"></canvas>
+      <div id="loupe"><canvas id="loupe-canvas" width="180" height="180"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h3>Labels</h3>
+        <span class="summary" id="panel-summary"></span>
+      </div>
+      <ul class="point-list" id="point-list"></ul>
+      <div class="panel-actions">
+        <button class="btn" style="border-color:var(--error);color:var(--error)"
+                onclick="scrapFrame()" title="Remove this frame from the dataset — it won't be reviewed or exported">
+          Scrap Frame
+        </button>
+      </div>
+      <div class="help-hint">Press <kbd>K</kbd> for keyboard shortcuts</div>
+    </div>
+  </div>
+</div>
+
+<div id="cat-popup">
+  <div style="width:100%; font-size:10px; color:var(--text-dim); padding:3px 4px; text-transform:uppercase; letter-spacing:0.1em; font-family:'Silkscreen','Space Mono',monospace; font-weight:700;">Species</div>
+  {% for sp in target_species %}
+  <div class="cat-btn" onclick="assignSpecies('{{ sp }}')" title="Label this point {{ sp }} (key {{ loop.index }})."><kbd>{{ loop.index }}</kbd>{{ sp }}</div>
+  {% endfor %}
+  <div style="width:100%; border-top:1px solid var(--border); margin:4px 0;"></div>
+  <div style="width:100%; font-size:10px; color:var(--text-dim); padding:3px 4px; text-transform:uppercase; letter-spacing:0.1em; font-family:'Silkscreen','Space Mono',monospace; font-weight:700;">Category</div>
+  <div class="cat-btn" onclick="assignCategory('Coral')" title="Label this point as a non-target Coral (key c)."><kbd>c</kbd>Coral</div>
+  <div class="cat-btn" onclick="assignCategory('Sponge')" title="Label this point as Sponge (key s)."><kbd>s</kbd>Sponge</div>
+  <div class="cat-btn" onclick="assignCategory('Macroalgae')" title="Label this point as Macroalgae (key m)."><kbd>m</kbd>Macro</div>
+  <div class="cat-btn" onclick="assignCategory('Gorgonian')" title="Label this point as Gorgonian (key g)."><kbd>g</kbd>Gorg</div>
+  <div class="cat-btn" onclick="assignCategory('Dca')" title="Label this point as Dca / dead coral with algae (key d)."><kbd>d</kbd>Dca</div>
+  <div class="cat-btn" onclick="assignCategory('Turf')" title="Label this point as Turf algae (key t)."><kbd>t</kbd>Turf</div>
+  <div class="cat-btn" onclick="assignCategory('Non-living')" title="Label this point as Non-living substrate (key n)."><kbd>n</kbd>Non-liv</div>
+  <div class="cat-btn" onclick="assignCategory('')" title="Clear this point's label / leave unlabeled (key 0)."><kbd>0</kbd>Unlabel</div>
+</div>
+<div id="letter-flash"></div>
+
+<!-- ════════════ KEYBOARD CHEAT SHEET (press K to toggle) ════════════ -->
+<div id="kbd-help">
+  <div class="kh-card">
+    <div class="kh-head">
+      <h2>Keyboard</h2>
+      <span class="kh-sub">press <kbd>K</kbd> to open · press <kbd>K</kbd> again (or <kbd>Esc</kbd>) to close</span>
+    </div>
+    <div class="kh-cols">
+
+      <div class="kh-group primary">
+        <h3>Drop points — the main mode</h3>
+        <div class="kh-row"><span class="kh-keys"><kbd>1</kbd>…<kbd>9</kbd></span><span class="kh-desc">arm that species — click to drop a point (tap again to disarm)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>R</kbd></span><span class="kh-desc">arm REVIEW — a normal quick-add label; click to drop a REVIEW point (tap R again to disarm)</span></div>
+        <div class="kh-row"><span class="kh-keys">click</span><span class="kh-desc">place the armed point</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>A</kbd> + click</span><span class="kh-desc">place a point, then pick species/category in the popup</span></div>
+        <div class="kh-row"><span class="kh-keys">right-click</span><span class="kh-desc">non-target prompt point (SAM3 segments it later)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Esc</kbd></span><span class="kh-desc">disarm → select mode (and deselect)</span></div>
+      </div>
+
+      <div class="kh-group">
+        <h3>Move through frames</h3>
+        <div class="kh-row"><span class="kh-keys"><kbd>Space</kbd></span><span class="kh-desc">next frame (last frame → export batch)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Shift</kbd>+<kbd>Space</kbd></span><span class="kh-desc">previous frame</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Enter</kbd></span><span class="kh-desc">confirm point → next point → auto-center on it (reference review)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>P</kbd></span><span class="kh-desc">pause / resume the frame timer</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Ctrl</kbd>+<kbd>S</kbd></span><span class="kh-desc">save this frame now</span></div>
+      </div>
+
+      <div class="kh-group">
+        <h3>View</h3>
+        <div class="kh-row"><span class="kh-keys">scroll</span><span class="kh-desc">zoom</span></div>
+        <div class="kh-row"><span class="kh-keys">hold-drag / <kbd>Alt</kbd>+drag</span><span class="kh-desc">pan — press-and-hold anywhere (even on a point); a quick tap still places/selects</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>F</kbd></span><span class="kh-desc">fit frame to view</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Z</kbd></span><span class="kh-desc">auto-center on selected point</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>H</kbd></span><span class="kh-desc">toggle magnifier loupe</span></div>
+      </div>
+
+      <div class="kh-group">
+        <h3>Edit a point (select mode)</h3>
+        <div class="kh-row"><span class="kh-keys">tap a point</span><span class="kh-desc">select it (turns pink, jumps to it in Labels)</span></div>
+        <div class="kh-row"><span class="kh-keys">tap it again</span><span class="kh-desc">delete it</span></div>
+        <div class="kh-row"><span class="kh-keys">drag a point</span><span class="kh-desc">move it</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>1</kbd>…<kbd>9</kbd> / <kbd>R</kbd></span><span class="kh-desc">with a point selected, relabel it to that label (R = REVIEW)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Ctrl</kbd>+click</span><span class="kh-desc">move selected point here</span></div>
+        <div class="kh-row"><span class="kh-keys">arrows</span><span class="kh-desc">nudge selected (<kbd>Shift</kbd> = 5px)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Del</kbd></span><span class="kh-desc">delete selected point (or the whole multi-selection)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Ctrl</kbd>+click in Labels</span><span class="kh-desc">multi-select points in the pane → <kbd>Del</kbd> deletes the set</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Tab</kbd></span><span class="kh-desc">cycle unlabeled OCR points</span></div>
+      </div>
+
+      <div class="kh-group">
+        <h3>Other</h3>
+        <div class="kh-row"><span class="kh-keys"><kbd>L</kbd></span><span class="kh-desc">aux mode — log a side observation</span></div>
+        <div class="kh-row"><span class="kh-keys">Done button</span><span class="kh-desc">close &amp; return to the main menu (top bar)</span></div>
+      </div>
+
+    </div>
+    <div class="kh-foot">Most of your time is in <b>Drop points</b> — tap a number, click, repeat.</div>
+  </div>
+</div>
+
+<!-- Export overlay -->
+<div class="overlay" id="export-overlay">
+  <div class="overlay-card">
+    <h2 id="export-title">Batch Exported</h2>
+    <p id="export-summary"></p>
+    <div id="export-remaining" style="margin:14px 0; font-size:14px; color:var(--pink); font-weight:600; font-family:'Space Mono',monospace;"></div>
+    <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+      <button class="btn primary" id="btn-next-review" onclick="nextReviewBatch()">Next Review Batch</button>
+      <button class="btn" onclick="closeExportOverlay()">Done</button>
+      <button class="btn" onclick="backToStartup()">Change Settings</button>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='pp_core.js') }}"></script>
+<script>
+// ══════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════
+// Pure helpers (infinite labels, panel sort, pick radius) live in pp_core.js so
+// they can be unit-tested in Node. Fall back to no-ops only if it failed to load.
+const PP = (typeof PPCore !== 'undefined') ? PPCore : null;
+const SELECT_RADIUS_PX = PP ? PP.SELECT_RADIUS_PX : 45;   // screen-px grab distance
+const SEL_COLOR = '#ff2d9b';                              // selected point highlight (pink)
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const wrap = document.getElementById('canvas-wrap');
+
+let currentMode = 'new';
+let scanResult = null;
+
+let images = [];        // [{filename, year, n_points, status}]
+let currentIdx = -1;
+let currentData = null; // {points, status}
+let img = null;
+
+let scale = 1, offsetX = 0, offsetY = 0;
+let draggingPoint = -1, selectedPoint = -1;
+let paneSelection = new Set();   // Ctrl+click multi-selection in the Labels pane (point indices) — batch delete
+let hoverPoint = -1;   // point under the cursor (within grab range) — highlighted
+let isPanning = false, panStartX = 0, panStartY = 0;
+let autoCenter = false; // toggle with Z key
+const SKIP_SPECIES = new Set(['UNK', 'TWS']); // always hidden
+let flashTimer = null;
+
+// Reference mode: existing OCR/CPC points render as large, read-only context.
+// Set by the startup checkbox; refreshed from /api/image/<fn> responses.
+let referenceMode = false;
+
+// A point is "read-only reference" iff we're in reference mode and it wasn't
+// added by the user during this session (user-added points have added === true).
+function isReferenceOnly(pt) {
+  return referenceMode && pt && pt.added !== true;
+}
+
+// ETA tracking
+let processStartTime = 0;
+let processTimes = [];
+
+function isSkippedPoint(pt) {
+  if (SKIP_SPECIES.has((pt.species_code || '').toUpperCase())) return true;
+  return false;
+}
+
+// Used by the Labels panel only — reference-only points render on canvas
+// but should not appear in the list.
+function isHiddenFromPanel(pt) {
+  return isSkippedPoint(pt) || isReferenceOnly(pt);
+}
+
+function imageHasRelevantPoints(data) {
+  if (!data || !data.points) return false;
+  return data.points.some(pt => !isSkippedPoint(pt));
+}
+
+// Labels panel order: natural label-ORDINAL order (A,B,…,Z,AA,AB,…), hidden
+// points removed. Sort lives in pp_core.js (panelSortIndices). Because new
+// monotonic labels (see nextAddLabel) take the next ordinal past the max, they
+// always append to the BOTTOM of the pane — e.g. 'AA' sorts after 'Z', not
+// between 'A' and 'B' as a plain string sort would put it.
+function sortedPointIndices() {
+  if (!currentData) return [];
+  const pts = currentData.points;
+  if (PP) return PP.panelSortIndices(pts, pt => isHiddenFromPanel(pt));
+  // Fallback if pp_core.js failed to load: same label-ordinal order, with a
+  // string tiebreak for non-conforming labels (ordinal 0).
+  const ord = s => { s = String(s); if (!/^[A-Z]+$/.test(s)) return 0; let n = 0; for (let i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64); return n; };
+  return pts.map((_, i) => i)
+            .filter(i => !isHiddenFromPanel(pts[i]))
+            .sort((a, b) => (ord(pts[a].label) - ord(pts[b].label)) ||
+              String(pts[a].label).toUpperCase().localeCompare(String(pts[b].label).toUpperCase()));
+}
+
+let sortedIndices = [];
+
+function getReviewBatchSize() {
+  const v = document.querySelector('input[name=rbatch]:checked').value;
+  // "all" is a sentinel meaning "no batching" — send a huge int so the
+  // backend's files[offset:offset+N] slice just returns everything.
+  return v === 'all' ? 999999 : parseInt(v);
+}
+
+// ══════════════════════════════════════════════
+// SCREEN SWITCHING
+// ══════════════════════════════════════════════
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+// ══════════════════════════════════════════════
+// STARTUP — MODE SWITCHING
+// ══════════════════════════════════════════════
+function setMode(mode) {
+  currentMode = mode;
+  document.getElementById('mode-new').classList.toggle('active', mode === 'new');
+  document.getElementById('mode-resume').classList.toggle('active', mode === 'resume');
+  document.getElementById('new-fields').classList.toggle('hidden', mode !== 'new');
+  document.getElementById('resume-fields').classList.toggle('hidden', mode !== 'resume');
+  document.getElementById('btn-start').textContent = mode === 'new' ? 'Load & Start' : 'Continue';
+  document.getElementById('setup-info').classList.remove('visible');
+  document.getElementById('setup-error').textContent = '';
+  scanResult = null;
+}
+
+function toggleAllSpecies() {
+  const chks = document.querySelectorAll('.sp-chk');
+  const allChecked = Array.from(chks).every(c => c.checked);
+  chks.forEach(c => c.checked = !allChecked);
+}
+
+// ══════════════════════════════════════════════
+// STARTUP — SCAN / CONFIGURE
+// ══════════════════════════════════════════════
+async function configureNew() {
+  const framesPath = document.getElementById('inp-frames').value.trim();
+  const exportDir = document.getElementById('inp-export').value.trim();
+  const errEl = document.getElementById('setup-error');
+  const infoEl = document.getElementById('setup-info');
+
+  if (!framesPath) { errEl.textContent = 'Selected frames CSV is required'; return; }
+  if (!exportDir) { errEl.textContent = 'Export directory is required'; return; }
+
+  const spChks = document.querySelectorAll('.sp-chk:checked');
+  const speciesFilter = Array.from(spChks).map(c => c.value);
+
+  errEl.textContent = '';
+  infoEl.innerHTML = 'Loading frames...';
+  infoEl.classList.add('visible');
+
+  try {
+    const res = await fetch('/api/configure', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        selected_frames: framesPath,
+        export_dir: exportDir,
+        species_filter: speciesFilter,
+        review_batch_size: getReviewBatchSize(),
+        reference_mode: document.getElementById('chk-reference').checked,
+        shuffle: document.getElementById('chk-shuffle').checked,
+      }),
+    });
+    scanResult = await res.json();
+
+    if (scanResult.error) {
+      errEl.textContent = scanResult.error;
+      infoEl.classList.remove('visible');
+      return;
+    }
+
+    let html = `<span class="num">${scanResult.total_frames}</span> frames loaded.`;
+    html += `<br>CPC (pre-2020): <span class="num">${scanResult.cpc_loaded}</span> loaded with coords`;
+    if (scanResult.already_processed > 0) {
+      html += `<br>Already processed: <span class="num">${scanResult.already_processed}</span>`;
+    }
+    html += `<br>OCR needed (2020+): <span class="num">${scanResult.ocr_remaining}</span>`;
+    if (scanResult.cpc_missing > 0) {
+      html += `<br><span style="color:#FFB800">CPC coords missing: ${scanResult.cpc_missing}</span>`;
+    }
+    if (scanResult.image_missing > 0) {
+      html += `<br><span style="color:#FFB800">Images not found: ${scanResult.image_missing}</span>`;
+    }
+    if (scanResult.species_filter.length > 0) {
+      html += `<br>Species filter: ${scanResult.species_filter.join(', ')}`;
+    }
+
+    if (scanResult.phase === 'review') {
+      html += `<br><br>All ready! <span class="num">${scanResult.review_count}</span> frames for review.`;
+      document.getElementById('btn-start').textContent = 'Start Review';
+    } else {
+      html += `<br><br>Click <b>Load & Start</b> to begin OCR processing.`;
+      document.getElementById('btn-start').textContent = 'Start Processing';
+    }
+
+    infoEl.innerHTML = html;
+    infoEl.classList.add('visible');
+  } catch (e) {
+    errEl.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function scanResume() {
+  const exportDir = document.getElementById('inp-resume-export').value.trim();
+  const errEl = document.getElementById('setup-error');
+  const infoEl = document.getElementById('setup-info');
+
+  if (!exportDir) { errEl.textContent = 'Export directory is required'; return; }
+
+  try {
+    const res = await fetch('/api/resume', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        export_dir: exportDir,
+        review_batch_size: getReviewBatchSize(),
+        reference_mode: document.getElementById('chk-reference').checked,
+        shuffle: document.getElementById('chk-shuffle').checked,
+      }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json();
+      errEl.textContent = data.error || 'Failed to load project';
+      return;
+    }
+
+    scanResult = await res.json();
+
+    let html = `Loaded project: <span class="num">${scanResult.years.length}</span> year(s), <span class="num">${scanResult.total_processed}</span> processed detections.`;
+
+    if (scanResult.import_dir) {
+      html += `<br>Import dir: ${scanResult.import_dir}`;
+    }
+
+    if (scanResult.year_stats) {
+      html += '<br><br>';
+      for (const [yr, st] of Object.entries(scanResult.year_stats).sort()) {
+        const rem = st.remaining_review !== undefined ? st.remaining_review : (st.total - (st.exported || 0));
+        html += `${yr}: ${st.total} processed, ${st.exported || 0} exported, ${rem} to review<br>`;
+      }
+    }
+
+    if (scanResult.needs_processing && scanResult.processing_remaining > 0) {
+      html += `<br><span class="num">${scanResult.processing_remaining}</span> images still need OCR processing.`;
+      document.getElementById('btn-start').textContent = 'Continue Processing';
+    } else {
+      html += `<br><span class="num">${scanResult.review_count}</span> images ready for review.`;
+      document.getElementById('btn-start').textContent = 'Start Review';
+    }
+
+    infoEl.innerHTML = html;
+    infoEl.classList.add('visible');
+  } catch (e) {
+    errEl.textContent = 'Error: ' + e.message;
+  }
+}
+
+// toggleAllYears removed — species filter uses toggleAllSpecies above
+
+// ══════════════════════════════════════════════
+// START
+// ══════════════════════════════════════════════
+async function doStart() {
+  const errEl = document.getElementById('setup-error');
+
+  // Apply reference-mode choice immediately so the first frame render honors it.
+  referenceMode = document.getElementById('chk-reference').checked;
+
+  if (currentMode === 'new') {
+    await configureNew();
+    if (!scanResult) return;
+  } else if (!scanResult) {
+    await scanResume();
+    if (!scanResult) return;
+  }
+
+  if (scanResult.phase === 'review' || scanResult.review_count > 0) {
+    await loadReviewBatch();
+    showScreen('review');
+    if (images.length > 0) selectImage(0);
+    return;
+  }
+
+  const total = scanResult.ocr_remaining || scanResult.processing_remaining || 0;
+  if (total === 0) {
+    errEl.textContent = 'Nothing to process';
+    return;
+  }
+
+  showScreen('processing');
+  processStartTime = performance.now();
+  processTimes = [];
+  await runProcessing(total);
+}
+
+// ══════════════════════════════════════════════
+// PROCESSING
+// ══════════════════════════════════════════════
+async function runProcessing(total) {
+  const bar = document.getElementById('progress-bar');
+  const text = document.getElementById('progress-text');
+  const current = document.getElementById('progress-current');
+  const eta = document.getElementById('progress-eta');
+
+  for (let i = 0; i < total + 1; i++) {
+    const t0 = performance.now();
+    const res = await fetch('/api/process', { method: 'POST' });
+    const data = await res.json();
+    const elapsed = performance.now() - t0;
+
+    processTimes.push(elapsed);
+    // Keep rolling window of last 50 for ETA
+    if (processTimes.length > 50) processTimes.shift();
+
+    const pct = Math.round((data.processed / data.total) * 100);
+    bar.style.width = pct + '%';
+    text.textContent = `${data.processed} / ${data.total}`;
+
+    if (data.filename) {
+      current.textContent = `Year ${data.year} — ${data.filename} (${data.n_points} points)`;
+    }
+
+    // ETA calculation
+    if (data.processed > 0 && !data.done) {
+      const avgMs = processTimes.reduce((a, b) => a + b, 0) / processTimes.length;
+      const remainMs = avgMs * (data.total - data.processed);
+      const remainMin = Math.ceil(remainMs / 60000);
+      if (remainMin > 60) {
+        const hrs = Math.floor(remainMin / 60);
+        const mins = remainMin % 60;
+        eta.textContent = `ETA: ~${hrs}h ${mins}m remaining`;
+      } else {
+        eta.textContent = `ETA: ~${remainMin} min remaining`;
+      }
+    }
+
+    if (data.done) {
+      eta.textContent = 'Processing complete!';
+      break;
+    }
+  }
+
+  // Transition to review
+  await loadReviewBatch();
+  showScreen('review');
+  if (images.length > 0) selectImage(0);
+}
+
+// ══════════════════════════════════════════════
+// REVIEW
+// ══════════════════════════════════════════════
+async function loadReviewBatch() {
+  const res = await fetch('/api/review_batch');
+  const data = await res.json();
+  images = data.images || [];
+  currentIdx = -1;
+
+  const infoEl = document.getElementById('batch-info');
+  if (data.total_batches > 0) {
+    const start = data.offset + 1;
+    const end = Math.min(data.offset + data.batch_size, data.total_unreviewed);
+    infoEl.textContent = `Batch ${data.batch_number}/${data.total_batches} (${start}-${end} of ${data.total_unreviewed} unreviewed)`;
+  } else {
+    infoEl.textContent = 'No images to review';
+  }
+
+  updateCounter();
+}
+
+async function selectImage(idx) {
+  if (idx < 0 || idx >= images.length) return;
+
+  // Close out the previous frame's timer BEFORE swapping state — this is the
+  // sample the rolling average should see.
+  _timerRecordPrev();
+
+  currentIdx = idx;
+  const filename = images[idx].filename;
+
+  const res = await fetch(`/api/image/${encodeURIComponent(filename)}`);
+  currentData = await res.json();
+  if (typeof currentData.reference_mode === 'boolean') referenceMode = currentData.reference_mode;
+
+  sortedIndices = sortedPointIndices();
+
+  img = new Image();
+  img.onload = () => {
+    fitImage();
+    render();
+  };
+  img.src = `/images/${encodeURIComponent(filename)}`;
+
+  selectedPoint = -1;
+  paneSelection.clear();
+  renderPointList();
+  updateCounter();
+  document.getElementById('image-filename').textContent = filename.replace('_cpc.json', '').replace('_pts.jpg', '');
+
+  // Kick the per-frame timer for the new frame.
+  _timerStart();
+}
+
+// ── Per-frame timer ──────────────────────────────────────────────
+// Logs time-per-frame to a rolling average (per session, not persisted).
+// The top-bar badge goes green at <= target, yellow up to 2x target, red beyond.
+// Pause: `P` or click the ⏸ button — freezes elapsed for the current frame
+// AND keeps paused time out of the final recorded sample for this frame.
+const FRAME_TIMER_TARGET_S = 15.0;
+let _frameStartMs = 0;              // wall-clock when the timer started
+let _framePausedAtMs = 0;           // wall-clock when pause began (0 if running)
+let _framePausedTotalMs = 0;        // accumulated paused ms for the current frame
+let _frameTickInt = null;
+let _frameTimesSec = [];
+
+function _timerFmt(sec) {
+  if (!isFinite(sec)) return '—';
+  if (sec < 60) return sec.toFixed(1) + 's';
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return `${m}m ${s}s`;
+}
+
+function _timerColor(sec) {
+  if (sec <= FRAME_TIMER_TARGET_S) return '#00FFB3';                    // success green
+  if (sec <= FRAME_TIMER_TARGET_S * 2) return '#FFB800';                // warning yellow
+  return '#FF4D6D';                                                     // error red
+}
+
+function _timerElapsedSec() {
+  if (_frameStartMs <= 0) return 0;
+  const now = _framePausedAtMs > 0 ? _framePausedAtMs : Date.now();
+  return Math.max(0, (now - _frameStartMs - _framePausedTotalMs) / 1000);
+}
+
+function _timerRender() {
+  const el = document.getElementById('frame-timer');
+  if (!el) return;
+  const now = _timerElapsedSec();
+  const avg = _frameTimesSec.length
+    ? _frameTimesSec.reduce((a, b) => a + b, 0) / _frameTimesSec.length
+    : NaN;
+  const nowStr = _frameStartMs > 0 ? _timerFmt(now) : '—';
+  const avgStr = isFinite(avg) ? _timerFmt(avg) : '—';
+  const color = _timerColor(now);
+  const avgColor = isFinite(avg) ? _timerColor(avg) : '#b0a7ab';
+  const paused = _framePausedAtMs > 0;
+  el.innerHTML =
+    '<span style="color:var(--text-dim)">this </span>' +
+    `<span style="color:${paused ? 'var(--text-dim)' : color};font-weight:700">${nowStr}${paused ? ' (paused)' : ''}</span>` +
+    ' <span style="color:var(--text-dim)">· avg </span>' +
+    `<span style="color:${avgColor}">${avgStr}</span>` +
+    ` <span style="color:var(--text-dim)">(n=${_frameTimesSec.length}, target ${FRAME_TIMER_TARGET_S.toFixed(0)}s)</span>`;
+  // Keep the pause button label in sync
+  const btn = document.getElementById('frame-timer-pause');
+  if (btn) btn.textContent = paused ? 'Resume' : 'Pause';
+}
+
+function _timerStart() {
+  _frameStartMs = Date.now();
+  _framePausedAtMs = 0;
+  _framePausedTotalMs = 0;
+  if (_frameTickInt) clearInterval(_frameTickInt);
+  _timerRender();
+  _frameTickInt = setInterval(_timerRender, 250);
+}
+
+function _timerTogglePause() {
+  if (_frameStartMs <= 0) return;
+  if (_framePausedAtMs > 0) {
+    // Resuming: add the paused span to the accumulator and clear pause flag.
+    _framePausedTotalMs += Date.now() - _framePausedAtMs;
+    _framePausedAtMs = 0;
+    if (!_frameTickInt) _frameTickInt = setInterval(_timerRender, 250);
+  } else {
+    _framePausedAtMs = Date.now();
+    // Stop ticking while paused — saves CPU.
+    if (_frameTickInt) { clearInterval(_frameTickInt); _frameTickInt = null; }
+  }
+  _timerRender();
+}
+
+function _timerRecordPrev() {
+  if (_frameStartMs <= 0) return;
+  // If the user left it paused, finalize the pause span before recording.
+  if (_framePausedAtMs > 0) {
+    _framePausedTotalMs += Date.now() - _framePausedAtMs;
+    _framePausedAtMs = 0;
+  }
+  const elapsed = (Date.now() - _frameStartMs - _framePausedTotalMs) / 1000;
+  // Ignore tiny times from accidental double-advances.
+  if (elapsed >= 0.5) _frameTimesSec.push(elapsed);
+  _frameStartMs = 0;
+  _framePausedTotalMs = 0;
+  if (_frameTickInt) { clearInterval(_frameTickInt); _frameTickInt = null; }
+  _timerRender();
+}
+
+async function prevImage() { if (currentIdx > 0) { await saveCurrentImage(); selectImage(currentIdx - 1); } }
+async function nextImage() { if (currentIdx < images.length - 1) { await saveCurrentImage(); selectImage(currentIdx + 1); } }
+
+async function saveCurrentImage() {
+  if (!currentData || currentIdx < 0) return;
+  const filename = images[currentIdx].filename;
+  await fetch(`/api/image/${encodeURIComponent(filename)}/points`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ points: currentData.points }),
+  });
+  images[currentIdx].status = 'reviewed';
+}
+
+async function scrapFrame() {
+  if (currentIdx < 0 || !images[currentIdx]) return;
+  const filename = images[currentIdx].filename;
+  if (!confirm(`Scrap this frame?\n\n${filename}\n\nIt will be excluded from review and export. You can undo via the JSON files if needed.`)) return;
+
+  const res = await fetch(`/api/image/${encodeURIComponent(filename)}/scrap`, {method: 'POST'});
+  const data = await res.json();
+  if (!res.ok) { alert('Scrap failed: ' + (data.error || res.status)); return; }
+
+  setStatus(`Scrapped ${filename} — ${data.remaining} frames remaining`);
+  // Remove from in-memory list and advance
+  images.splice(currentIdx, 1);
+  if (images.length === 0) {
+    // No more to review — reload the review batch from server (may have exported ones)
+    await loadReviewBatch();
+    if (!images.length) {
+      showScreen('review');
+      setStatus('No frames remaining to review.');
+    }
+    return;
+  }
+  const nextIdx = Math.min(currentIdx, images.length - 1);
+  selectImage(nextIdx);
+}
+
+function flashLetter(label) {
+  const el = document.getElementById('letter-flash');
+  el.textContent = label;
+  el.classList.add('show');
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => el.classList.remove('show'), 350);
+}
+
+// ── Aux-observation mode (side-sightings while reviewing) ──
+let auxMode = false;
+function toggleAuxMode() {
+  auxMode = !auxMode;
+  if (auxMode && numKeyDown !== null) setQuickLabel(null);  // aux + armed label are mutually exclusive
+  const wrapEl = document.getElementById('canvas-wrap');
+  if (wrapEl) wrapEl.classList.toggle('aux-active', auxMode);
+  setStatus(auxMode
+    ? 'AUX MODE — click on the image to log a side observation (L to exit)'
+    : 'Aux mode off');
+}
+
+async function promptAndSaveAux(x, y) {
+  const code = (prompt('Species code for the side observation (e.g. SPO, FSH):', '') || '').trim();
+  if (!code) return;
+  const notes = (prompt('Notes (optional — common name, count, behavior):', '') || '').trim();
+  if (!currentData || currentIdx < 0) return;
+  const filename = images[currentIdx].filename;
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/add_aux`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({x, y, species_code: code, notes}),
+    });
+    const data = await res.json();
+    if (data.ok && data.point) {
+      currentData.aux_points = currentData.aux_points || [];
+      currentData.aux_points.push(data.point);
+      render();
+      setStatus(`Aux logged: ${code}${notes ? ' — ' + notes : ''}`);
+    } else {
+      setStatus('Aux save failed: ' + (data.error || 'unknown'));
+    }
+  } catch (e) {
+    setStatus('Aux save error: ' + e.message);
+  }
+}
+
+// ── Quick-add: sticky number key, click places a target-labeled point ──
+// `numKeyDown` is the index (0-based) of the currently active quick-add label,
+// or null. Tapping the same number toggles it off; tapping a different number
+// switches. Works the same for mouse clicks on the label-bar buttons.
+let numKeyDown = null;
+
+function highlightQuickBtn(idx) {
+  document.querySelectorAll('.qa-btn').forEach((b, i) => {
+    b.classList.toggle('active', i === idx);
+  });
+}
+
+function setQuickLabel(idx) {
+  if (idx === null || idx === undefined) {
+    numKeyDown = null;
+    highlightQuickBtn(-1);
+    canvas.style.cursor = aKeyDown ? 'cell' : 'crosshair';
+    setStatus('Quick-add: off');
+    if (loupeEnabled) updateLoupeOverlay();
+    return;
+  }
+  const lbl = QUICK_LABELS[idx];
+  if (!lbl) return;
+  numKeyDown = idx;
+  if (typeof auxMode !== 'undefined' && auxMode) toggleAuxMode();  // arming a label exits aux mode
+  highlightQuickBtn(idx);
+  canvas.style.cursor = 'cell';
+  const keyHint = idx === REVIEW_IDX ? 'R' : (idx + 1);
+  setStatus(`Quick-add: ${lbl.code}${lbl.name ? ' (' + lbl.name + ')' : ''} — click to place; tap ${keyHint} again to clear`);
+  if (loupeEnabled) updateLoupeOverlay();
+}
+
+// Button click toggles the sticky label (instead of flashing info, it now
+// behaves identically to tapping the number key).
+function toggleQuickLabel(idx) {
+  if (numKeyDown === idx) setQuickLabel(null);
+  else setQuickLabel(idx);
+}
+
+// ── Add Point mode ──────────────────────────────────────
+let aKeyDown = false;
+let pendingAddIdx = -1; // index of newly added point awaiting category
+
+// Letter IDs are unbounded spreadsheet-style codes (A..Z, AA, AB..AZ, BA, BB..)
+// generated in pp_core.js — never run out, even past Z. nextAddLabel returns the
+// label AFTER the current MAX existing label on this frame (monotonic): freed
+// letters from deleted points are never reused, so new points always append to
+// the bottom of the alphabetical pane.
+function nextAddLabel() {
+  const used = currentData ? currentData.points.map(p => p.label) : [];
+  if (PP) return PP.nextLabelMonotonic(used);
+  // Minimal fallback if pp_core.js failed to load: same monotonic rule.
+  const col = m => { let s = ''; while (m > 0) { const r = (m - 1) % 26; s = String.fromCharCode(65 + r) + s; m = Math.floor((m - 1) / 26); } return s; };
+  const ord = l => { const s = String(l); if (!/^[A-Z]+$/.test(s)) return 0; let n = 0; for (let i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64); return n; };
+  let maxOrd = 0;
+  for (const l of used) { const o = ord(l); if (o > maxOrd) maxOrd = o; }
+  return col(maxOrd + 1);
+}
+
+function addPointAt(imgX, imgY) {
+  if (!currentData) return;
+  const label = nextAddLabel();
+  const pt = {
+    label: label,
+    x: Math.round(imgX * 10) / 10,
+    y: Math.round(imgY * 10) / 10,
+    species_code: '',
+    species_name: '',
+    category: '',
+    ocr_confidence: -1, // sentinel: manual point
+    has_crosshair: true,
+    added: true,
+    point_type: 1,
+  };
+  currentData.points.push(pt);
+  pendingAddIdx = currentData.points.length - 1;
+  selectedPoint = pendingAddIdx;
+  sortedIndices = sortedPointIndices();
+  renderPointList();
+  render();
+  flashLetter(label);
+  showCatPopup();
+}
+
+// Place a point and immediately assign the quick-add label at QUICK_LABELS[idx].
+// REVIEW (idx === REVIEW_IDX) is just one of these labels — the only difference
+// is the review:true flag that end-of-batch routing keys on.
+function addPointWithLabel(imgX, imgY, idx) {
+  if (!currentData) return;
+  const lbl = QUICK_LABELS[idx];
+  if (!lbl) return;
+  const label = nextAddLabel();
+  const isReview = idx === REVIEW_IDX;
+  const pt = {
+    label: label,
+    x: Math.round(imgX * 10) / 10,
+    y: Math.round(imgY * 10) / 10,
+    species_code: lbl.code,
+    species_name: lbl.name || lbl.code,
+    category: lbl.category || (isReview ? 'Review' : 'Coral'),
+    ocr_confidence: -1,
+    has_crosshair: true,
+    added: true,
+    point_type: 1,
+  };
+  if (isReview) pt.review = true;   // preserved for SAM3 prompt + expert-review export
+  currentData.points.push(pt);
+  selectedPoint = currentData.points.length - 1;
+  sortedIndices = sortedPointIndices();
+  renderPointList();
+  render();
+  flashLetter(label);
+  setStatus(`${label} -> ${lbl.code}${lbl.name ? ' (' + lbl.name + ')' : ''}`);
+}
+
+// Relabel an already-selected point to the quick-add label at QUICK_LABELS[idx]
+// (numbers AND REVIEW behave identically). The point keeps its letter ID and
+// position; only species_code/name/category change. REVIEW sets review:true;
+// any other label clears it so a point is "just a normal point" once relabeled.
+function relabelSelectedPoint(idx) {
+  if (!currentData || selectedPoint < 0) return false;
+  const lbl = QUICK_LABELS[idx];
+  if (!lbl) return false;
+  const pt = currentData.points[selectedPoint];
+  if (!pt) return false;
+  const isReview = idx === REVIEW_IDX;
+  pt.species_code = lbl.code;
+  pt.species_name = lbl.name || lbl.code;
+  pt.category = lbl.category || (isReview ? 'Review' : 'Coral');
+  if (isReview) pt.review = true; else delete pt.review;
+  sortedIndices = sortedPointIndices();
+  renderPointList();
+  render();
+  setStatus(`${pt.label} -> ${lbl.code}${lbl.name ? ' (' + lbl.name + ')' : ''}`);
+  return true;
+}
+
+// A quick-add key tap (a number, or R for REVIEW). The decision of what it does
+// is the pure, unit-tested PP.quickKeyAction (test_pp_core.js): when a sticky
+// label is ARMED we are in quick-add DROP mode, so the tap switches/clears the
+// sticky label for the NEXT click and NEVER relabels the just-placed (auto-
+// selected) point; only when NO sticky label is armed does a tap with a point
+// selected relabel it. Both the number-key and R-key handlers route through here
+// so the rule lives in exactly one place.
+function applyQuickKey(idx) {
+  const decide = (PP && PP.quickKeyAction) ? PP.quickKeyAction
+    : (armed, sel, i) => (armed !== null && armed !== undefined)
+        ? (armed === i ? 'clear' : 'set')
+        : (sel >= 0 ? 'relabel' : 'set');
+  const action = decide(numKeyDown, selectedPoint, idx);
+  if (action === 'relabel') relabelSelectedPoint(idx);
+  else if (action === 'clear') setQuickLabel(null);
+  else setQuickLabel(idx);
+}
+
+// Right-click = non-target prompt point. No target species attached; SAM3 will
+// still segment the region from this prompt in step 5 (labeled "?/Other") so
+// the reviewer can deal with it then. Rendered with a yellow/dashed marker.
+function addNonTargetPoint(imgX, imgY) {
+  if (!currentData) return;
+  const label = nextAddLabel();
+  const pt = {
+    label: label,
+    x: Math.round(imgX * 10) / 10,
+    y: Math.round(imgY * 10) / 10,
+    species_code: '?',
+    species_name: '',
+    category: 'Other',
+    ocr_confidence: -1,
+    has_crosshair: true,
+    added: true,
+    non_target: true,     // flag used by the renderer
+    point_type: 1,
+  };
+  currentData.points.push(pt);
+  selectedPoint = currentData.points.length - 1;
+  sortedIndices = sortedPointIndices();
+  renderPointList();
+  render();
+  flashLetter(label);
+  setStatus(`${label} -> non-target prompt (SAM3 will segment in step 5)`);
+}
+
+// ── REVIEW: a NORMAL quick-add label (not a mode) ────────────────────
+// REVIEW is just another quick-add label, identical to the number labels: it
+// can be the sticky active label and placed by click, and selecting a point +
+// pressing R relabels it to REVIEW. A REVIEW point carries species_code
+// 'REVIEW' + review:true so end-of-batch routing ships it to an outside
+// taxonomic expert; it is NEVER used as a training label. "Not special until
+// end-of-batch routing." The review:true flag is preserved on REVIEW points so
+// export (which keys on species_code==='REVIEW'/review:true) keeps working.
+function isReviewPoint(pt) {
+  return pt && (pt.review === true || pt.species_code === 'REVIEW');
+}
+
+function showCatPopup() {
+  const popup = document.getElementById('cat-popup');
+  // Position near center of canvas
+  const wrapRect = wrap.getBoundingClientRect();
+  popup.style.left = (wrapRect.left + wrapRect.width / 2 - 105) + 'px';
+  popup.style.top = (wrapRect.top + wrapRect.height / 2 - 20) + 'px';
+  popup.classList.add('visible');
+}
+
+function hideCatPopup() {
+  document.getElementById('cat-popup').classList.remove('visible');
+  pendingAddIdx = -1;
+}
+
+// Target species list (from server template)
+const TARGET_SPECIES = [{% for sp in target_species %}'{{ sp }}'{% if not loop.last %}, {% endif %}{% endfor %}];
+const TARGET_LABELS = [{% for lbl in target_labels %}{code:'{{ lbl.code }}', name:{{ lbl.name|tojson }}, category:{{ lbl.category|tojson }}}{% if not loop.last %}, {% endif %}{% endfor %}];
+
+// REVIEW is a NORMAL quick-add label appended after the number labels. Its
+// index is REVIEW_IDX; the quickadd button + the R key arm it exactly like a
+// number arms a species. QUICK_LABELS is the full sticky-label vocabulary.
+const REVIEW_LABEL = {code: 'REVIEW', name: 'Flagged for expert review', category: 'Review'};
+const QUICK_LABELS = TARGET_LABELS.concat([REVIEW_LABEL]);
+const REVIEW_IDX = TARGET_LABELS.length;
+
+function assignSpecies(code) {
+  if (pendingAddIdx < 0 || !currentData) { hideCatPopup(); return; }
+  const pt = currentData.points[pendingAddIdx];
+  const info = TARGET_LABELS.find(l => l.code === code);
+  pt.species_code = code;
+  pt.category = (info && info.category) || 'Coral';
+  pt.species_name = (info && info.name) || code;
+  hideCatPopup();
+  sortedIndices = sortedPointIndices();
+  renderPointList();
+  render();
+  setStatus(`${pt.label} -> ${code}${info && info.name ? ' (' + info.name + ')' : ''}`);
+}
+
+function assignCategory(category) {
+  if (pendingAddIdx < 0 || !currentData) { hideCatPopup(); return; }
+  const pt = currentData.points[pendingAddIdx];
+  pt.category = category;
+  const catCodes = {
+    'Coral': 'CORAL', 'Sponge': 'SPO', 'Macroalgae': 'MACA',
+    'Gorgonian': 'GORG', 'Dca': 'DCA', 'Turf': 'TURF',
+    'Non-living': 'NL', '': '',
+  };
+  pt.species_code = catCodes[category] || category.toUpperCase().slice(0, 4);
+  hideCatPopup();
+  sortedIndices = sortedPointIndices();
+  renderPointList();
+  render();
+  setStatus(`${pt.label} -> ${category || 'Unlabeled'}`);
+}
+
+// Enter in the reference/review flow: confirm the current point, advance to the
+// next point in the (alphabetical) pane order, and ALWAYS auto-center on it.
+function confirmAndAdvance() {
+  if (!currentData || sortedIndices.length === 0) return;
+  if (selectedPoint >= 0 && currentData.points[selectedPoint]) {
+    setStatus(`Confirmed ${currentData.points[selectedPoint].label} → next`);
+  }
+  selectNextLabel();
+  if (selectedPoint >= 0) centerOnPoint(selectedPoint);   // always center, even if Z auto-center is off
+  render();
+}
+
+function selectNextLabel() {
+  if (!currentData || sortedIndices.length === 0) return;
+  if (selectedPoint < 0) {
+    selectedPoint = sortedIndices[0];
+  } else {
+    const curSortPos = sortedIndices.indexOf(selectedPoint);
+    const nextSortPos = (curSortPos + 1) % sortedIndices.length;
+    selectedPoint = sortedIndices[nextSortPos];
+  }
+  if (autoCenter) centerOnPoint(selectedPoint);
+  flashLetter(currentData.points[selectedPoint].label);
+  renderPointList();
+  render();
+}
+
+function centerOnPoint(idx) {
+  if (!currentData || !currentData.points[idx]) return;
+  const pt = currentData.points[idx];
+  const scr_x = pt.x * scale + offsetX;
+  const scr_y = pt.y * scale + offsetY;
+  offsetX += canvas.width / 2 - scr_x;
+  offsetY += canvas.height / 2 - scr_y;
+}
+
+// ── Rendering ──
+function fitImage() {
+  if (!img) return;
+  const ww = wrap.clientWidth, wh = wrap.clientHeight;
+  canvas.width = ww; canvas.height = wh;
+  scale = Math.min(ww / img.width, wh / img.height) * 0.95;
+  offsetX = (ww - img.width * scale) / 2;
+  offsetY = (wh - img.height * scale) / 2;
+}
+
+function render() {
+  if (!img || !currentData) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.translate(offsetX, offsetY);
+  ctx.scale(scale, scale);
+
+  ctx.drawImage(img, 0, 0);
+
+  const pts = currentData.points;
+  for (let i = 0; i < pts.length; i++) {
+    const pt = pts[i];
+    if (isSkippedPoint(pt)) continue;
+    const isSel = i === selectedPoint;
+
+    // ── Hover halo ── cursor is within grab range of this (non-selected) point:
+    // ring it orange so it's clear which point a click would select/delete.
+    if (i === hoverPoint && !isSel) {
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 22, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255, 157, 46, 0.95)';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+    }
+
+    // ── REVIEW point ── cyan dashed crosshair, flagged for outside expert ID
+    if (isReviewPoint(pt)) {
+      const cyan = '#00e0f0';
+      ctx.strokeStyle = isSel ? SEL_COLOR : cyan;
+      ctx.beginPath();
+      ctx.moveTo(pt.x - 20, pt.y); ctx.lineTo(pt.x + 20, pt.y);
+      ctx.moveTo(pt.x, pt.y - 20); ctx.lineTo(pt.x, pt.y + 20);
+      ctx.lineWidth = isSel ? 3.5 : 2.5; ctx.stroke();
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, 17, 0, Math.PI * 2);
+      ctx.lineWidth = isSel ? 3.5 : 2.5;
+      ctx.setLineDash([6, 4]); ctx.stroke(); ctx.setLineDash([]);
+      // Letter ID — large + prominent; "REVIEW" trails it small.
+      const lx = pt.x + 22, ly = pt.y + 9;
+      ctx.font = 'bold 26px monospace';
+      ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.strokeText(pt.label, lx, ly);
+      ctx.fillStyle = isSel ? SEL_COLOR : cyan;
+      ctx.fillText(pt.label, lx, ly);
+      const rlw = ctx.measureText(pt.label).width;
+      ctx.font = 'bold 13px monospace';
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.strokeText('REVIEW', lx + rlw + 4, ly - 2);
+      ctx.fillStyle = isSel ? SEL_COLOR : cyan;
+      ctx.fillText('REVIEW', lx + rlw + 4, ly - 2);
+      continue;
+    }
+
+    const isAdded = pt.added === true;
+    const hasCross = pt.has_crosshair !== false;
+    const conf = pt.ocr_confidence || 0;
+    const pink = '#FFB3D9';
+
+    if (isAdded) {
+      // ── Added point ── pink for target-labeled, amber dashed for non-target prompts
+      const isNonTarget = pt.non_target === true || pt.species_code === '?';
+      const color = isNonTarget ? '#ffb24a' : pink;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 16, 0, Math.PI * 2);
+      ctx.lineWidth = isSel ? 3.5 : 2;
+      ctx.strokeStyle = isSel ? SEL_COLOR : color;
+      if (isNonTarget) ctx.setLineDash([5, 4]);
+      ctx.stroke();
+      if (isNonTarget) ctx.setLineDash([]);
+
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
+      ctx.fillStyle = isSel ? SEL_COLOR : color;
+      ctx.fill();
+
+      // Letter ID — large + prominent (this is the ID the reviewer assigns);
+      // the species/non-target tag trails it small so the letter stays readable.
+      const lbl = `${pt.label}`;
+      const spp = pt.species_code || '';
+      const suffix = isNonTarget ? '? (non-target)' : spp;
+      const lx = pt.x + 20, ly = pt.y + 9;
+      ctx.font = 'bold 26px monospace';
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.strokeText(lbl, lx, ly);
+      ctx.fillStyle = isSel ? SEL_COLOR : color;
+      ctx.fillText(lbl, lx, ly);
+      if (suffix) {
+        const lw = ctx.measureText(lbl).width;
+        ctx.font = 'bold 13px monospace';
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+        ctx.strokeText(suffix, lx + lw + 4, ly - 2);
+        ctx.fillStyle = isSel ? SEL_COLOR : color;
+        ctx.fillText(suffix, lx + lw + 4, ly - 2);
+      }
+    } else {
+      // ── OCR or CPC point ──
+      const refOnly = isReferenceOnly(pt);
+      const crossLen = refOnly ? 26 : 20;
+
+      // Crosshair at observation point (red normally; muted cyan in reference mode)
+      const crossColor = isSel ? SEL_COLOR : (refOnly ? '#7fdfff' : '#ff0000');
+      ctx.beginPath();
+      ctx.moveTo(pt.x - crossLen, pt.y);
+      ctx.lineTo(pt.x + crossLen, pt.y);
+      ctx.moveTo(pt.x, pt.y - crossLen);
+      ctx.lineTo(pt.x, pt.y + crossLen);
+      ctx.strokeStyle = crossColor;
+      ctx.lineWidth = isSel ? 3.5 : (refOnly ? 2 : 2.5);
+      ctx.stroke();
+
+      // Circle around crosshair (skipped in reference mode — keeps the cue minimal)
+      if (!refOnly) {
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 18, 0, Math.PI * 2);
+        ctx.lineWidth = isSel ? 3.5 : 2;
+        if (isSel) ctx.strokeStyle = SEL_COLOR;
+        else if (!hasCross) ctx.strokeStyle = '#ff4444';
+        else if (conf === 0) ctx.strokeStyle = '#FFB800';
+        else ctx.strokeStyle = '#00ff00';
+        ctx.stroke();
+      }
+
+      // Line from letter centroid to crosshair (hidden in reference mode)
+      if (!refOnly && pt.letter_cx !== undefined) {
+        ctx.beginPath();
+        ctx.moveTo(pt.letter_cx, pt.letter_cy);
+        ctx.lineTo(pt.x, pt.y);
+        ctx.strokeStyle = 'rgba(255,255,0,0.4)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      // Letter label above crosshair (larger + muted cyan in reference mode)
+      const fontPx = refOnly ? 56 : 36;
+      const labelX = pt.x - (refOnly ? 16 : 10);
+      const labelY = pt.letter_cy !== undefined ? pt.letter_cy - 10 : pt.y - (refOnly ? 60 : 45);
+      ctx.font = `bold ${fontPx}px sans-serif`;
+      ctx.lineWidth = refOnly ? 5 : 4;
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.strokeText(pt.label, labelX, labelY);
+      ctx.fillStyle = isSel ? SEL_COLOR : (refOnly ? '#7fdfff' : '#ff0000');
+      ctx.fillText(pt.label, labelX, labelY);
+
+      // Confidence + species code below crosshair
+      const confStr = conf > 0 ? `${conf}%` : '?';
+      const spp = pt.species_code || '';
+      const infoText = spp ? `${spp} (${confStr})` : confStr;
+      ctx.font = refOnly ? 'bold 22px monospace' : 'bold 14px monospace';
+      const infoY = refOnly ? pt.y + 38 : pt.y + 28;
+      ctx.lineWidth = refOnly ? 4 : 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.strokeText(infoText, pt.x + 22, infoY);
+      ctx.fillStyle = isSel ? SEL_COLOR : (refOnly ? '#aee3f5' : '#ffcc00');
+      ctx.fillText(infoText, pt.x + 22, infoY);
+    } // end else (OCR/CPC point)
+  }
+
+  // ── Aux points (side observations) — not exported via SAM3/YOLO ──
+  if (currentData && currentData.aux_points && currentData.aux_points.length) {
+    for (const ap of currentData.aux_points) {
+      ctx.beginPath();
+      // Green diamond to stand out from the red/pink main points.
+      const s = 14;
+      ctx.moveTo(ap.x, ap.y - s);
+      ctx.lineTo(ap.x + s, ap.y);
+      ctx.lineTo(ap.x, ap.y + s);
+      ctx.lineTo(ap.x - s, ap.y);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(80, 255, 128, 0.85)';
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#000';
+      ctx.stroke();
+
+      const code = ap.species_code || '?';
+      ctx.font = 'bold 18px monospace';
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.strokeText(code, ap.x + 18, ap.y + 6);
+      ctx.fillStyle = '#00FFB3';
+      ctx.fillText(code, ap.x + 18, ap.y + 6);
+    }
+  }
+
+  ctx.restore();
+}
+
+function screenToImage(sx, sy) {
+  return { x: (sx - offsetX) / scale, y: (sy - offsetY) / scale };
+}
+
+// ── Mouse interaction ──
+function findPointAt(sx, sy) {
+  if (!currentData) return -1;
+  const {x, y} = screenToImage(sx, sy);
+  // Generous, zoom-independent grab radius (constant screen px) so a click
+  // "near enough" to a point still selects it.
+  const threshold = PP ? PP.pickRadiusImg(scale) : (SELECT_RADIUS_PX / scale);
+  let best = -1, bestDist = Infinity;
+  for (let i = 0; i < currentData.points.length; i++) {
+    const pt = currentData.points[i];
+    if (isReferenceOnly(pt)) continue;
+    const d = Math.hypot(pt.x - x, pt.y - y);
+    if (d < threshold && d < bestDist) { best = i; bestDist = d; }
+  }
+  return best;
+}
+
+// Click vs drag: we defer starting a pan until the cursor moves more than
+// PAN_THRESHOLD pixels. A mouseup before that threshold = plain click (deselect).
+const PAN_THRESHOLD = 4;
+// Press-and-hold (anywhere — over points or empty space) starts a PAN once the
+// button has been held this long without moving past the threshold. A quicker
+// tap stays the normal place/select/delete action. This makes pan available in
+// every label state, including right on top of a point.
+const HOLD_PAN_MS = 220;
+let holdPanTimer = null;
+let pendingPan = null; // {startClientX, startClientY, startOffsetX, startOffsetY}
+// A press on a point that hasn't moved past PAN_THRESHOLD yet — resolved on
+// mouseup: a click on an already-selected point deletes it; a click on an
+// unselected point just selects it; moving past the threshold promotes to drag,
+// holding still past HOLD_PAN_MS promotes to a pan.
+let pendingPoint = null; // {idx, wasSelected, startClientX, startClientY, startOffsetX, startOffsetY}
+
+// Convert whatever press is pending (over a point or empty space) into an
+// active image pan anchored at the given client coords. Used by the hold timer
+// and by the move-past-threshold promotion for empty space.
+function _beginPanFrom(startClientX, startClientY, startOffsetX, startOffsetY) {
+  isPanning = true;
+  panStartX = startClientX - startOffsetX;
+  panStartY = startClientY - startOffsetY;
+  pendingPan = null;
+  pendingPoint = null;
+  if (holdPanTimer) { clearTimeout(holdPanTimer); holdPanTimer = null; }
+  canvas.style.cursor = 'grabbing';
+}
+
+function _clearHoldPanTimer() {
+  if (holdPanTimer) { clearTimeout(holdPanTimer); holdPanTimer = null; }
+}
+
+// Right-click on the canvas places a non-target prompt point (see below) —
+// disable the browser's default context menu so it doesn't steal the click.
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+canvas.addEventListener('mousedown', e => {
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+
+  // Middle button or Alt+drag: start panning immediately (power-user shortcut)
+  if (e.button === 1 || (e.button === 0 && e.altKey)) {
+    isPanning = true;
+    panStartX = e.clientX - offsetX;
+    panStartY = e.clientY - offsetY;
+    canvas.style.cursor = 'grabbing';
+    return;
+  }
+
+  // Right click: place a NON-TARGET prompt point. SAM3 will segment the
+  // region from this point in step 5, but it's NOT assigned to the currently
+  // held quick-add label. Useful when you see another organism you want to
+  // segment without switching your active label.
+  if (e.button === 2 && currentData) {
+    e.preventDefault();
+    const {x, y} = screenToImage(sx, sy);
+    addNonTargetPoint(x, y);
+    return;
+  }
+
+  // Sticky quick-add label armed + click: place a new point with that label.
+  // REVIEW is one of these labels (numKeyDown === REVIEW_IDX) — no special case.
+  if (e.button === 0 && numKeyDown !== null && currentData) {
+    const {x, y} = screenToImage(sx, sy);
+    addPointWithLabel(x, y, numKeyDown);
+    return;
+  }
+
+  // Aux mode + click: prompt + log a side observation. Not an SAM3 target —
+  // stored in added_points.csv, never exported for training.
+  if (e.button === 0 && auxMode && currentData) {
+    const {x, y} = screenToImage(sx, sy);
+    promptAndSaveAux(x, y);
+    return;
+  }
+
+  // A+click: place point + open category popup (non-target labels)
+  if (e.button === 0 && aKeyDown && currentData) {
+    const {x, y} = screenToImage(sx, sy);
+    addPointAt(x, y);
+    return;
+  }
+
+  // Ctrl+click: move the selected point here, then advance
+  if (e.button === 0 && e.ctrlKey && selectedPoint >= 0 && currentData) {
+    const {x, y} = screenToImage(sx, sy);
+    currentData.points[selectedPoint].x = Math.round(x * 10) / 10;
+    currentData.points[selectedPoint].y = Math.round(y * 10) / 10;
+    selectNextLabel();
+    return;
+  }
+
+  // Plain left click on a point: queue it. Drag (move past threshold) -> move the
+  // point; click without moving -> select it, or delete it if it was already
+  // selected. On empty space -> queue a potential pan.
+  const idx = findPointAt(sx, sy);
+  if (idx >= 0 && e.button === 0) {
+    pendingPoint = {
+      idx,
+      wasSelected: selectedPoint === idx,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startOffsetX: offsetX,
+      startOffsetY: offsetY,
+    };
+    selectedPoint = idx;          // select immediately for visual feedback
+    canvas.style.cursor = 'move';
+    renderPointList();
+    render();
+    // Press-and-hold (still on the point) promotes to a pan.
+    _clearHoldPanTimer();
+    holdPanTimer = setTimeout(() => {
+      if (pendingPoint) _beginPanFrom(pendingPoint.startClientX, pendingPoint.startClientY,
+                                      pendingPoint.startOffsetX, pendingPoint.startOffsetY);
+    }, HOLD_PAN_MS);
+  } else if (e.button === 0) {
+    pendingPan = {
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startOffsetX: offsetX,
+      startOffsetY: offsetY,
+    };
+    canvas.style.cursor = 'grab';
+    // Press-and-hold on empty space also pans (uniform with the over-point case).
+    _clearHoldPanTimer();
+    holdPanTimer = setTimeout(() => {
+      if (pendingPan) _beginPanFrom(pendingPan.startClientX, pendingPan.startClientY,
+                                    pendingPan.startOffsetX, pendingPan.startOffsetY);
+    }, HOLD_PAN_MS);
+  }
+});
+
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+
+  updateLoupe(e.clientX, e.clientY, sx, sy);
+
+  if (isPanning) {
+    offsetX = e.clientX - panStartX;
+    offsetY = e.clientY - panStartY;
+    render();
+    return;
+  }
+
+  // Pending pan: promote to real pan once the cursor has moved enough
+  if (pendingPan) {
+    const dx = e.clientX - pendingPan.startClientX;
+    const dy = e.clientY - pendingPan.startClientY;
+    if ((dx * dx + dy * dy) > PAN_THRESHOLD * PAN_THRESHOLD) {
+      _beginPanFrom(pendingPan.startClientX, pendingPan.startClientY,
+                    pendingPan.startOffsetX, pendingPan.startOffsetY);
+    }
+    return;
+  }
+
+  // Pending point: promote to a real drag once the cursor moves past the
+  // threshold (below it, the press stays a click for select/delete on mouseup,
+  // or a pan once the hold timer fires).
+  if (pendingPoint) {
+    const dx = e.clientX - pendingPoint.startClientX;
+    const dy = e.clientY - pendingPoint.startClientY;
+    if ((dx * dx + dy * dy) > PAN_THRESHOLD * PAN_THRESHOLD) {
+      _clearHoldPanTimer();             // moving = point-drag, not a hold-pan
+      draggingPoint = pendingPoint.idx;
+      pendingPoint = null;
+      canvas.style.cursor = 'move';
+      // fall through to the dragging-move block below in this same event
+    } else {
+      return;
+    }
+  }
+
+  if (draggingPoint >= 0) {
+    const {x, y} = screenToImage(sx, sy);
+    currentData.points[draggingPoint].x = Math.round(x * 10) / 10;
+    currentData.points[draggingPoint].y = Math.round(y * 10) / 10;
+    renderPointList();
+    render();
+    return;
+  }
+
+  // Track the point under the cursor so render() can highlight it (the cue that
+  // you're close enough to grab/select/delete it). Re-render only on change.
+  const overIdx = findPointAt(sx, sy);
+  if (overIdx !== hoverPoint) {
+    hoverPoint = overIdx;
+    render();
+  }
+
+  if (numKeyDown !== null || aKeyDown) {
+    canvas.style.cursor = 'cell';
+  } else {
+    canvas.style.cursor = overIdx >= 0 ? 'pointer' : 'crosshair';
+  }
+});
+
+canvas.addEventListener('mouseup', () => {
+  _clearHoldPanTimer();   // released before the hold fired -> keep tap semantics
+  if (isPanning) { isPanning = false; canvas.style.cursor = 'crosshair'; }
+  if (draggingPoint >= 0) { draggingPoint = -1; canvas.style.cursor = 'crosshair'; }
+  if (pendingPoint) {
+    // Click on a point without dragging. If it was already selected before this
+    // press, delete it (click-the-point-you-just-made-to-remove-it). Otherwise
+    // it's now selected — leave it highlighted.
+    const { idx, wasSelected } = pendingPoint;
+    pendingPoint = null;
+    if (wasSelected && currentData && currentData.points[idx]) {
+      const delLabel = currentData.points[idx].label;
+      currentData.points.splice(idx, 1);
+      // splice() shifts every later index, so any stale pane multi-selection
+      // now points at the WRONG points — clear it (and re-render the pane).
+      paneSelection.clear();
+      selectedPoint = -1;
+      hoverPoint = -1;
+      sortedIndices = sortedPointIndices();
+      renderPointList();
+      render();
+      setStatus(`Deleted point ${delLabel}`);
+    }
+    canvas.style.cursor = 'crosshair';
+  }
+  if (pendingPan) {
+    // Click without drag = deselect current point
+    pendingPan = null;
+    selectedPoint = -1;
+    renderPointList();
+    render();
+    canvas.style.cursor = 'crosshair';
+  }
+});
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const zoom = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const newScale = scale * zoom;
+  if (newScale < 0.05 || newScale > 30) return;
+  offsetX = mx - (mx - offsetX) * zoom;
+  offsetY = my - (my - offsetY) * zoom;
+  scale = newScale;
+  render();
+}, {passive: false});
+
+canvas.addEventListener('mouseenter', () => {
+  if (loupeEnabled && img) document.getElementById('loupe').classList.add('visible');
+});
+canvas.addEventListener('mouseleave', () => {
+  document.getElementById('loupe').classList.remove('visible');
+  if (hoverPoint !== -1) { hoverPoint = -1; render(); }
+});
+
+// ── Hover loupe (magnifier) ──
+let loupeEnabled = true;
+const LOUPE_SIZE = 180;
+const LOUPE_ZOOM = 3; // magnification over current view scale
+let lastLoupeCursor = null; // {clientX, clientY, sx, sy}
+
+function updateLoupe(clientX, clientY, sx, sy) {
+  lastLoupeCursor = {clientX, clientY, sx, sy};
+  const loupe = document.getElementById('loupe');
+  if (!loupeEnabled || !img) { loupe.classList.remove('visible'); return; }
+
+  // Map cursor screen px -> image px
+  const {x: imgX, y: imgY} = screenToImage(sx, sy);
+  if (imgX < 0 || imgY < 0 || imgX >= img.naturalWidth || imgY >= img.naturalHeight) {
+    loupe.classList.remove('visible');
+    return;
+  }
+
+  loupe.classList.add('visible');
+  // Position loupe offset from cursor (avoid covering it)
+  const off = 20;
+  loupe.style.left = (clientX + off) + 'px';
+  loupe.style.top = (clientY + off) + 'px';
+
+  const lc = document.getElementById('loupe-canvas');
+  const lctx = lc.getContext('2d');
+  lctx.imageSmoothingEnabled = false;
+
+  // Source region in image coords: sized so (crop * zoom * scale) == LOUPE_SIZE
+  const cropPx = LOUPE_SIZE / (LOUPE_ZOOM * scale);
+  const srcX = Math.max(0, imgX - cropPx / 2);
+  const srcY = Math.max(0, imgY - cropPx / 2);
+  const srcW = Math.min(cropPx, img.naturalWidth - srcX);
+  const srcH = Math.min(cropPx, img.naturalHeight - srcY);
+
+  lctx.fillStyle = '#000';
+  lctx.fillRect(0, 0, LOUPE_SIZE, LOUPE_SIZE);
+  lctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, LOUPE_SIZE, LOUPE_SIZE);
+
+  // Crosshair at center
+  lctx.strokeStyle = 'rgba(255, 220, 50, 0.8)';
+  lctx.lineWidth = 1;
+  lctx.beginPath();
+  lctx.moveTo(LOUPE_SIZE/2 - 10, LOUPE_SIZE/2); lctx.lineTo(LOUPE_SIZE/2 + 10, LOUPE_SIZE/2);
+  lctx.moveTo(LOUPE_SIZE/2, LOUPE_SIZE/2 - 10); lctx.lineTo(LOUPE_SIZE/2, LOUPE_SIZE/2 + 10);
+  lctx.stroke();
+
+  // Overlay the held label code, big and prominent (incl. REVIEW).
+  if (numKeyDown !== null && QUICK_LABELS[numKeyDown]) {
+    const code = QUICK_LABELS[numKeyDown].code;
+    lctx.font = 'bold 36px Segoe UI, sans-serif';
+    lctx.textAlign = 'center';
+    lctx.textBaseline = 'middle';
+    // Shadow for legibility over any background
+    lctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+    lctx.fillText(code, LOUPE_SIZE / 2 + 2, LOUPE_SIZE - 26 + 2);
+    lctx.fillStyle = '#FFB3D9';
+    lctx.fillText(code, LOUPE_SIZE / 2, LOUPE_SIZE - 26);
+  }
+}
+
+// Redraw the loupe at the last cursor position (used when numKeyDown changes).
+function updateLoupeOverlay() {
+  if (!lastLoupeCursor) return;
+  const {clientX, clientY, sx, sy} = lastLoupeCursor;
+  updateLoupe(clientX, clientY, sx, sy);
+}
+
+// ── Persisted user preferences (localStorage) ──
+// Stays across frames, sub-app relaunches, and exports — anything tied to
+// this browser origin. Use PREFS_KEY_v1 so we can version future changes.
+const PREFS_KEY = 'tcrmp_placepoints_prefs_v1';
+
+function loadPrefs() {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return;
+    const p = JSON.parse(raw);
+    if (typeof p.autoCenter === 'boolean') autoCenter = p.autoCenter;
+    if (typeof p.loupeEnabled === 'boolean') loupeEnabled = p.loupeEnabled;
+  } catch (e) { /* ignore bad stored prefs */ }
+}
+
+function savePrefs() {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({
+      autoCenter: autoCenter,
+      loupeEnabled: loupeEnabled,
+    }));
+  } catch (e) { /* ignore — private mode, quota, etc. */ }
+}
+
+loadPrefs();
+
+// ── Keyboard ──
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  const activeScreen = document.querySelector('.screen.active');
+  if (!activeScreen || activeScreen.id !== 'review') return;
+
+  // K → STICKY toggle of the keyboard cheat sheet (press K to open, press K
+  // again to close). Handled first so it works from any mode (popup open,
+  // label armed, etc.). Ignore auto-repeat so a held K doesn't flicker it.
+  if (e.key === 'k' || e.key === 'K') {
+    if (!e.ctrlKey && !e.metaKey) {
+      if (!e.repeat) {
+        const kh = document.getElementById('kbd-help');
+        if (kh) kh.classList.toggle('visible');
+      }
+      e.preventDefault();
+      return;
+    }
+  }
+  // While the cheat sheet is open, swallow every other key so holding K can't
+  // fire shortcuts by accident. Esc is the fail-safe to close it.
+  {
+    const kh = document.getElementById('kbd-help');
+    if (kh && kh.classList.contains('visible')) {
+      if (e.key === 'Escape') kh.classList.remove('visible');
+      e.preventDefault();
+      return;
+    }
+  }
+
+  // Track A key for add-point mode
+  if (e.key === 'a' || e.key === 'A') {
+    if (!e.ctrlKey && !e.metaKey) {
+      aKeyDown = true;
+      canvas.style.cursor = 'cell';
+      e.preventDefault();
+      return;
+    }
+  }
+
+  // When popup is showing: number keys assign species, letter keys assign category
+  if (pendingAddIdx >= 0) {
+    const num = parseInt(e.key);
+    // 1-N: assign target species
+    if (num >= 1 && num <= TARGET_SPECIES.length) {
+      assignSpecies(TARGET_SPECIES[num - 1]);
+      e.preventDefault();
+      return;
+    }
+    // 0: unlabel
+    if (e.key === '0') { assignCategory(''); e.preventDefault(); return; }
+    // Letter shortcuts for generic categories
+    const catKeys = {c:'Coral', s:'Sponge', m:'Macroalgae', g:'Gorgonian', d:'Dca', t:'Turf', n:'Non-living'};
+    if (catKeys[e.key.toLowerCase()]) {
+      assignCategory(catKeys[e.key.toLowerCase()]);
+      e.preventDefault();
+      return;
+    }
+  } else {
+    // Popup NOT open: 1-N TAPS (not holds). When a sticky label is ARMED (quick-
+    // add drop mode) the tap switches/clears that sticky label for the NEXT click
+    // — it does NOT relabel the just-dropped (auto-selected) point. Only when no
+    // sticky label is armed does a tap with a point SELECTED relabel it; with
+    // nothing armed or selected it arms the sticky label. (numbers AND R behave
+    // the same — REVIEW is not special.) See applyQuickKey / PP.quickKeyAction.
+    // Auto-repeat fires keydown many times per second — ignore those so the
+    // label doesn't flicker on/off.
+    const num = parseInt(e.key);
+    if (num >= 1 && num <= TARGET_LABELS.length) {
+      if (!e.repeat) applyQuickKey(num - 1);
+      e.preventDefault();
+      return;
+    }
+  }
+
+  switch (e.key) {
+    case ' ':
+      // Space is the primary frame-advance key now (Shift+Space = prev).
+      // On the LAST image of the batch, Space auto-exports so you don't
+      // have to mouse up to the Export Batch button.
+      if (e.ctrlKey || e.metaKey) break;
+      e.preventDefault();
+      if (e.shiftKey) { saveCurrentImage(); prevImage(); }
+      else if (currentIdx >= images.length - 1) {
+        // End of batch — save + export. doExport handles the overlay.
+        saveCurrentImage().then(() => doExport());
+      } else {
+        saveCurrentImage(); nextImage();
+      }
+      break;
+    case 'p': case 'P':
+      if (!e.ctrlKey && !e.metaKey) {
+        _timerTogglePause();
+        e.preventDefault();
+      }
+      break;
+    case 'Tab':
+      // Cycle unlabeled OCR points (review of detected points). Not used in the
+      // drop-points flow; kept here only for the OCR-review case.
+      e.preventDefault();
+      selectNextLabel();
+      break;
+    case 'Enter':
+      // REFERENCE workflow: confirm the current point, advance to the next, and
+      // auto-center on it (always centers, regardless of the Z auto-center
+      // toggle). Restores the keyboard-only point-by-point review flow.
+      if (!e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        confirmAndAdvance();
+      }
+      break;
+    case 'z': case 'Z':
+      autoCenter = !autoCenter;
+      setStatus(autoCenter ? 'Auto-center ON' : 'Auto-center OFF');
+      if (typeof savePrefs === 'function') savePrefs();
+      e.preventDefault();
+      break;
+    case 'f': case 'F':
+      fitImage(); render(); e.preventDefault();
+      break;
+    case 'h': case 'H':
+      loupeEnabled = !loupeEnabled;
+      if (!loupeEnabled) document.getElementById('loupe').classList.remove('visible');
+      setStatus(loupeEnabled ? 'Magnifier ON' : 'Magnifier OFF');
+      if (typeof savePrefs === 'function') savePrefs();
+      e.preventDefault();
+      break;
+    case 'l': case 'L':
+      if (!e.ctrlKey && !e.metaKey) { toggleAuxMode(); e.preventDefault(); }
+      break;
+    case 'r': case 'R':
+      // R is the REVIEW quick-add label's key — identical to a number key, so it
+      // routes through the same applyQuickKey rule: while the REVIEW sticky label
+      // is armed, R switches/clears it (never relabels the just-dropped point);
+      // with nothing armed and a point selected, R relabels it REVIEW. Not a mode.
+      if (!e.ctrlKey && !e.metaKey) {
+        if (!e.repeat) applyQuickKey(REVIEW_IDX);
+        e.preventDefault();
+      }
+      break;
+    case 'Escape':
+      // Back to neutral select mode: disarm the quick-add label, close popup, deselect.
+      hideCatPopup();
+      if (numKeyDown !== null) setQuickLabel(null);
+      selectedPoint = -1; renderPointList(); render();
+      break;
+    case 's':
+      if (e.ctrlKey || e.metaKey) { saveCurrentImage(); setStatus('Saved'); e.preventDefault(); }
+      break;
+    case 'ArrowUp':
+      if (selectedPoint >= 0) {
+        e.preventDefault();
+        currentData.points[selectedPoint].y -= (e.shiftKey ? 5 : 1);
+        renderPointList(); render();
+      }
+      break;
+    case 'ArrowDown':
+      if (selectedPoint >= 0) {
+        e.preventDefault();
+        currentData.points[selectedPoint].y += (e.shiftKey ? 5 : 1);
+        renderPointList(); render();
+      }
+      break;
+    case 'ArrowLeft':
+      if (selectedPoint >= 0) {
+        e.preventDefault();
+        currentData.points[selectedPoint].x -= (e.shiftKey ? 5 : 1);
+        renderPointList(); render();
+      }
+      break;
+    case 'ArrowRight':
+      if (selectedPoint >= 0) {
+        e.preventDefault();
+        currentData.points[selectedPoint].x += (e.shiftKey ? 5 : 1);
+        renderPointList(); render();
+      }
+      break;
+    case 'Delete':
+    case 'Backspace':
+      // Multi-selection (Ctrl+click in the pane): delete the whole set together.
+      if (paneSelection.size > 0 && currentData) {
+        e.preventDefault();
+        deleteSelectedSet();
+        break;
+      }
+      if (selectedPoint >= 0 && currentData) {
+        e.preventDefault();
+        const delLabel = currentData.points[selectedPoint].label;
+        currentData.points.splice(selectedPoint, 1);
+        // splice() shifts every later index, so any stale pane multi-selection
+        // now points at the WRONG points — clear it (and re-render the pane).
+        paneSelection.clear();
+        selectedPoint = -1;
+        sortedIndices = sortedPointIndices();
+        renderPointList(); render();
+        setStatus(`Deleted point ${delLabel}`);
+      }
+      break;
+  }
+});
+
+document.addEventListener('keyup', e => {
+  // A is still momentary (popup-opening shortcut) — release clears it.
+  if (e.key === 'a' || e.key === 'A') {
+    aKeyDown = false;
+    if (pendingAddIdx < 0 && numKeyDown === null) canvas.style.cursor = 'crosshair';
+  }
+  // Number keys are STICKY now — do nothing on keyup. The label stays active
+  // until the user taps the same number again or taps a different one.
+  // K is also STICKY (toggle on keydown) — nothing to do on keyup.
+});
+
+// On window blur clear only the momentary A state; sticky quick-add stays.
+// Also hide the cheat sheet so it can't get stuck open if focus is lost.
+window.addEventListener('blur', () => {
+  aKeyDown = false;
+  const kh = document.getElementById('kbd-help');
+  if (kh) kh.classList.remove('visible');
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// Orchestrator auto-boot: when launched via the orchestrator, skip the
+// standalone startup form and go straight to loading + review. The server
+// has already populated all the paths via env vars.
+//
+// Robust variant: works even if DOMContentLoaded has already fired by the
+// time this inline script runs (browsers occasionally do this on very small
+// pages or after a bfcache restore). Also surfaces errors into the veil
+// instead of failing silently.
+// ═══════════════════════════════════════════════════════════════════
+const ORCHESTRATED = {{ 'true' if orchestrated else 'false' }};
+// Orchestrator main-menu URL (TCRMP_ORCHESTRATOR_URL), '' when standalone.
+const ORCHESTRATOR_URL = {{ (orchestrator_url or '')|tojson }};
+console.log('[orch] auto-boot script parsed, ORCHESTRATED=', ORCHESTRATED,
+            'readyState=', document.readyState);
+
+// "Done — close & return to main menu": go back to the orchestrator if we know
+// its URL; otherwise try to close the tab (works when the orchestrator opened
+// it). Falls back to a hint if the browser blocks window.close().
+async function doneAndExit() {
+  // Await the save so the last frame's edits are flushed BEFORE we navigate /
+  // close the tab — otherwise the in-flight PUT is cancelled and the edits lost.
+  if (currentData && currentIdx >= 0) { try { await saveCurrentImage(); } catch (e) {} }
+  if (ORCHESTRATOR_URL) { window.location.href = ORCHESTRATOR_URL; return; }
+  window.close();
+  // Some browsers refuse to close a tab they didn't script-open.
+  setTimeout(() => setStatus('You can close this tab now.'), 150);
+}
+
+async function _orchAutoBoot() {
+  if (!ORCHESTRATED) return;
+  const veil = document.getElementById('orch-loading');
+  const msg = document.getElementById('orch-loading-msg');
+  if (msg) msg.textContent = 'Calling /api/configure...';
+  try {
+    console.log('[orch] calling doStart()');
+    await doStart();
+    if (veil) veil.classList.remove('active');
+    console.log('[orch] doStart finished');
+  } catch (e) {
+    console.error('[orch] auto-boot error:', e);
+    if (msg) msg.textContent = 'Auto-boot failed: ' + (e && e.message || e) +
+        ' — open the browser console for details.';
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _orchAutoBoot, {once: true});
+} else {
+  // DOM is already parsed — run immediately on next tick so the browser has
+  // a chance to paint the veil first.
+  setTimeout(_orchAutoBoot, 0);
+}
+
+window.addEventListener('resize', () => { if (img) { fitImage(); render(); } });
+
+// ── UI helpers ──
+function renderPointList() {
+  const el = document.getElementById('point-list');
+  const sumEl = document.getElementById('panel-summary');
+  if (!currentData) { el.innerHTML = ''; sumEl.textContent = ''; return; }
+  const pts = currentData.points;
+  const nId = pts.filter(p => (p.ocr_confidence || 0) > 0).length;
+  sumEl.textContent = `${nId}/${pts.length} IDed`;
+
+  el.innerHTML = sortedIndices.map(i => {
+    const pt = pts[i];
+    const conf = pt.ocr_confidence || 0;
+    const isSel = i === selectedPoint;
+    const isRev = isReviewPoint(pt);
+    let cls = isSel ? 'active' : '';
+    if (paneSelection.has(i)) cls += ' multisel';
+    if (pt.added) cls += ' added';
+    else if (!pt.has_crosshair) cls += ' no-cross';
+    if (conf === 0 && !pt.added) cls += ' unid';
+    if (isRev) cls += ' review';
+    const confStr = pt.added ? '+' : (conf > 0 ? `${conf}%` : '\u2014');
+    return `<li class="${cls}" onclick="selectPointFromList(${i}, event)" data-idx="${i}">
+      <span class="plabel">${pt.label}</span>
+      <span class="pspecies${isRev ? ' review' : ''}">${isRev ? 'REVIEW' : (pt.species_code || '?')}</span>
+      <span class="pconf">${confStr}</span>
+      <span class="pcoord">${Math.round(pt.x)},${Math.round(pt.y)}</span>
+    </li>`;
+  }).join('');
+
+  if (selectedPoint >= 0) {
+    const item = el.querySelector(`li[data-idx="${selectedPoint}"]`);
+    if (item) item.scrollIntoView({block: 'nearest'});
+  }
+}
+
+// Ctrl/Cmd+click toggles `i` in the multi-selection set (for batch delete);
+// a plain click clears the set and selects just `i` (original behavior).
+function selectPointFromList(i, ev) {
+  if (ev && (ev.ctrlKey || ev.metaKey)) {
+    if (paneSelection.has(i)) paneSelection.delete(i);
+    else paneSelection.add(i);
+    selectedPoint = i;          // keep the single-select cursor on the last touched
+    renderPointList();
+    render();
+    setStatus(`${paneSelection.size} point${paneSelection.size === 1 ? '' : 's'} selected — Del to delete the set`);
+    return;
+  }
+  paneSelection.clear();
+  selectedPoint = i;
+  centerOnPoint(i);
+  renderPointList();
+  render();
+}
+
+// Delete every point in the pane multi-selection. Splice from the highest index
+// down so earlier indices stay valid mid-loop.
+function deleteSelectedSet() {
+  if (!currentData || paneSelection.size === 0) return;
+  const idxs = Array.from(paneSelection).sort((a, b) => b - a);
+  let n = 0;
+  for (const idx of idxs) {
+    if (currentData.points[idx]) { currentData.points.splice(idx, 1); n++; }
+  }
+  paneSelection.clear();
+  selectedPoint = -1;
+  hoverPoint = -1;
+  sortedIndices = sortedPointIndices();
+  renderPointList();
+  render();
+  setStatus(`Deleted ${n} point${n === 1 ? '' : 's'}`);
+}
+
+function updateCounter() {
+  const el = document.getElementById('img-counter');
+  el.textContent = images.length > 0 ? `${currentIdx + 1} / ${images.length}` : '0 / 0';
+}
+
+let statusTimer = null;
+function setStatus(msg) {
+  const el = document.getElementById('status-text');
+  el.textContent = msg;
+  el.classList.add('flash');
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(() => { el.textContent = ''; el.classList.remove('flash'); }, 3000);
+}
+
+// ── Export ──
+async function doExport() {
+  if (currentData && currentIdx >= 0) await saveCurrentImage();
+
+  setStatus('Exporting batch...');
+  const res = await fetch('/api/export_batch', { method: 'POST' });
+  const data = await res.json();
+
+  if (!data.ok) {
+    setStatus('Export failed');
+    return;
+  }
+
+  document.getElementById('export-summary').innerHTML = `
+    Raw images: ${data.exported_raw}<br>
+    Test images: ${data.test_images}<br>
+    Point records: ${data.point_records}<br>
+    Years: ${data.years_affected.join(', ')}
+  `;
+
+  const remEl = document.getElementById('export-remaining');
+  const nextBtn = document.getElementById('btn-next-review');
+
+  if (data.remaining_review > 0) {
+    remEl.textContent = `${data.remaining_review} images remaining for review`;
+    nextBtn.style.display = 'inline-block';
+    document.getElementById('export-title').textContent = 'Batch Exported';
+  } else {
+    remEl.textContent = 'All images exported!';
+    nextBtn.style.display = 'none';
+    document.getElementById('export-title').textContent = 'All Done!';
+  }
+
+  document.getElementById('export-overlay').classList.add('visible');
+}
+
+async function nextReviewBatch() {
+  document.getElementById('export-overlay').classList.remove('visible');
+
+  // Load next batch (review_files rebuilt after export)
+  await loadReviewBatch();
+  if (images.length > 0) {
+    selectImage(0);
+  } else {
+    setStatus('No more images to review');
+  }
+}
+
+function closeExportOverlay() {
+  document.getElementById('export-overlay').classList.remove('visible');
+}
+
+function backToStartup() {
+  document.getElementById('export-overlay').classList.remove('visible');
+  scanResult = null;
+  document.getElementById('setup-info').classList.remove('visible');
+  showScreen('startup');
+}
+</script>
+</body>
+</html>

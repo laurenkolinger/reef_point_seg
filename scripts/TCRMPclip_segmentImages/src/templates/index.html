@@ -627,7 +627,7 @@ body::after {
     <div class="progress-text" id="progress-text">0 / 0</div>
     <div class="progress-current" id="progress-current"></div>
     <div class="progress-eta" id="progress-eta"></div>
-    <button class="btn-action hidden" id="btn-start-review" onclick="startReviewWhileProcessing()" style="margin-top:18px; width:100%; padding:12px; background:var(--success); border:1px solid var(--success); border-radius:var(--radius); color:var(--bg); font-size:13px; font-weight:400; cursor:crosshair; font-family:'Space Mono',monospace; letter-spacing:0.06em; text-transform:uppercase;">Start Review</button>
+    <button class="btn-action hidden" id="btn-start-review" onclick="startReviewWhileProcessing()" title="Begin reviewing the frames already segmented while SAM3 keeps processing the rest in the background." style="margin-top:18px; width:100%; padding:12px; background:var(--success); border:1px solid var(--success); border-radius:var(--radius); color:var(--bg); font-size:13px; font-weight:400; cursor:crosshair; font-family:'Space Mono',monospace; letter-spacing:0.06em; text-transform:uppercase;">Start Review</button>
   </div>
 </div>
 
@@ -654,7 +654,7 @@ body::after {
         Auto YES
     </button>
     <span class="status" id="status-text"></span>
-    <button class="btn primary" onclick="doExport()">Export Batch</button>
+    <button class="btn primary" onclick="doExport()" title="Export this review batch to YOLO-segmentation training files (accepted masks only). On the last frame this runs automatically.">Export Batch</button>
   </div>
   <div class="toolbar-bar">
     <span class="tool-label">Opacity:</span>
@@ -663,7 +663,7 @@ body::after {
            oninput="setOpacity(this.value)" onchange="this.blur()">
     <span class="tool-val" id="opacity-val">50%</span>
     <div class="sep"></div>
-    <label><input type="checkbox" id="chk-points" onchange="render()"> Show Points</label>
+    <label title="Show or hide the original click points that seeded each mask (Shift+P)."><input type="checkbox" id="chk-points" onchange="render()"> Show Points</label>
     <div class="sep"></div>
     <span class="tool-label">Edit:</span>
     <button class="btn" id="btn-mode-refine" onclick="setInteractionMode('refine')"
@@ -832,9 +832,9 @@ body::after {
     <p id="export-summary"></p>
     <div id="export-remaining" style="margin:14px 0; font-size:14px; color:var(--pink); font-weight:600; font-family:'Space Mono',monospace;"></div>
     <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
-      <button class="btn primary" id="btn-next-review" onclick="nextReviewBatch()">Next Review Batch</button>
-      <button class="btn" onclick="closeExportOverlay()">Done</button>
-      <button class="btn" onclick="backToStartup()">Change Settings</button>
+      <button class="btn primary" id="btn-next-review" onclick="nextReviewBatch()" title="Load the next batch of frames to review.">Next Review Batch</button>
+      <button class="btn" onclick="closeExportOverlay()" title="Close this summary and stay on the current batch.">Done</button>
+      <button class="btn" onclick="backToStartup()" title="Return to the startup screen to change input, batch size, or filters.">Change Settings</button>
     </div>
   </div>
 </div>
