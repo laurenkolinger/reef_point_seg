@@ -33,22 +33,34 @@ def _canon_rank(path):
     return (penalty, path.count(os.sep), len(path))
 
 
+def _all_files(clip_root):
+    """Every non-hidden file path under clip_root, via the shared persisted
+    index (scripts/clip_index.py) when available, else a direct walk."""
+    try:
+        import clip_index
+        return clip_index.list_files(clip_root)
+    except Exception:
+        paths = []
+        for root, dirs, files in os.walk(clip_root):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for fn in files:
+                if not fn.startswith("."):
+                    paths.append(os.path.join(root, fn))
+        return paths
+
+
 def _iter_images(clip_root):
-    for root, dirs, files in os.walk(clip_root):
-        dirs[:] = [d for d in dirs if not d.startswith(".")]
-        for fn in files:
-            if fn.startswith("."):
-                continue
-            stem, ext = os.path.splitext(fn)
-            if ext.lower() not in (".jpg", ".jpeg"):
-                continue
-            # Skip derived preview overlays (the "_pts" annotated variants):
-            # they are not source frames, so a lores copy is wasted disk and a
-            # dead manifest row (chooseImages only ever looks up a frame's raw
-            # basename, never "<basename>_pts").
-            if stem.lower().endswith("_pts"):
-                continue
-            yield os.path.join(root, fn)
+    for path in _all_files(clip_root):
+        stem, ext = os.path.splitext(os.path.basename(path))
+        if ext.lower() not in (".jpg", ".jpeg"):
+            continue
+        # Skip derived preview overlays (the "_pts" annotated variants):
+        # they are not source frames, so a lores copy is wasted disk and a
+        # dead manifest row (chooseImages only ever looks up a frame's raw
+        # basename, never "<basename>_pts").
+        if stem.lower().endswith("_pts"):
+            continue
+        yield path
 
 
 def generate(clip_root, lores_root, long_edge=LONG_EDGE, force=False,

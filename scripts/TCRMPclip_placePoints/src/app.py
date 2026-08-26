@@ -703,26 +703,49 @@ def _clip_path_rank(path):
     return (1 if noncanonical else 0, len(parts))
 
 
+def _persisted_file_list(clip_dir):
+    """All file paths under clip_dir via the shared persisted index
+    (scripts/clip_index.py: one walk, dir-mtime staleness sentinel, auto
+    rebuild). Returns None when the module is unavailable or errors, so
+    _walk_index keeps its original walk as the fallback. The routing
+    configure calls _walk_index twice (jpg + .cpc); with the index both
+    calls are dict lookups over one cached listing instead of two full
+    167k-file tree walks."""
+    try:
+        scripts_root = os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))))
+        if scripts_root not in sys.path:
+            sys.path.insert(0, scripts_root)
+        import clip_index
+        return clip_index.list_files(clip_dir)
+    except Exception:
+        return None
+
+
 def _walk_index(clip_dir, exts):
-    """One-pass recursive scan of the whole clip tree: stem -> canonical path
-    for the given extensions. Basenames are globally unique per logical frame,
-    so this resolves a frame regardless of which TCRMP{season}_clip / period
-    subfolder it lives in. Hidden dirs + dot-files skipped; collisions resolve
-    to the most canonical copy (see _clip_path_rank)."""
+    """Whole-tree scan: stem -> canonical path for the given extensions.
+    Basenames are globally unique per logical frame, so this resolves a frame
+    regardless of which TCRMP{season}_clip / period subfolder it lives in.
+    Hidden dirs + dot-files skipped; collisions resolve to the most canonical
+    copy (see _clip_path_rank). Served from the persisted clip index when
+    current (Task 1.4, 2026-08-26); falls back to the original walk."""
     index = {}
     if not clip_dir or not os.path.isdir(clip_dir):
         return index
-    for root, dirs, files in os.walk(clip_dir):
-        dirs[:] = [d for d in dirs if not d.startswith('.')]
-        for fn in files:
-            if fn.startswith('.'):
-                continue
-            stem, ext = os.path.splitext(fn)
-            if ext.lower() in exts:
-                path = os.path.join(root, fn)
-                prev = index.get(stem)
-                if prev is None or _clip_path_rank(path) < _clip_path_rank(prev):
-                    index[stem] = path
+    paths = _persisted_file_list(clip_dir)
+    if paths is None:
+        paths = []
+        for root, dirs, files in os.walk(clip_dir):
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            for fn in files:
+                if not fn.startswith('.'):
+                    paths.append(os.path.join(root, fn))
+    for path in paths:
+        stem, ext = os.path.splitext(os.path.basename(path))
+        if ext.lower() in exts:
+            prev = index.get(stem)
+            if prev is None or _clip_path_rank(path) < _clip_path_rank(prev):
+                index[stem] = path
     return index
 
 

@@ -33,6 +33,13 @@ fi
 # test_lock_gate.py pops it before exercising the gate with its own registry,
 # so the lock gate itself is still fully tested.
 export VICARIUS_LOCK_BYPASS=1
+
+# Fixture trees built by the suites must not leave persisted clip-index files
+# under the real supporting_data/clip_index/ (Task 1.4): point the index store
+# at a throwaway dir for the whole run and remove it on exit.
+TMP_CLIP_INDEX="$(mktemp -d /tmp/clip_index_test.XXXXXX)"
+export TCRMP_CLIP_INDEX_DIR="$TMP_CLIP_INDEX"
+trap 'rm -rf "$TMP_CLIP_INDEX"' EXIT
 if ! command -v node >/dev/null 2>&1; then
   echo "FATAL: node not on PATH (required for the .js suites)" >&2
   exit 2
@@ -125,6 +132,8 @@ SUITES=(
   "py _matrix/tests/test_matrix.py"
   # Lores generator + manifest (A1: 1920px mirror of oversized 4K clip frames).
   "py tests/test_make_lores.py"
+  # Persisted clip index (2026-08-26): hit/stale paths + consumer listing parity.
+  "py tests/test_clip_index.py"
   # Model-assist loop (2026-07-09): inference predictions.json, prediction seeder, transect frozen split.
   "py TCRMPtrain_oceankindCV/tests/test_predictions_output.py"
   "py TCRMPclip_combinedAnnotate/tests/test_seed_from_predictions.py"

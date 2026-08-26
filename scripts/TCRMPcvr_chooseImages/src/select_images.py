@@ -79,8 +79,24 @@ def _clip_path_rank(path):
     return (1 if noncanonical else 0, len(parts))
 
 
+def _persisted_file_list(clip_dir):
+    """All file paths under clip_dir via the shared persisted index
+    (scripts/clip_index.py: one walk, dir-mtime staleness sentinel, auto
+    rebuild). Returns None when the module is unavailable or errors, so
+    callers keep their original walk as the fallback."""
+    try:
+        scripts_root = os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))))
+        if scripts_root not in sys.path:
+            sys.path.insert(0, scripts_root)
+        import clip_index
+        return clip_index.list_files(clip_dir)
+    except Exception:
+        return None
+
+
 def build_clip_index(clip_dir):
-    """One-pass recursive scan of the whole clip tree.
+    """Whole-tree image index of the clip tree.
 
     Maps each image stem (filename without extension) -> absolute path.
     TCRMP basenames are globally unique per logical frame, so a flat index lets
@@ -89,21 +105,28 @@ def build_clip_index(clip_dir):
     date year differs from their season-folder year (e.g. a 2018-01 frame filed
     under TCRMP2017_clip). Hidden dirs (.AppleDouble, .git) and dot-files are
     skipped; stem collisions resolve to the most canonical copy. jpg/jpeg only.
+
+    Served from the persisted clip index when current (Task 1.4, 2026-08-26);
+    falls back to the original one-pass recursive walk otherwise.
     """
     index = {}
     if not clip_dir or not os.path.isdir(clip_dir):
         return index
-    for root, dirs, files in os.walk(clip_dir):
-        dirs[:] = [d for d in dirs if not d.startswith(".")]
-        for fn in files:
-            if fn.startswith("."):
-                continue
-            stem, ext = os.path.splitext(fn)
-            if ext.lower() in (".jpg", ".jpeg"):
-                path = os.path.join(root, fn)
-                prev = index.get(stem)
-                if prev is None or _clip_path_rank(path) < _clip_path_rank(prev):
-                    index[stem] = path
+    paths = _persisted_file_list(clip_dir)
+    if paths is None:
+        paths = []
+        for root, dirs, files in os.walk(clip_dir):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for fn in files:
+                if not fn.startswith("."):
+                    paths.append(os.path.join(root, fn))
+    for path in paths:
+        fn = os.path.basename(path)
+        stem, ext = os.path.splitext(fn)
+        if ext.lower() in (".jpg", ".jpeg"):
+            prev = index.get(stem)
+            if prev is None or _clip_path_rank(path) < _clip_path_rank(prev):
+                index[stem] = path
     return index
 
 
