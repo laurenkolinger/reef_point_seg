@@ -8,6 +8,9 @@ paths:
   unified_env_python: ${repo_root}/env/bin/python
   all_points_csv: /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/all_points.csv
   master_codes_csv: /mnt/rip/vicarius_drive/vicarius/_METADATA/library/definitions/tcrmp_species_codes.csv
+  # Hopper duplicate mirror of master_codes.csv kept in sync by the Label
+  # Manager; empty disables the mirror (standalone installs have no hopper).
+  duplicate_master_codes: /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/master_codes.csv
   cpc_all_dir: /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/cpc_all
   tcrmp_cvr_dir: /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/TCRMP_CVR
   # Full year/period clip set lives under the repo's own supporting_data (this

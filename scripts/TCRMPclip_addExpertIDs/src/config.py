@@ -19,7 +19,20 @@ _REPO = os.path.dirname(_SCRIPTS)                # github_repo
 EXPORT_DIR = os.environ.get('TCRMP_EXPORT_DIR', '') or os.path.join(_PROJECT, 'output')
 
 # Review (GitHub-Pages) repo working tree, and the permanent library.
-REVIEW_DIR = os.environ.get('TCRMP_REVIEW_DIR', '') or '/mnt/tear/REVIEW_reefpointseg'
+def _pipeline_yaml_path(key):
+    """Default from the module config (config/pipeline.yaml paths.<key>);
+    '' when the config or key is absent. The TCRMP_* env override wins.
+    Raw read on purpose: review_dir carries no ${...} interpolation."""
+    try:
+        import yaml
+        with open(os.path.join(_REPO, 'config', 'pipeline.yaml')) as fh:
+            cfg = yaml.safe_load(fh) or {}
+        return str((cfg.get('paths') or {}).get(key) or '')
+    except Exception:
+        return ''
+
+
+REVIEW_DIR = os.environ.get('TCRMP_REVIEW_DIR', '') or _pipeline_yaml_path('review_dir')
 REVIEW_REPO_URL = (os.environ.get('TCRMP_REVIEW_REPO_URL', '')
                    or 'https://github.com/laurenkolinger/reefpointseg-review.git')
 EXPERT_LIBRARY_DIR = os.environ.get('TCRMP_EXPERT_LIBRARY_DIR', '')   # '' -> default

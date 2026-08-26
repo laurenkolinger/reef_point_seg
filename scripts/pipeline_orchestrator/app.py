@@ -556,7 +556,7 @@ def _labels_paths():
     dir and the supporting_data duplicate mirror anchored to the repo."""
     return {
         "master_codes_csv": PATHS.get("master_codes_csv", ""),
-        "duplicate_master_codes": "/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/master_codes.csv",
+        "duplicate_master_codes": PATHS.get("duplicate_master_codes", ""),
         "all_points_csv": PATHS.get("all_points_csv", ""),
         "recode_output_dir": os.path.join(REPO_DIR, "scripts", "TCRMPcvr_recodeSpecies", "output"),
         "pipeline_yaml": CONFIG_PATH,
@@ -663,10 +663,13 @@ def create_app():
     # ------------------------------------------------------------------
     # Path prefix that any auto-open project_dir must live under. This
     # prevents a crafted ?project_dir= URL param from pointing at arbitrary
-    # filesystem locations (e.g. /etc/passwd).
+    # filesystem locations (e.g. /etc/passwd). Derived from the configured
+    # projects_dir (pipeline.yaml paths.projects_dir), falling back to the
+    # module-standard inprocess/ sibling of the repo.
     _AUTOOPEN_ALLOWED_ROOT = (
-        "/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/inprocess/"
-    )
+        PATHS.get("projects_dir")
+        or os.path.join(os.path.dirname(REPO_DIR), "inprocess")
+    ).rstrip("/") + "/"
 
     @app.route("/")
     def index():

@@ -22,7 +22,13 @@ from pathlib import Path
 
 MODULE_SLUG = "reef_point_seg"
 LOCK_MESSAGE = "Under development. Please come back later. Email Lauren for questions."
-LOCKS_PATH = "/mnt/rip/vicarius_drive/vicarius/_METADATA/module_locks.json"
+# Default registry location derives from VICARIUS_ROOT (same env the run
+# scripts honor) so an off-box install only sets one variable; the literal
+# fallback is this box's platform root. VICARIUS_LOCKS_PATH (read at call
+# time in is_locked) still overrides the whole path for tests.
+LOCKS_PATH = os.path.join(
+    os.environ.get("VICARIUS_ROOT") or "/mnt/rip/vicarius_drive/vicarius",
+    "_METADATA", "module_locks.json")
 
 # One stderr line per distinct read problem, so a bad registry does not spam
 # every request.

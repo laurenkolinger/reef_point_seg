@@ -66,6 +66,33 @@ INPUT_DIR = os.environ.get('TCRMP_INPUT_DIR', '') or INPUT_DIR
 EXPORT_DIR = os.environ.get('TCRMP_EXPORT_DIR', '') or EXPORT_DIR
 SAM3_DEVICE_TRACKER = os.environ.get('TCRMP_SAM3_DEVICE_TRACKER', '') or SAM3_DEVICE_TRACKER
 SAM3_DEVICE_EXEMPLAR = os.environ.get('TCRMP_SAM3_DEVICE_EXEMPLAR', '') or SAM3_DEVICE_EXEMPLAR
+
+# Single-GPU fallback: the shipped defaults assume the two-GPU box (tracker
+# on cuda:1). When torch.cuda.device_count() reports fewer GPUs than a
+# requested cuda:N index needs, degrade to cuda:0 with a stderr notice so
+# the app boots out of the box on single-GPU machines. Applied after the
+# env overrides so an explicit but impossible request also degrades.
+def _degrade_cuda_device(dev):
+    try:
+        idx = int(str(dev).split(':', 1)[1])
+    except (IndexError, ValueError):
+        return dev  # not a cuda:N string (e.g. 'cpu')
+    if idx == 0:
+        return dev
+    try:
+        import torch
+        n = torch.cuda.device_count()
+    except Exception:
+        return dev  # no torch / no driver here: leave the request alone
+    if 1 <= n <= idx:
+        import sys
+        print(f"[config] single-GPU fallback: {dev} -> cuda:0 "
+              f"(torch.cuda.device_count()={n})", file=sys.stderr)
+        return 'cuda:0'
+    return dev
+
+SAM3_DEVICE_TRACKER = _degrade_cuda_device(SAM3_DEVICE_TRACKER)
+SAM3_DEVICE_EXEMPLAR = _degrade_cuda_device(SAM3_DEVICE_EXEMPLAR)
 _ct = os.environ.get('TCRMP_CONFIDENCE_THRESHOLD', '')
 if _ct: CONFIDENCE_THRESHOLD = float(_ct)
 _ma = os.environ.get('TCRMP_MIN_MASK_AREA_PX', '')
@@ -87,7 +114,20 @@ PROJECT_ID = os.environ.get('TCRMP_PROJECT_ID', '')
 PROJECT_NAME = os.environ.get('TCRMP_PROJECT_NAME', '')
 
 # Pages repo working tree (a git clone of laurenkolinger/reefpointseg-review).
-REVIEW_DIR = os.environ.get('TCRMP_REVIEW_DIR', '') or '/mnt/tear/REVIEW_reefpointseg'
+def _pipeline_yaml_path(key):
+    """Default from the module config (config/pipeline.yaml paths.<key>);
+    '' when the config or key is absent. The TCRMP_* env override wins.
+    Raw read on purpose: review_dir carries no ${...} interpolation."""
+    try:
+        import yaml
+        with open(os.path.join(_REPO_DIR, 'config', 'pipeline.yaml')) as fh:
+            cfg = yaml.safe_load(fh) or {}
+        return str((cfg.get('paths') or {}).get(key) or '')
+    except Exception:
+        return ''
+
+
+REVIEW_DIR = os.environ.get('TCRMP_REVIEW_DIR', '') or _pipeline_yaml_path('review_dir')
 REVIEW_REPO_URL = (os.environ.get('TCRMP_REVIEW_REPO_URL', '')
                    or 'https://github.com/laurenkolinger/reefpointseg-review.git')
 # Permanent library dir; '' -> _reefreview.library.default_dir()

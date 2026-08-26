@@ -98,7 +98,7 @@ def get_git_info(repo_path: Path) -> dict:
 
 def log_to_vicarius(message: str, category: str = "modules", event_type: str = "user_note"):
     """Log event to VICARIUS logging system if available."""
-    vicarius_root = os.environ.get("VICARIUS_ROOT", "/mnt/vicarius_drive/vicarius")
+    vicarius_root = os.environ.get("VICARIUS_ROOT", "/mnt/rip/vicarius_drive/vicarius")
     log_script = Path(vicarius_root) / "_logging" / "src" / "vicarius_cli.py"
 
     if log_script.exists():

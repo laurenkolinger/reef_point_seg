@@ -117,3 +117,26 @@ VICARIUS = _cfg.get("vicarius", {"enabled": False})
 _s6 = DEFAULT_STEP_CONFIGS.setdefault("6", {})
 _s6["run_name"] = ""                 # always blank — see Step 6 UX rules
 _s6["device"] = "0,1"                # DDP across cuda:0 + cuda:1 by default
+
+
+# Single-GPU fallback: the step 6 default assumes the two-GPU box. Consult
+# torch.cuda.device_count() and degrade "0,1" to "0" with a stderr notice so
+# a single-GPU machine trains out of the box. A failed probe (torch absent
+# in this interpreter) leaves the default alone.
+def _cuda_device_count():
+    try:
+        import torch
+        return torch.cuda.device_count()
+    except Exception:
+        return None
+
+
+_n_gpus = _cuda_device_count()
+if _n_gpus is not None and _n_gpus < 2 and _s6["device"] == "0,1":
+    import sys as _sys
+    print(
+        f"[orchestrator_config] single-GPU fallback: step 6 device '0,1' -> '0' "
+        f"(torch.cuda.device_count()={_n_gpus})",
+        file=_sys.stderr,
+    )
+    _s6["device"] = "0"

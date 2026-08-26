@@ -31,7 +31,7 @@ import yaml
 
 def log_to_vicarius(message: str, category: str = "modules", event_type: str = "user_note"):
     """Log event to VICARIUS logging system if available."""
-    vicarius_root = os.environ.get("VICARIUS_ROOT", "/mnt/vicarius_drive/vicarius")
+    vicarius_root = os.environ.get("VICARIUS_ROOT", "/mnt/rip/vicarius_drive/vicarius")
     log_script = Path(vicarius_root) / "_logging" / "src" / "vicarius_cli.py"
 
     if log_script.exists():
@@ -53,7 +53,7 @@ def archive_params_to_metadata(run_dir: Path, params: dict) -> Path | None:
 
     Archived to: _METADATA/logs/runs/shelved/{module_name}/{run_name}_params.yaml
     """
-    vicarius_root = os.environ.get("VICARIUS_ROOT", "/mnt/vicarius_drive/vicarius")
+    vicarius_root = os.environ.get("VICARIUS_ROOT", "/mnt/rip/vicarius_drive/vicarius")
     archive_base = Path(vicarius_root) / "_METADATA" / "logs" / "runs" / "shelved"
 
     module_name = params.get("run", {}).get("module_name", "unknown_module")

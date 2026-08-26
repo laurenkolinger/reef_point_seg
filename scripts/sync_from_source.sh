@@ -19,7 +19,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 DST="$(pwd)"
-SRC="/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI"
+# Source tree default is this box's hopper copy; override with TCRMP_SYNC_SRC.
+SRC="${TCRMP_SYNC_SRC:-/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI}"
 
 DRY="--dry-run"
 TARGET="all"
