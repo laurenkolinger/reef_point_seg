@@ -9,12 +9,48 @@ let serviceWindows = {};// step -> window reference
 
 // ── API helpers ─────────────────────────────────────────────────────────────
 
+// The orchestrator's own death used to render as a frozen but healthy-looking
+// page: every poller swallows its fetch error individually. Track consecutive
+// failures across ALL api() calls and raise one page-level banner; any
+// success clears it.
+let _apiConsecutiveFails = 0;
+
+function _setServerDownBanner(down) {
+    let el = document.getElementById('orch-down-banner');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'orch-down-banner';
+        el.style.cssText = 'display:none;position:fixed;top:0;left:0;right:0;'
+            + 'z-index:9999;background:var(--error);color:#fff;text-align:center;'
+            + 'padding:8px 16px;font-size:13px;font-weight:600';
+        el.textContent = 'Orchestrator is not responding. Restart Reef Point '
+            + 'Seg from the VICARIUS launcher; this page recovers on its own '
+            + 'once the server is back.';
+        el.title = 'Shown after several consecutive failed requests to the '
+            + 'orchestrator on port 5050. Clears automatically when a request '
+            + 'succeeds again.';
+        document.body.appendChild(el);
+    }
+    el.style.display = down ? 'block' : 'none';
+}
+
 async function api(url, opts = {}) {
-    const resp = await fetch(url, {
-        headers: { 'Content-Type': 'application/json' },
-        ...opts,
-    });
-    return resp.json();
+    try {
+        const resp = await fetch(url, {
+            headers: { 'Content-Type': 'application/json' },
+            ...opts,
+        });
+        const data = await resp.json();
+        // Module lock (VICARIUS): the server refuses with 423 while locked.
+        if (resp.status === 423) data._locked = true;
+        _apiConsecutiveFails = 0;
+        _setServerDownBanner(false);
+        return data;
+    } catch (e) {
+        _apiConsecutiveFails += 1;
+        if (_apiConsecutiveFails >= 3) _setServerDownBanner(true);
+        throw e;
+    }
 }
 
 function post(url, body) {
@@ -76,6 +112,29 @@ function bounceToVicarius() {
     window.location.replace(vicariusHomeUrl());
 }
 
+// Module lock (VICARIUS): when the server starts refusing with 423, an
+// already-open tab swaps the whole SPA for the same minimal message the
+// server serves on / while locked. Same copy, same mailto, no bounce.
+function buildLockPage() {
+    return '<div class="vic-lock-page" style="min-height:100vh;display:flex;' +
+        'align-items:center;justify-content:center;text-align:center;' +
+        'background:#10151c;color:#dfe7ef;font-family:system-ui,sans-serif;">' +
+        '<div style="max-width:520px;padding:40px;">' +
+        '<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56"' +
+        ' viewBox="0 0 24 24" fill="none" stroke="#8fa4b8" stroke-width="1.6"' +
+        ' stroke-linecap="round" stroke-linejoin="round"' +
+        ' style="display:block;margin:0 auto 18px;">' +
+        '<rect x="4" y="10.5" width="16" height="10" rx="2"></rect>' +
+        '<path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"></path></svg>' +
+        '<h1 style="font-size:22px;font-weight:600;margin:0 0 12px;">Reef Point Seg</h1>' +
+        '<p style="font-size:15px;line-height:1.6;margin:0;color:#b8c4d0;">' +
+        'Under development. Please come back later. ' +
+        '<a href="mailto:lauren.olinger@uvi.edu" style="color:#7fb3e8;">Email Lauren</a>' +
+        ' for questions.</p>' +
+        '<div style="margin-top:28px;font-size:12px;color:#5a6673;">VICARIUS module lock</div>' +
+        '</div></div>';
+}
+
 // Legacy callers route through showSetup(); it now bounces to the VICARIUS UI
 // rather than revealing any local create/open screen.
 function showSetup() {
@@ -98,15 +157,33 @@ function enterApp() {
 
     populateConfigs();
     updateSidebar();
-    switchStep(state.current_step || 1);
+    // current_step is an int chain slot; slots 4 and 5 are now occupied by the
+    // combined annotator (non-chain tile data-step="step4test"), whose legacy
+    // panels are archived from the sidebar. Land on it rather than an orphaned,
+    // nav-less legacy panel.
+    let cs = state.current_step || 1;
+    if (cs === 4 || cs === 5) cs = 'step4test';
+    switchStep(cs);
+
+    // A routing pass runs server-side and outlives this page, so a reload must
+    // still show it. Paint it now and keep it current for as long as it is alive.
+    renderStep4testRouteBanner();
+    if (!window._step4testRouteTimer) {
+        window._step4testRouteTimer = setInterval(renderStep4testRouteBanner, 2500);
+    }
 }
 
 // ── Sidebar ─────────────────────────────────────────────────────────────────
 
 function updateSidebar() {
     if (!state) return;
-    for (let s = 1; s <= 6; s++) {
+    // Cover every numeric chain slot 1..8. Slots 4 & 5 tiles are archived from
+    // the sidebar (4.test replaces them) so their <li> is absent and skipped;
+    // 7 (Evaluate) and 8 (Inference) must be covered so their status/checkmark
+    // update (they sit below train and display as 6/7).
+    for (let s = 1; s <= 8; s++) {
         const li = document.querySelector(`.step-nav li[data-step="${s}"]`);
+        if (!li) continue;
         const st = state.steps[s];
         const status = st ? st.status : 'locked';
 
@@ -118,7 +195,10 @@ function updateSidebar() {
         if (status === 'completed') {
             circle.textContent = '\u2713';
         } else {
-            circle.textContent = s;
+            // Display number may differ from the internal step id (data-step):
+            // 4.test is shown as "4" and train (id 6) is shown as "5". data-num
+            // on the circle carries the display number; fall back to the id.
+            circle.textContent = circle.dataset.num || s;
         }
 
         const statusText = document.getElementById(`step${s}-status-text`);
@@ -137,6 +217,16 @@ function switchStep(step) {
     const eli = document.querySelector('.step-nav li[data-step="expertids"]');
     if (eli) eli.classList.toggle('active', step === 'expertids');
     if (step === 'expertids' && window.ExpertIDs && window.ExpertIDs.onShow) window.ExpertIDs.onShow();
+    // step4test (combined annotator) is another non-chain tile; toggle its
+    // active state here too (updateSidebar only manages numeric steps).
+    const tli = document.querySelector('.step-nav li[data-step="step4test"]');
+    if (tli) tli.classList.toggle('active', step === 'step4test');
+    // step4loop (Refine loop) is a third non-chain tile; same pattern.
+    const lli = document.querySelector('.step-nav li[data-step="step4loop"]');
+    if (lli) lli.classList.toggle('active', step === 'step4loop');
+    // editmasks (Edit Masks) is a fourth non-chain tile; same pattern.
+    const emli = document.querySelector('.step-nav li[data-step="editmasks"]');
+    if (emli) emli.classList.toggle('active', step === 'editmasks');
 
     // Ensure the active panel always has working Prev/Next buttons.
     renderStepNavFooters();
@@ -153,10 +243,10 @@ function switchStep(step) {
             }
         } catch (e) { /* ignore */ }
         if (step === 3) {
-            // Ensure labels are loaded/rendered on entering Step 3. loadStep3Labels
-            // no-ops the fetch if already loaded but re-renders to reflect the
-            // current selection (chips + checked rows from the saved config).
-            loadStep3Labels(false);
+            // Re-fetch the label universe every time Step 3 is entered so the
+            // picker always reflects the CURRENT Step 2 recode (master_codes_recoded).
+            // A cached pre-recode load (Step 1's master codes) must never linger here.
+            loadStep3Labels(true);
         }
         if (step === 6) {
             // Step 6 panel expects: preset auto-loaded if first time, class
@@ -166,9 +256,11 @@ function switchStep(step) {
             if (nameEl && !nameEl.dataset.userEdited) nameEl.value = '';
             refreshStep6Presets({ autoApply: true });
             refreshStep6Classes();
+            refreshStep6ModelRunOptions();
         }
-        if (step === 7) loadStep7Report();
+        if (step === 7) { loadStep7Report(); refreshStep7Rounds(); }
         if (step === 8) refreshStep8Gallery();
+        if (step === 'step4loop') refreshStep4loopRuns();
     })();
 }
 
@@ -204,7 +296,15 @@ function renderStepNavFooters() {
         const footer = document.getElementById(`nav-footer-${ds}`);
         if (!footer) return;
         const prevDs = idx > 0 ? order[idx - 1] : null;
-        const nextDs = idx < order.length - 1 ? order[idx + 1] : null;
+        let nextDs = idx < order.length - 1 ? order[idx + 1] : null;
+        let nextLabel = null;
+        // step4test (the combined annotator) will replace Place Points + Segment,
+        // so its Next jumps straight to Train Model rather than the next tile.
+        if (ds === 'step4test') nextDs = '6';
+        // step4loop (Refine loop) sits last in the nav order, but its Next closes
+        // the active-learning loop by jumping back to Train (step 6) rather than
+        // dead-ending: "Loop to Train (5)" names the loop, not just the tile.
+        if (ds === 'step4loop') { nextDs = '6'; nextLabel = 'Loop to Train (5)'; }
         const isNumeric = /^\d+$/.test(ds);
 
         // LEFT zone — Prev (always outline).
@@ -217,6 +317,18 @@ function renderStepNavFooters() {
         let resetBtn = '';
         if (isNumeric) {
             resetBtn = `<button class="btn btn-outline btn-sm" onclick='openResetConfirm(${Number(ds)})' title="Clear this step's outputs and re-lock the steps after it. Asks for confirmation first; cannot be undone.">Reset Step</button>`;
+        } else if (ds === 'step4test') {
+            // 4.test is a non-chain tile with its own reset route; clearing it
+            // removes routed_input + the YOLO export so the next Open re-routes.
+            resetBtn = `<button class="btn btn-outline btn-sm" onclick='openResetConfirm("step4test")' title="Delete this tool's routed images and annotations so you can re-route and redo. Cannot be undone.">Reset Step</button>`;
+        } else if (ds === 'step4loop') {
+            // step4loop has its own surgical reset route (drops only unreviewed
+            // pending model masks; accepted/exported work is kept).
+            resetBtn = `<button class="btn btn-outline btn-sm" onclick='openResetConfirm("step4loop")' title="Remove model proposals you have not reviewed yet. Accepted masks and exported work are kept. Cannot be undone.">Reset Step</button>`;
+        } else if (ds === 'editmasks') {
+            // editmasks has its own reset route, but it never touches the
+            // export - it only stops the service. Label reflects that.
+            resetBtn = `<button class="btn btn-outline btn-sm" onclick='openResetConfirm("editmasks")' title="Stop the Edit Masks service. This never deletes or changes any mask; your export is untouched.">Reset Step</button>`;
         }
         const saveCloseBtn = `<button class="btn btn-outline btn-sm" onclick="saveAndClose()" title="Save the project as-is and close this window. Stops running sub-tools; you can reopen and resume later.">Save and Close</button>`;
 
@@ -227,8 +339,9 @@ function renderStepNavFooters() {
             && state.steps[String(ds)]
             && state.steps[String(ds)].status === 'completed';
         const nextClass = completed ? 'btn btn-magenta btn-sm' : 'btn btn-outline btn-sm';
+        const nextText = nextLabel || (nextDs ? `Next: ${escHtmlNav(navTitleFor(nextDs))}` : '');
         const nextBtn = nextDs
-            ? `<button class="${nextClass}" onclick='switchStep(${JSON.stringify(navStepArg(nextDs))})' title="Go to ${escAttr(navTitleFor(nextDs))}">Next: ${escHtmlNav(navTitleFor(nextDs))} &rarr;</button>`
+            ? `<button class="${nextClass}" onclick='switchStep(${JSON.stringify(navStepArg(nextDs))})' title="Go to ${escAttr(navTitleFor(nextDs))}">${nextText} &rarr;</button>`
             : `<button class="${nextClass}" disabled>Next &rarr;</button>`;
 
         footer.innerHTML =
@@ -278,14 +391,15 @@ function showOpenUiOverlay(label) {
     ov.setAttribute('aria-hidden', 'false');
 }
 
-function setOpenUiError(text) {
+function setOpenUiError(text, detail) {
     const modal = document.getElementById('open-ui-modal');
     const msg = document.getElementById('open-ui-msg');
     const sub = document.getElementById('open-ui-sub');
     if (!modal) return;
     modal.classList.add('error');
     if (msg) msg.textContent = text || 'The UI did not come up in time.';
-    if (sub) sub.textContent = 'Give it another moment, then try Open again.';
+    if (sub) sub.textContent = detail
+        || 'Give it another moment, then try Open again.';
 }
 
 function hideOpenUiOverlay() {
@@ -374,7 +488,11 @@ function populateConfigs() {
     s6set('s6-valid', s6.valid_ratio, 0.2);
     s6set('s6-test', s6.test_ratio, 0.1);
     s6set('s6-min-samples', s6.min_samples, 10);
-    if (s6.model) { const sel = document.getElementById('s6-model'); if (sel) sel.value = s6.model; }
+    if (s6.model_path) { applyStep6ModelPath(s6.model_path); }
+    else if (s6.model) { const sel = document.getElementById('s6-model'); if (sel) sel.value = s6.model; }
+    s6set('s6-freeze', s6.freeze, '');
+    const pinSplitEl = document.getElementById('s6-pin-split');
+    if (pinSplitEl) pinSplitEl.checked = s6.pin_split !== '0' && s6.pin_split !== 0 && s6.pin_split !== false;
     if (s6.optimizer) { const sel = document.getElementById('s6-optimizer'); if (sel) sel.value = s6.optimizer; }
     if (s6.copy_paste_mode) {
         const sel = document.getElementById('s6-copy-paste-mode');
@@ -457,6 +575,10 @@ function populateConfigs() {
     // Populate step-6 class picker. Backend falls back to step 3
     // target_species if step 5 hasn't produced data.yaml yet.
     refreshStep6Classes();
+    // Populate the "Continue from a previous run" model options + champion.
+    refreshStep6ModelRunOptions();
+    // Populate the Rounds ledger table (Task 9).
+    refreshStep7Rounds();
 
     // If an evaluation has already been run, auto-load the report.
     if (state.steps['7'] && state.steps['7'].outputs && state.steps['7'].outputs.report_md) {
@@ -466,8 +588,9 @@ function populateConfigs() {
         refreshStep8Gallery();
     }
 
-    // Restore running services
-    for (let s = 1; s <= 6; s++) {
+    // Restore running services (cover all numeric slots; 4/5 simply have no
+    // running service in the promoted flow, and 7/8 can be long-running).
+    for (let s = 1; s <= 8; s++) {
         if (state.steps[s] && state.steps[s].status === 'running') {
             startPolling(s);
             if ([2, 4, 5].includes(s)) {
@@ -515,7 +638,20 @@ function collectConfig(step) {
         const f = id => parseFloat($(id).value);
         const i = id => parseInt($(id).value);
         cfg.run_name = $('s6-run-name').value.trim();
-        cfg.model = $('s6-model').value;
+        // "Continue from a previous run" options carry an absolute .pt path as
+        // their <option value>; everything else is a catalog name like
+        // yolo11m-seg.pt. Route accordingly: model_path overrides model
+        // server-side (_run_step6), so only one of the two should be meaningful.
+        const modelSel = $('s6-model').value;
+        if (modelSel && /^\//.test(modelSel) && modelSel.endsWith('.pt')) {
+            cfg.model_path = modelSel;
+            cfg.model = 'yolo11m-seg.pt';  // ignored server-side once model_path is set
+        } else {
+            cfg.model = modelSel;
+        }
+        const freezeVal = $('s6-freeze').value;
+        cfg.freeze = (freezeVal === '' || freezeVal === null) ? null : (isNaN(i('s6-freeze')) ? null : i('s6-freeze'));
+        cfg.pin_split = $('s6-pin-split').checked ? '1' : '0';
         cfg.epochs = i('s6-epochs') || 500;
         cfg.imgsz = i('s6-imgsz') || 512;
         cfg.batch = isNaN(i('s6-batch')) ? -1 : i('s6-batch');
@@ -688,6 +824,10 @@ async function runStep(step) {
     Object.assign(state.steps[step].config, cfg);
 
     const data = await post(`/api/step/${step}/run`, {});
+    if (data._locked) {
+        return alert(data.message ||
+            'Under development. Please come back later. Email Lauren for questions.');
+    }
     if (data.error) return alert('Error: ' + data.error);
 
     state.steps[step].status = 'running';
@@ -957,7 +1097,7 @@ function showResult(step, success, message) {
 // loading overlay while we poll status for up to ~10s until the port is healthy
 // (or at least running). Only window.open() once it's actually up — never open a
 // dead tab. If it never comes up, surface an error in the overlay instead.
-const OPEN_UI_LABELS = { 2: 'Recode', 4: 'Place Points', 5: 'SAM3 Review' };
+const OPEN_UI_LABELS = { 2: 'Recode', 4: 'Place Points', 5: 'SAM3 Review', step4test: 'Combined Annotator', step4loop: 'Refine Review', editmasks: 'Edit Masks' };
 
 async function openStepService(step) {
     if (!state) return;
@@ -1031,6 +1171,780 @@ async function openStepService(step) {
     const win = window.open(url, `reefpointseg_step${step}`,
         'popup,width=1500,height=980,scrollbars=yes,resizable=yes');
     if (win) { serviceWindows[step] = win; try { win.focus(); } catch (e) {} }
+}
+
+// step4test (combined annotator) - non-chain tile with its own launch/status.
+// 4.test now fully replaces Step 4: /run routes Step 3's chosen images in the
+// background (driving placePoints headless) then launches the combined UI. We
+// POST /run, then either open immediately (reuse -> ui_ready) or poll
+// route_status, showing routing progress in the open-UI overlay.
+// Collect the #panel-step4test config block (Combined Step-4+5 settings). Sent
+// with /run so _launch_step4test_ui can set the ENV CONTRACT vars,
+// each falling back to the inherited Step-5 saved config. All ids are optional
+// (panel may predate this build), so every read is null-guarded.
+function collectStep4testConfig() {
+    const cfg = {};
+    const chk = (id, dflt) => { const el = document.getElementById(id); return el ? el.checked : dflt; };
+    const val = (id) => { const el = document.getElementById(id); return el ? el.value : undefined; };
+    const num = (id) => { const v = val(id); const n = parseFloat(v); return (v === undefined || isNaN(n)) ? undefined : n; };
+    cfg.target_species_only = chk('s4test-target-only', true);
+    cfg.reference_default = chk('s4test-reference', true);
+    const b = val('s4test-batch-size'); if (b !== undefined && b !== '') cfg.review_batch_size = b;
+    const dev1 = val('s4test-tracker-device'); if (dev1) cfg.sam3_device_tracker = dev1.trim();
+    const dev2 = val('s4test-exemplar-device'); if (dev2) cfg.sam3_device_exemplar = dev2.trim();
+    const conf = num('s4test-confidence'); if (conf !== undefined) cfg.confidence_threshold = conf;
+    const minA = num('s4test-min-area'); if (minA !== undefined) cfg.min_mask_area_px = minA;
+    const mrg = num('s4test-merge-dist'); if (mrg !== undefined) cfg.merge_distance_px = mrg;
+    const ov = val('s4test-overlap'); if (ov) cfg.overlap_strategy = ov;
+    const thin = num('s4test-thin-ratio'); if (thin !== undefined) cfg.thin_mask_ratio = thin;
+    const eps = num('s4test-simplify'); if (eps !== undefined) cfg.polygon_simplify_epsilon = eps;
+    const cd = val('s4test-clip-dir'); if (cd && cd.trim()) cfg.clip_dir = cd.trim();
+    cfg.symlink_images = chk('s4test-symlink', true);
+    cfg.lores_mode = chk('s4test-lores', true);
+    return cfg;
+}
+
+async function openStep4test() {
+    showOpenUiOverlay(OPEN_UI_LABELS['step4test'] || 'Combined Annotator');
+    // Open the annotator popup NOW - synchronously, inside this click handler -
+    // so the browser ties it to the user gesture. Routing + the SAM3 load can
+    // take ~a minute; deferring window.open() until after that await chain (as
+    // this used to) means the popup blocker silently kills it and "Open" appears
+    // to do nothing. The popup shows a loading page until we navigate it to the
+    // annotator once it is healthy, or we close it on failure.
+    const win = openStep4testPlaceholder();
+    if (!win) {
+        setOpenUiError('Your browser blocked the annotator popup. Allow pop-ups for this page, then click Open Combined Annotator again.');
+        return;
+    }
+    serviceWindows['step4test'] = win;
+    let r = null;
+    try {
+        r = await post('/api/step/step4test/run', { config: collectStep4testConfig() });
+    } catch (e) { setOpenUiError('Failed to start: ' + (e && e.message || e)); closeStep4testWin(win); return; }
+    if (r && r.error && !/already running/i.test(r.error)) {
+        setOpenUiError('Failed to start: ' + r.error); closeStep4testWin(win); return;
+    }
+    await finishStep4testOpen(r, win);
+}
+
+// Open the annotator popup immediately (same user gesture as the click) so the
+// popup blocker lets it through, then paint a loading message into it. We
+// navigate THIS window to the service once it is healthy - never a second
+// window.open() from inside an async callback, which the browser would block.
+function openStep4testPlaceholder() {
+    let win;
+    try {
+        win = window.open('', 'reefpointseg_step4test',
+            'popup,width=1500,height=980,scrollbars=yes,resizable=yes');
+    } catch (e) { win = null; }
+    if (!win) return null;
+    try {
+        win.document.title = 'Combined Annotator - starting';
+        win.document.body.style.cssText = 'margin:0;font-family:system-ui,-apple-system,sans-serif;'
+            + 'background:#12141a;color:#e8e8ea;display:flex;align-items:center;justify-content:center;height:100vh';
+        // Live region, not a frozen sentence. This window is the one the operator
+        // actually watches, so routing progress has to land HERE - it used to paint
+        // "up to a minute" once and never update, so a 20-minute pass looked hung
+        // while the real progress bar ticked away in the main tab behind it.
+        win.document.body.innerHTML =
+            '<div style="text-align:center;max-width:460px;padding:0 24px">'
+          + '<div style="font-size:15px" id="boot-title">Starting the Combined Annotator&hellip;</div>'
+          + '<div style="margin-top:10px;font-size:12px;color:#9aa0ae;line-height:1.5" id="boot-msg">'
+          + 'Routing the chosen images. This runs about one image per second, so a large '
+          + 'selection can take several minutes. The tool loads here automatically when it is ready.</div>'
+          + '<div style="margin-top:14px;height:6px;border-radius:3px;background:#252833;overflow:hidden">'
+          + '<div id="boot-bar" style="height:100%;width:0%;background:#c14bd6;transition:width .3s"></div></div>'
+          + '<div style="margin-top:14px;font-size:11px;color:#6b7280;line-height:1.5" id="boot-hint">'
+          + 'Closing this window cancels the routing pass. Reopening resumes where it stopped.</div></div>';
+    } catch (e) {}
+    try { win.focus(); } catch (e) {}
+    return win;
+}
+
+// Paint routing progress into the POPUP the operator is actually looking at.
+// Silently no-ops once the popup has navigated to the annotator (cross-document
+// access throws) or was closed.
+function paintStep4testBoot(win, { title, msg, pct } = {}) {
+    if (!win || win.closed) return;
+    try {
+        if (title) { const t = win.document.getElementById('boot-title'); if (t) t.textContent = title; }
+        if (msg) { const m = win.document.getElementById('boot-msg'); if (m) m.textContent = msg; }
+        if (typeof pct === 'number') {
+            const b = win.document.getElementById('boot-bar');
+            if (b) b.style.width = Math.max(0, Math.min(100, pct)) + '%';
+        }
+    } catch (e) {}
+}
+
+// The operator closed the launch window. The UI is the only way in, so that has to
+// mean the work stops: cancel the routing pass, free the GPU, and make sure no
+// annotator gets launched (and no LIVE annotator gets killed) by a pass nobody is
+// watching any more.
+async function cancelStep4testRoute() {
+    try { await post('/api/step/step4test/cancel', {}); } catch (e) {}
+}
+
+const ROUTE_LIVE_PHASES = ['launching', 'routing', 'routing_configure',
+                           'routing_ocr', 'exporting', 'route_ready'];
+
+// Nothing runs invisibly. A routing pass lives in a background thread on the
+// server, so it survives closing the launch window AND a full page reload - and
+// used to leave no trace anywhere in the UI while it held the GPU. Surface it on
+// the tile, with a Stop, for as long as it is alive.
+async function renderStep4testRouteBanner() {
+    const el = document.getElementById('s4test-route-banner');
+    if (!el) return;
+    let rs; try { rs = await api('/api/step/step4test/route_status'); } catch (e) { rs = null; }
+
+    // The banner has two personalities: routing progress (bar, GPU hint, Stop
+    // Routing) and crashed-process alarm (red border, error text only). Every
+    // pass sets ALL mode-specific elements so a state flip never leaves
+    // leftovers from the other personality.
+    const dot = document.getElementById('s4test-route-dot');
+    const barwrap = document.getElementById('s4test-route-barwrap');
+    const hint = document.getElementById('s4test-route-hint');
+    const actions = document.getElementById('s4test-route-actions');
+
+    // A crashed annotator (server-side liveness check flips ui_ready to
+    // error + died) must be visible on the tile, not only inside the launch
+    // overlay: without this the tile looks idle while the port is dead.
+    if (rs && rs.phase === 'error' && rs.died) {
+        el.style.display = 'block';
+        el.style.borderColor = 'var(--error, #c0392b)';
+        const dtxt = document.getElementById('s4test-route-text');
+        if (dtxt) dtxt.textContent = (rs.error || 'The annotator process died.')
+            + ' Use Open to relaunch.';
+        if (dot) dot.className = 'health-dot unhealthy';
+        if (barwrap) barwrap.style.display = 'none';
+        if (hint) hint.style.display = 'none';
+        if (actions) actions.style.display = 'none';
+        return;
+    }
+    el.style.borderColor = 'var(--border)';
+    if (dot) dot.className = 'health-dot checking';
+    if (barwrap) barwrap.style.display = '';
+    if (hint) hint.style.display = '';
+    if (actions) actions.style.display = '';
+    if (!rs || !ROUTE_LIVE_PHASES.includes(rs.phase)) { el.style.display = 'none'; return; }
+
+    const p = rs.processed || 0, t = rs.total || 0;
+    const pct = t > 0 ? Math.round((p / t) * 100) : 0;
+    el.style.display = 'block';
+    const txt = document.getElementById('s4test-route-text');
+    if (txt) {
+        txt.textContent = t
+            ? `Routing chosen images… ${p}/${t} (${pct}%) — about ${Math.max(1, Math.round((t - p) / 60))} min left`
+            : (rs.message || 'Routing chosen images…');
+    }
+    const bar = document.getElementById('s4test-route-bar');
+    if (bar) bar.style.width = pct + '%';
+}
+
+async function stopStep4testRoute() {
+    await cancelStep4testRoute();
+    await renderStep4testRouteBanner();
+}
+
+function closeStep4testWin(win) {
+    try { if (win) win.close(); } catch (e) {}
+    if (serviceWindows['step4test'] === win) delete serviceWindows['step4test'];
+}
+
+// Shared tail for openStep4test: given the /run state, either open the combined
+// UI now (ui_ready) or poll route_status until routing completes (or errors).
+async function finishStep4testOpen(r, win) {
+    const svc = document.getElementById('s4test-service');
+    if (svc) svc.style.display = 'block';
+
+    // ui_ready means the annotator is already up (reuse): open right away.
+    if (r && r.phase === 'ui_ready') {
+        await openStep4testWindow(r.ui_port || null, win);
+        return;
+    }
+
+    // Routing in progress: poll route_status, updating the overlay AND the popup.
+    const msg = document.getElementById('open-ui-msg');
+    const sub = document.getElementById('open-ui-sub');
+    while (true) {
+        // Closed window == cancel. Not just "stop polling": the routing thread would
+        // otherwise keep the GPU and, on finishing, kill whatever annotator is up to
+        // launch one nobody is waiting for.
+        if (win && win.closed) {
+            await cancelStep4testRoute();
+            closeStep4testWin(win);
+            hideOpenUiOverlay();
+            renderStep4testRouteBanner();
+            return;
+        }
+        let rs; try { rs = await api('/api/step/step4test/route_status'); } catch (e) { rs = null; }
+        if (rs) {
+            if (rs.phase === 'error') {
+                // When the annotator process itself died, the API attaches the
+                // last log lines; show the tail end (where the traceback is)
+                // so the cause is visible without hunting for the service log.
+                const tail = (rs.log_tail || []).slice(-3).join('  ');
+                setOpenUiError(rs.error || 'Routing failed.', tail || null);
+                closeStep4testWin(win);
+                return;
+            }
+            if (rs.phase === 'cancelled') {
+                closeStep4testWin(win);
+                hideOpenUiOverlay();
+                renderStep4testRouteBanner();
+                return;
+            }
+            if (rs.phase === 'ui_ready') {
+                if (rs.warnings && rs.warnings.length) {
+                    window._step4testWarnings = rs.warnings;
+                }
+                await openStep4testWindow(rs.ui_port || null, win);
+                return;
+            }
+            const processed = rs.processed || 0, total = rs.total || 0;
+            const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+            if (msg) {
+                msg.innerHTML = 'Routing chosen images&hellip; ' + processed + '/' + total
+                    + '<div style="margin-top:10px;height:6px;border-radius:3px;background:var(--border);overflow:hidden">'
+                    + '<div style="height:100%;width:' + pct + '%;background:var(--accent);transition:width .3s"></div></div>';
+            }
+            if (sub) {
+                let subText = rs.message || 'Detecting reference points from Step 3 selections.';
+                if (rs.warnings && rs.warnings.length) {
+                    subText += '  ' + rs.warnings.join('  ');
+                }
+                sub.textContent = subText;
+            }
+            // Mirror it into the popup, which is the window she is actually watching.
+            paintStep4testBoot(win, {
+                title: total ? `Routing chosen images… ${processed}/${total}` : 'Routing chosen images…',
+                msg: total
+                    ? `About ${Math.max(1, Math.round((total - processed) / 60))} min left at ~1 image/sec. `
+                      + 'The annotator opens here automatically when routing finishes.'
+                    : 'Detecting reference points from your Step 3 selections.',
+                pct,
+            });
+        }
+        await new Promise(res => setTimeout(res, 1500));
+    }
+}
+
+// Wait for the combined sub-app to report healthy, then point the already-open
+// popup (opened synchronously on the click) at it. We NAVIGATE the existing
+// window rather than calling window.open() here: a window.open() from inside this
+// async callback runs outside the click's user activation, so the browser blocks
+// it — that was the "Open does nothing" bug.
+async function openStep4testWindow(uiPort, win) {
+    // Wait on the PROCESS, not on a fixed clock. A cold SAM3 load can take well
+    // over a minute, and a fixed 120s deadline gave up 4 seconds before a healthy
+    // annotator finished loading (2026-07-14). So: keep waiting while the annotator
+    // process is alive, up to the same 10-minute ceiling the server gives SAM3, and
+    // fail fast when NOTHING is running behind the port instead of burning it.
+    const ceiling = Date.now() + 600000;
+    const msg = document.getElementById('open-ui-msg');
+    let port = uiPort || null, healthy = false, waited = 0, deadProbes = 0;
+    while (Date.now() < ceiling) {
+        // Closed mid-launch == stop launching. Leaving a SAM3 process loading for a
+        // window that no longer exists is exactly the kind of invisible work that
+        // has no way to be seen or stopped from the UI.
+        if (win && win.closed) {
+            try { await post('/api/step/step4test/stop', {}); } catch (e) {}
+            closeStep4testWin(win);
+            hideOpenUiOverlay();
+            renderStep4testRouteBanner();
+            return;
+        }
+        let s; try { s = await api('/api/step/step4test/status'); } catch (e) { s = null; }
+        if (s && s.port) port = s.port;
+        if (s && s.healthy) { healthy = true; break; }
+        paintStep4testBoot(win, {
+            title: 'Loading the SAM3 model…',
+            msg: 'Routing is done. A cold model load takes a few minutes; the annotator opens here by itself.',
+            pct: 100,
+        });
+        // No process behind the port. Allow ~10s of probes for a just-launched one
+        // to appear, then stop: waiting out the ceiling on a port that nobody is
+        // ever going to serve just makes the operator stare at a spinner.
+        if (s && !s.running) { deadProbes += 1; if (deadProbes >= 20) break; }
+        else { deadProbes = 0; }
+        waited += 1;
+        if (msg && waited >= 3) {
+            msg.innerHTML = 'Starting the Combined Annotator and loading the SAM3 model&hellip;'
+                + '<div style="margin-top:8px;font-size:12px;color:var(--text-dim)">'
+                + 'A cold model load can take a few minutes. The window opens automatically.</div>';
+        }
+        await new Promise(r => setTimeout(r, 500));
+    }
+    if (!port) { setOpenUiError('Service port not set yet.'); closeStep4testWin(win); return; }
+    if (!healthy) {
+        setOpenUiError(deadProbes >= 20
+            ? `No Combined Annotator process is running on port ${port} — the launch did not start or it exited. Check the service log.`
+            : `Combined Annotator did not become ready (port ${port}). Check the service log.`);
+        closeStep4testWin(win); return;
+    }
+
+    hideOpenUiOverlay();
+    // Surface any routing-skip warnings in the panel (non-fatal): they tell the
+    // operator that N of M frames were dropped (see routing_report.json).
+    renderStep4testWarnings(window._step4testWarnings);
+    const url = `http://localhost:${port}/?orchestrated=1`;
+    if (win && !win.closed) {
+        // Navigate the popup we opened on the click. No blocker risk here.
+        try { win.location.href = url; } catch (e) {}
+        try { win.focus(); } catch (e) {}
+        serviceWindows['step4test'] = win;
+        return;
+    }
+    // Popup was closed during the wait: best-effort reopen (may be blocked, since
+    // we are outside the original gesture). Surface a manual link if it fails.
+    const w2 = window.open(url, 'reefpointseg_step4test',
+        'popup,width=1500,height=980,scrollbars=yes,resizable=yes');
+    if (w2) { serviceWindows['step4test'] = w2; try { w2.focus(); } catch (e) {} }
+    else { setOpenUiError('The annotator is ready but the popup was blocked. Open it directly at ' + url); }
+}
+
+// Render (or clear) the routing-skip warnings note inside the s4test service
+// panel. Non-fatal: routing reports drops, it never silently loses frames.
+function renderStep4testWarnings(warnings) {
+    const svc = document.getElementById('s4test-service');
+    if (!svc) return;
+    let note = document.getElementById('s4test-route-warnings');
+    if (!warnings || !warnings.length) {
+        if (note) note.style.display = 'none';
+        return;
+    }
+    if (!note) {
+        note = document.createElement('div');
+        note.id = 's4test-route-warnings';
+        note.className = 'badge badge-error';
+        note.style.cssText = 'margin-top:10px;display:block;white-space:normal';
+        note.title = 'Frames skipped during routing. See routing_report.json in the output folder.';
+        svc.appendChild(note);
+    }
+    note.style.display = 'block';
+    note.textContent = warnings.join('  ');
+}
+
+async function stopStep4test() {
+    await post('/api/step/step4test/stop', {});
+    if (serviceWindows['step4test']) {
+        try { serviceWindows['step4test'].close(); } catch (e) {}
+        delete serviceWindows['step4test'];
+    }
+    const svc = document.getElementById('s4test-service');
+    if (svc) svc.style.display = 'none';
+}
+
+async function openStep4testFolder() {
+    try {
+        const resp = await post('/api/step/step4test/folder', {});
+        if (resp && resp.error) alert('Open folder failed: ' + resp.error);
+    } catch (e) { alert('Open folder failed: ' + e); }
+}
+
+// ── Refine loop (step4loop): active-learning review loop ──────────────────
+// Non-chain tile, same popup-safe launch pattern as step4test (see above), but
+// simpler: /api/step/step4loop/run seeds the chosen batch's predictions
+// SYNCHRONOUSLY (the seeder subprocess runs to completion inside the request)
+// and always comes back with phase:"ui_ready" (or a 4xx error); there is no
+// route_status poll step here, unlike step4test's routing pass.
+
+async function refreshStep4loopRuns() {
+    const sel = document.getElementById('s4loop-run-dir');
+    const openBtn = document.getElementById('s4loop-open-btn');
+    if (!sel) return;
+    try {
+        const data = await api('/api/step/step4loop/inference_runs');
+        const runs = data.runs || [];
+        const prev = sel.value;
+        sel.innerHTML = '';
+        if (!runs.length) {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = '(no inference batches yet, run Inference (7) first)';
+            sel.appendChild(opt);
+            if (openBtn) {
+                openBtn.disabled = true;
+                openBtn.title = 'Run Inference (7) first';
+            }
+            return;
+        }
+        for (const r of runs) {
+            const opt = document.createElement('option');
+            opt.value = r.dir;
+            opt.textContent = `${r.name}: ${r.n_items} item(s)${r.generated_at ? ' · ' + r.generated_at : ''}`;
+            sel.appendChild(opt);
+        }
+        if (prev) sel.value = prev;
+        if (openBtn) {
+            openBtn.disabled = false;
+            openBtn.title = 'Seed the chosen batch\'s predictions as pending masks, then open the combined annotator in resume mode on just those frames.';
+        }
+    } catch (e) {
+        console.warn('refreshStep4loopRuns failed:', e);
+    }
+}
+
+function collectStep4loopConfig() {
+    const cfg = {};
+    const sel = document.getElementById('s4loop-run-dir');
+    cfg.predictions_dir = sel ? sel.value : '';
+    const conf = parseFloat(document.getElementById('s4loop-conf').value);
+    cfg.conf_min = isNaN(conf) ? 0.25 : conf;
+    const max = parseInt(document.getElementById('s4loop-max').value);
+    cfg.max_frames = isNaN(max) ? 0 : max;
+    const skipEl = document.getElementById('s4loop-skip-empty');
+    cfg.skip_empty = skipEl ? skipEl.checked : false;
+    return cfg;
+}
+
+async function openStep4loop() {
+    const sel = document.getElementById('s4loop-run-dir');
+    if (!sel || !sel.value) {
+        alert('Pick an inference batch to review first.');
+        return;
+    }
+    showOpenUiOverlay(OPEN_UI_LABELS['step4loop'] || 'Refine Review');
+    // Open the popup synchronously, inside the click handler, same reason as
+    // step4test (see openStep4testPlaceholder); the popup blocker only allows
+    // window.open() tied to the original user gesture.
+    const win = openStep4loopPlaceholder();
+    if (!win) {
+        setOpenUiError('Your browser blocked the review popup. Allow pop-ups for this page, then click Seed + Open Review again.');
+        return;
+    }
+    serviceWindows['step4loop'] = win;
+    const svc = document.getElementById('s4loop-service');
+    if (svc) svc.style.display = 'block';
+    const stopBtn = document.getElementById('s4loop-stop-btn');
+    if (stopBtn) stopBtn.style.display = 'inline-block';
+    const next = document.getElementById('s4loop-next-card');
+    if (next) next.style.display = 'none';
+    const resultEl = document.getElementById('s4loop-seed-result');
+    if (resultEl) resultEl.innerHTML = '';
+
+    let r = null;
+    try {
+        r = await post('/api/step/step4loop/run', { config: collectStep4loopConfig() });
+    } catch (e) {
+        setOpenUiError('Failed to start: ' + (e && e.message || e));
+        closeStep4loopWin(win);
+        return;
+    }
+    if (!r || r.success !== true) {
+        const msg = (r && r.error) || 'Seeding failed.';
+        setOpenUiError(msg);
+        if (resultEl) resultEl.innerHTML = `<div class="badge badge-error" style="margin-top:8px">${escHtmlNav(msg)}</div>`;
+        closeStep4loopWin(win);
+        return;
+    }
+    renderStep4loopSeedSummary(r.seeded);
+    await finishStep4loopOpen(r, win);
+}
+
+function openStep4loopPlaceholder() {
+    let win;
+    try {
+        win = window.open('', 'reefpointseg_step4loop',
+            'popup,width=1500,height=980,scrollbars=yes,resizable=yes');
+    } catch (e) { win = null; }
+    if (!win) return null;
+    try {
+        win.document.title = 'Refine Review - starting';
+        win.document.body.style.cssText = 'margin:0;font-family:system-ui,-apple-system,sans-serif;'
+            + 'background:#12141a;color:#e8e8ea;display:flex;align-items:center;justify-content:center;height:100vh';
+        win.document.body.innerHTML =
+            '<div style="text-align:center;max-width:420px;padding:0 24px">'
+          + '<div style="font-size:15px">Seeding model predictions and starting the review UI&hellip;</div>'
+          + '<div style="margin-top:10px;font-size:12px;color:#9aa0ae;line-height:1.5">'
+          + 'This can take up to a minute; the tool loads here automatically when it is ready.</div></div>';
+    } catch (e) {}
+    try { win.focus(); } catch (e) {}
+    return win;
+}
+
+function closeStep4loopWin(win) {
+    try { if (win) win.close(); } catch (e) {}
+    if (serviceWindows['step4loop'] === win) delete serviceWindows['step4loop'];
+    const svc = document.getElementById('s4loop-service');
+    if (svc) svc.style.display = 'none';
+}
+
+// Render the seeder's summary counts, including skipped_holdout (normal, not
+// an error: those are frames on the frozen T5/T6 transects the loop never
+// seeds, so they never show up for review here).
+function renderStep4loopSeedSummary(summary) {
+    const el = document.getElementById('s4loop-seed-result');
+    if (!el || !summary) return;
+    const seeded = summary.seeded_frames || 0;
+    const masks = summary.seeded_masks || 0;
+    const holdout = summary.skipped_holdout || 0;
+    const existing = summary.skipped_existing || 0;
+    const belowConf = summary.skipped_below_conf || 0;
+    el.innerHTML =
+        `<div class="badge badge-success" style="margin-top:8px;display:block;white-space:normal">` +
+        `Seeded ${seeded} frame(s), ${masks} mask(s) for review.` +
+        (holdout ? ` <span title="Frames on the held-out test/validation transects (T5/T6), reserved for the frozen evaluation gate; the loop never lets model predictions touch them, so they are not reviewable here.">${holdout} on held-out transects (skipped, expected)</span>.` : '') +
+        (existing ? ` ${existing} already in the labelset.` : '') +
+        (belowConf ? ` ${belowConf} below the confidence threshold.` : '') +
+        `</div>`;
+}
+
+// Shared tail for openStep4loop: /run already seeded synchronously and
+// returned phase:"ui_ready" with ui_port, so just wait for /status to report
+// healthy, then navigate the already-open popup, same technique as
+// openStep4testWindow (never window.open() from inside an async callback).
+async function finishStep4loopOpen(r, win) {
+    // Same process-based wait as openStep4testWindow: a cold SAM3 load outlives any
+    // fixed deadline, so wait while the process is alive (10-min ceiling) and bail
+    // early only when nothing is running behind the port.
+    const ceiling = Date.now() + 600000;
+    const msg = document.getElementById('open-ui-msg');
+    let port = (r && r.ui_port) || null, healthy = false, waited = 0, deadProbes = 0;
+    while (Date.now() < ceiling) {
+        if (win && win.closed) { closeStep4loopWin(win); hideOpenUiOverlay(); onStep4loopWindowClosed(); return; }
+        let s; try { s = await api('/api/step/step4loop/status'); } catch (e) { s = null; }
+        if (s && s.port) port = s.port;
+        if (s && s.healthy) { healthy = true; break; }
+        if (s && !s.running) { deadProbes += 1; if (deadProbes >= 20) break; }
+        else { deadProbes = 0; }
+        waited += 1;
+        if (msg && waited >= 3) {
+            msg.innerHTML = 'Starting the Refine review UI&hellip;'
+                + '<div style="margin-top:8px;font-size:12px;color:var(--text-dim)">'
+                + 'A cold model load can take a few minutes. The window opens automatically.</div>';
+        }
+        await new Promise(res => setTimeout(res, 500));
+    }
+    if (!port) { setOpenUiError('Service port not set yet.'); closeStep4loopWin(win); return; }
+    if (!healthy) {
+        setOpenUiError(deadProbes >= 20
+            ? `No Refine Review process is running on port ${port} — the launch did not start or it exited. Check the service log.`
+            : `Refine Review did not become ready (port ${port}). Check the service log.`);
+        closeStep4loopWin(win); return;
+    }
+
+    hideOpenUiOverlay();
+    const url = `http://localhost:${port}/?orchestrated=1`;
+    if (win && !win.closed) {
+        try { win.location.href = url; } catch (e) {}
+        try { win.focus(); } catch (e) {}
+        serviceWindows['step4loop'] = win;
+        watchStep4loopWindow(win);
+        return;
+    }
+    const w2 = window.open(url, 'reefpointseg_step4loop',
+        'popup,width=1500,height=980,scrollbars=yes,resizable=yes');
+    if (w2) { serviceWindows['step4loop'] = w2; try { w2.focus(); } catch (e) {} watchStep4loopWindow(w2); }
+    else { setOpenUiError('The review UI is ready but the popup was blocked. Open it directly at ' + url); }
+}
+
+// Poll for the popup closing so the after-export card can appear the moment
+// the reviewer finishes a session (annotator export closes its own window).
+function watchStep4loopWindow(win) {
+    if (window._step4loopWatchTimer) clearInterval(window._step4loopWatchTimer);
+    window._step4loopWatchTimer = setInterval(() => {
+        if (!win || win.closed) {
+            clearInterval(window._step4loopWatchTimer);
+            window._step4loopWatchTimer = null;
+            if (serviceWindows['step4loop'] === win) delete serviceWindows['step4loop'];
+            onStep4loopWindowClosed();
+        }
+    }, 1000);
+}
+
+// The annotator window closed (export finished or the user just closed it):
+// show the after-export card so the reviewer can jump straight into retraining.
+function onStep4loopWindowClosed() {
+    const svc = document.getElementById('s4loop-service');
+    if (svc) svc.style.display = 'none';
+    const stopBtn = document.getElementById('s4loop-stop-btn');
+    if (stopBtn) stopBtn.style.display = 'none';
+    const next = document.getElementById('s4loop-next-card');
+    if (next) next.style.display = 'block';
+}
+
+async function stopStep4loop() {
+    await post('/api/step/step4loop/stop', {});
+    if (window._step4loopWatchTimer) { clearInterval(window._step4loopWatchTimer); window._step4loopWatchTimer = null; }
+    if (serviceWindows['step4loop']) {
+        try { serviceWindows['step4loop'].close(); } catch (e) {}
+        delete serviceWindows['step4loop'];
+    }
+    const svc = document.getElementById('s4loop-service');
+    if (svc) svc.style.display = 'none';
+    const stopBtn = document.getElementById('s4loop-stop-btn');
+    if (stopBtn) stopBtn.style.display = 'none';
+}
+
+async function openStep4loopFolder() {
+    try {
+        const resp = await post('/api/step/step4loop/folder', {});
+        if (resp && resp.error) alert('Open folder failed: ' + resp.error);
+    } catch (e) { alert('Open folder failed: ' + e); }
+}
+
+// ── Edit Masks (editmasks): standalone relabel/fix tool ────────────────────
+// Non-chain tile, same popup-safe launch pattern as step4loop (see above), but
+// simpler still: /api/step/editmasks/run has no config to collect and no
+// seeding pass - it preflights that the export has masks, then launches
+// directly and always comes back with phase:"ui_ready" (or a 4xx error).
+
+async function openEditMasks() {
+    showOpenUiOverlay(OPEN_UI_LABELS['editmasks'] || 'Edit Masks');
+    // Open the popup synchronously, inside the click handler, same reason as
+    // step4loop/step4test (the popup blocker only allows window.open() tied
+    // to the original user gesture).
+    const win = openEditMasksPlaceholder();
+    if (!win) {
+        setOpenUiError('Your browser blocked the Edit Masks popup. Allow pop-ups for this page, then click Open Edit Masks again.');
+        return;
+    }
+    serviceWindows['editmasks'] = win;
+    const svc = document.getElementById('s4em-service');
+    if (svc) svc.style.display = 'block';
+    const stopBtn = document.getElementById('s4em-stop-btn');
+    if (stopBtn) stopBtn.style.display = 'inline-block';
+
+    let r = null;
+    try {
+        r = await post('/api/step/editmasks/run', {});
+    } catch (e) {
+        setOpenUiError('Failed to start: ' + (e && e.message || e));
+        closeEditMasksWin(win);
+        return;
+    }
+    if (!r || r.success !== true) {
+        const msg = (r && r.error) || 'Failed to start Edit Masks.';
+        setOpenUiError(msg);
+        closeEditMasksWin(win);
+        return;
+    }
+    await finishEditMasksOpen(r, win);
+}
+
+function openEditMasksPlaceholder() {
+    let win;
+    try {
+        win = window.open('', 'reefpointseg_editmasks',
+            'popup,width=1500,height=980,scrollbars=yes,resizable=yes');
+    } catch (e) { win = null; }
+    if (!win) return null;
+    try {
+        win.document.title = 'Edit Masks - starting';
+        win.document.body.style.cssText = 'margin:0;font-family:system-ui,-apple-system,sans-serif;'
+            + 'background:#12141a;color:#e8e8ea;display:flex;align-items:center;justify-content:center;height:100vh';
+        win.document.body.innerHTML =
+            '<div style="text-align:center;max-width:420px;padding:0 24px">'
+          + '<div style="font-size:15px">Starting the Edit Masks tool&hellip;</div>'
+          + '<div style="margin-top:10px;font-size:12px;color:#9aa0ae;line-height:1.5">'
+          + 'This can take up to a minute; the tool loads here automatically when it is ready.</div></div>';
+    } catch (e) {}
+    try { win.focus(); } catch (e) {}
+    return win;
+}
+
+function closeEditMasksWin(win) {
+    try { if (win) win.close(); } catch (e) {}
+    if (serviceWindows['editmasks'] === win) delete serviceWindows['editmasks'];
+    const svc = document.getElementById('s4em-service');
+    if (svc) svc.style.display = 'none';
+}
+
+// Shared tail for openEditMasks: /run already preflighted and launched, and
+// returned phase:"ui_ready" with ui_port, so just wait for /status to report
+// healthy, then navigate the already-open popup (never window.open() from
+// inside an async callback).
+async function finishEditMasksOpen(r, win) {
+    // Same process-based wait as openStep4testWindow: a cold SAM3 load outlives any
+    // fixed deadline, so wait while the process is alive (10-min ceiling) and bail
+    // early only when nothing is running behind the port.
+    const ceiling = Date.now() + 600000;
+    const msg = document.getElementById('open-ui-msg');
+    let port = (r && r.ui_port) || null, healthy = false, waited = 0, deadProbes = 0;
+    while (Date.now() < ceiling) {
+        if (win && win.closed) { closeEditMasksWin(win); hideOpenUiOverlay(); onEditMasksWindowClosed(); return; }
+        let s; try { s = await api('/api/step/editmasks/status'); } catch (e) { s = null; }
+        if (s && s.port) port = s.port;
+        if (s && s.healthy) { healthy = true; break; }
+        if (s && !s.running) { deadProbes += 1; if (deadProbes >= 20) break; }
+        else { deadProbes = 0; }
+        waited += 1;
+        if (msg && waited >= 3) {
+            msg.innerHTML = 'Starting the Edit Masks tool&hellip;'
+                + '<div style="margin-top:8px;font-size:12px;color:var(--text-dim)">'
+                + 'A cold model load can take a few minutes. The window opens automatically.</div>';
+        }
+        await new Promise(res => setTimeout(res, 500));
+    }
+    if (!port) { setOpenUiError('Service port not set yet.'); closeEditMasksWin(win); return; }
+    if (!healthy) {
+        setOpenUiError(deadProbes >= 20
+            ? `No Edit Masks process is running on port ${port} — the launch did not start or it exited. Check the service log.`
+            : `Edit Masks did not become ready (port ${port}). Check the service log.`);
+        closeEditMasksWin(win); return;
+    }
+
+    hideOpenUiOverlay();
+    const url = `http://localhost:${port}/?orchestrated=1`;
+    if (win && !win.closed) {
+        try { win.location.href = url; } catch (e) {}
+        try { win.focus(); } catch (e) {}
+        serviceWindows['editmasks'] = win;
+        watchEditMasksWindow(win);
+        return;
+    }
+    const w2 = window.open(url, 'reefpointseg_editmasks',
+        'popup,width=1500,height=980,scrollbars=yes,resizable=yes');
+    if (w2) { serviceWindows['editmasks'] = w2; try { w2.focus(); } catch (e) {} watchEditMasksWindow(w2); }
+    else { setOpenUiError('Edit Masks is ready but the popup was blocked. Open it directly at ' + url); }
+}
+
+// Poll for the popup closing so the service status row hides the moment the
+// reviewer finishes a session (editMasks export closes its own window).
+function watchEditMasksWindow(win) {
+    if (window._editMasksWatchTimer) clearInterval(window._editMasksWatchTimer);
+    window._editMasksWatchTimer = setInterval(() => {
+        if (!win || win.closed) {
+            clearInterval(window._editMasksWatchTimer);
+            window._editMasksWatchTimer = null;
+            if (serviceWindows['editmasks'] === win) delete serviceWindows['editmasks'];
+            onEditMasksWindowClosed();
+        }
+    }, 1000);
+}
+
+function onEditMasksWindowClosed() {
+    const svc = document.getElementById('s4em-service');
+    if (svc) svc.style.display = 'none';
+    const stopBtn = document.getElementById('s4em-stop-btn');
+    if (stopBtn) stopBtn.style.display = 'none';
+}
+
+async function stopEditMasks() {
+    await post('/api/step/editmasks/stop', {});
+    if (window._editMasksWatchTimer) { clearInterval(window._editMasksWatchTimer); window._editMasksWatchTimer = null; }
+    if (serviceWindows['editmasks']) {
+        try { serviceWindows['editmasks'].close(); } catch (e) {}
+        delete serviceWindows['editmasks'];
+    }
+    const svc = document.getElementById('s4em-service');
+    if (svc) svc.style.display = 'none';
+    const stopBtn = document.getElementById('s4em-stop-btn');
+    if (stopBtn) stopBtn.style.display = 'none';
+}
+
+async function openEditMasksFolder() {
+    try {
+        const resp = await post('/api/step/editmasks/folder', {});
+        if (resp && resp.error) alert('Open folder failed: ' + resp.error);
+    } catch (e) { alert('Open folder failed: ' + e); }
+}
+
+// After-export card buttons: jump to Step 6 and apply the matching preset.
+function gotoStep6Preset(presetId) {
+    switchStep(6);
+    applyStep6BuiltinPreset(presetId);
 }
 
 // Add Expert IDs is now a native panel (the _expertids blueprint + expertids.js).
@@ -1113,14 +2027,17 @@ async function markDone(step) {
 // Per-step "this removes XYZ" copy, shown in the reset-confirm modal so the user
 // knows exactly what a reset clears before they confirm.
 const RESET_DESCRIPTIONS = {
-    1: "This removes the linked or parsed all_points.csv and master_codes.csv and re-locks Steps 2 through 8.",
-    2: "This removes the recoded outputs (all_points_recoded.csv, master_codes_recoded.csv, remap_log.json) and re-locks Steps 3 through 8.",
-    3: "This removes selected_frames.csv and the route files, and re-locks Steps 4 through 8.",
+    1: "This removes the linked or parsed all_points.csv and master_codes.csv and re-locks Steps 2 through 7.",
+    2: "This removes the recoded outputs (all_points_recoded.csv, master_codes_recoded.csv, remap_log.json) and re-locks Steps 3 through 7.",
+    3: "This removes selected_frames.csv and the route files, and re-locks Steps 4 through 7.",
     4: "This clears placed-point exports for this step and re-locks Steps 5 through 8.",
     5: "This removes the SAM3 masks and YOLO export for this step and re-locks Steps 6 through 8.",
-    6: "This removes the dataset split and training runs produced by this step and re-locks Steps 7 and 8.",
+    6: "This removes the dataset split and training runs produced by this step and re-locks Steps 6 and 7.",
     7: "This removes the evaluation report and metrics produced by this step.",
     8: "This removes the inference run outputs and gallery produced by this step.",
+    step4test: "This removes this tool's routed_input and its annotations (all_images, all_labels, segmentations). The next Open re-routes Step 3's chosen images from scratch.",
+    step4loop: "Removes model proposals you have not reviewed yet (pending cyan masks seeded by Refine). Accepted masks, your manual masks, and everything already exported are kept.",
+    editmasks: "Stops the Edit Masks service. This never deletes or changes any mask; your Step 4 export is left exactly as it was.",
 };
 
 // The actual reset network/DOM work. Called only after the confirm modal is
@@ -1136,19 +2053,69 @@ async function doResetStep(step) {
     if (resultEl) resultEl.innerHTML = '';
     const svc = document.getElementById(`s${step}-service`);
     if (svc) svc.style.display = 'none';
+    // step4test uses s4test-* ids (not sstep4test-*), so clear those explicitly
+    // and close any open combined-annotator window the reset just orphaned.
+    if (step === 'step4test') {
+        const t4svc = document.getElementById('s4test-service');
+        if (t4svc) t4svc.style.display = 'none';
+        const t4log = document.getElementById('s4test-log');
+        if (t4log) { t4log.innerHTML = ''; t4log.style.display = 'none'; }
+        if (serviceWindows['step4test']) {
+            try { serviceWindows['step4test'].close(); } catch (e) {}
+            delete serviceWindows['step4test'];
+        }
+    }
+    // step4loop uses s4loop-* ids (not sstep4loop-*), same reason as step4test
+    // above; also hide the after-export card and close its window if open.
+    if (step === 'step4loop') {
+        const l4svc = document.getElementById('s4loop-service');
+        if (l4svc) l4svc.style.display = 'none';
+        const l4log = document.getElementById('s4loop-log');
+        if (l4log) { l4log.innerHTML = ''; l4log.style.display = 'none'; }
+        const l4result = document.getElementById('s4loop-seed-result');
+        if (l4result) l4result.innerHTML = '';
+        const l4next = document.getElementById('s4loop-next-card');
+        if (l4next) l4next.style.display = 'none';
+        const l4stop = document.getElementById('s4loop-stop-btn');
+        if (l4stop) l4stop.style.display = 'none';
+        if (serviceWindows['step4loop']) {
+            try { serviceWindows['step4loop'].close(); } catch (e) {}
+            delete serviceWindows['step4loop'];
+        }
+    }
+    // editmasks uses s4em-* ids (not sstep4mask-*), same reason as step4test/
+    // step4loop above; also close its window if open. Reset never touches the
+    // export here - see editmasks_reset() server-side.
+    if (step === 'editmasks') {
+        const emsvc = document.getElementById('s4em-service');
+        if (emsvc) emsvc.style.display = 'none';
+        const emlog = document.getElementById('s4em-log');
+        if (emlog) { emlog.innerHTML = ''; emlog.style.display = 'none'; }
+        const emstop = document.getElementById('s4em-stop-btn');
+        if (emstop) emstop.style.display = 'none';
+        if (serviceWindows['editmasks']) {
+            try { serviceWindows['editmasks'].close(); } catch (e) {}
+            delete serviceWindows['editmasks'];
+        }
+    }
     hideProgress(step);
 }
 
 // Open the styled reset-confirm modal for a step, describing what will be
 // cleared and wiring the Confirm button to run the reset.
 function openResetConfirm(step) {
+    const titleEl = document.getElementById('confirm-title');
+    if (titleEl) titleEl.textContent = 'Reset this step?';
     const msgEl = document.getElementById('confirm-msg');
     if (msgEl) {
+        // editmasks reset is stop-only (never touches the export), so the
+        // "cannot be undone" warning would contradict its own description.
+        const destructive = step !== 'editmasks';
         msgEl.textContent = (RESET_DESCRIPTIONS[step] || 'This clears this step\'s outputs.') +
-            ' This cannot be undone.';
+            (destructive ? ' This cannot be undone.' : '');
     }
     const okBtn = document.getElementById('confirm-ok-btn');
-    if (okBtn) okBtn.onclick = () => { closeConfirmModal(); doResetStep(step); };
+    if (okBtn) { okBtn.textContent = 'Confirm Reset'; okBtn.onclick = () => { closeConfirmModal(); doResetStep(step); }; }
     const ov = document.getElementById('confirm-overlay');
     if (ov) ov.classList.add('visible');
 }
@@ -1263,6 +2230,9 @@ async function autoApplyRemap() {
 // keys the user shouldn't inherit from a preset (run_name, include_classes).
 const STEP6_PRESET_APPLIERS = {
     model:          v => { const el = document.getElementById('s6-model'); if (el) el.value = v; },
+    model_path:     v => applyStep6ModelPath(v),
+    freeze:         v => setVal('s6-freeze', v),
+    pin_split:      v => { const el = document.getElementById('s6-pin-split'); if (el) el.checked = !!(v && v !== '0'); },
     epochs:         v => setVal('s6-epochs', v),
     imgsz:          v => setVal('s6-imgsz', v),
     batch:          v => setVal('s6-batch', v),
@@ -1550,12 +2520,107 @@ function applyStep6Device(saved) {
     onStep6DeviceChange();
 }
 
+// ── Step 6 "Continue from a previous run" model options (Task 8) ───────────
+// Populates the s6-model optgroup with one option per Step 5 run that has
+// weights/best.pt, plus a leading "Champion (promoted best)" option when
+// {step6_dir}/champion.json exists. Reuses /api/step/6/list_runs (same call
+// refreshRunList makes for the s7/s8 pickers) so this never needs its own route.
+async function refreshStep6ModelRunOptions() {
+    const optgroup = document.getElementById('s6-model-runs-optgroup');
+    const modelSel = document.getElementById('s6-model');
+    if (!optgroup || !modelSel) return;
+    try {
+        const data = await api('/api/step/6/list_runs');
+        const runs = (data.runs || []).filter(r => r.has_best);
+        const prevValue = modelSel.value;
+        optgroup.innerHTML = '';
+        if (data.champion_run_dir) {
+            const champBest = data.champion_run_dir.replace(/\/$/, '') + '/weights/best.pt';
+            const opt = document.createElement('option');
+            opt.value = champBest;
+            opt.textContent = 'Champion (promoted best)';
+            optgroup.appendChild(opt);
+        }
+        for (const r of runs) {
+            const best = r.path.replace(/\/$/, '') + '/weights/best.pt';
+            const opt = document.createElement('option');
+            opt.value = best;
+            let label = r.name;
+            if (r.model || r.epochs) label += `: ${r.model || '?'} · ${r.epochs || '?'} epochs`;
+            if (r.is_champion) label += ' [champion]';
+            opt.textContent = label;
+            optgroup.appendChild(opt);
+        }
+        // Restore the previous selection if it still resolves to a valid option
+        // (covers the case where model_path was applied before runs loaded).
+        if (prevValue) {
+            const stillValid = Array.from(modelSel.options).some(o => o.value === prevValue);
+            if (stillValid) modelSel.value = prevValue;
+        }
+    } catch (e) {
+        console.warn('refreshStep6ModelRunOptions failed:', e);
+    }
+}
+
+// Preset applier for model_path: if the path isn't already an option (the
+// run-options optgroup hasn't loaded, or this is a champion path not yet
+// resolved into the list), insert a one-off option so the select always shows
+// something meaningful rather than silently falling back to the first entry.
+function applyStep6ModelPath(v) {
+    if (!v) return;
+    const sel = document.getElementById('s6-model');
+    if (!sel) return;
+    const exists = Array.from(sel.options).some(o => o.value === v);
+    if (!exists) {
+        const optgroup = document.getElementById('s6-model-runs-optgroup');
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v.split('/').slice(-3).join('/');
+        (optgroup || sel).appendChild(opt);
+    }
+    sel.value = v;
+}
+
+// Apply one of the two built-in Step 6 presets (finetune / retrain) straight
+// from the server (/api/step/6/presets/<id>), same route the after-export
+// card on the Refine panel uses via gotoStep6Preset(). Reuses the same
+// STEP6_PRESET_APPLIERS map as the file-based preset importer.
+async function applyStep6BuiltinPreset(presetId) {
+    const desc = document.getElementById('s6-preset-desc');
+    try {
+        // Model-run options must be loaded first so a champion/previous-run
+        // model_path resolves to a real <option> rather than a synthesized one.
+        await refreshStep6ModelRunOptions();
+        const data = await api(`/api/step/6/presets/${encodeURIComponent(presetId)}`);
+        if (data.error) {
+            alert(`Preset error: ${data.error}`);
+            return;
+        }
+        const params = data.params || {};
+        let applied = 0, skipped = [];
+        for (const [key, val] of Object.entries(params)) {
+            const fn = STEP6_PRESET_APPLIERS[key];
+            if (fn) { fn(val); applied++; }
+            else { skipped.push(key); }
+        }
+        if (desc) {
+            const msg = `Applied "${data.name}": ${applied} field(s) updated` +
+                (skipped.length ? ` (ignored: ${skipped.join(', ')})` : '');
+            desc.textContent = msg;
+            desc.style.color = 'var(--magenta-light)';
+            setTimeout(() => { desc.style.color = 'var(--text-dim)'; }, 4000);
+        }
+    } catch (e) {
+        alert(`Failed to apply preset: ${e}`);
+    }
+}
+
 // ── Step 6 class-inclusion picker ──────────────────────────────────────────
 
 async function refreshStep6Classes() {
     const host = document.getElementById('s6-classes-list');
     if (!host) return;
-    host.innerHTML = '<span style="color:var(--text-dim)">Loading classes from Step 5 output...</span>';
+    host.innerHTML = '<span style="color:var(--text-dim)">Loading classes from Step 4 output...</span>';
     try {
         const data = await api('/api/step/6/list_classes');
         if (data.error) {
@@ -1579,7 +2644,7 @@ function renderStep6Classes(classes, saved) {
         return nm && !UNNAMED_RE.test(nm);
     });
     if (!filtered.length) {
-        host.innerHTML = '<span style="color:var(--text-dim)">No usable classes found. Run Step 5 (or set Step 3 target labels) so class names are present.</span>';
+        host.innerHTML = '<span style="color:var(--text-dim)">No usable classes found. Run Step 4 (or set Step 3 target labels) so class names are present.</span>';
         return;
     }
     // saved === null|undefined -> include every class (default).
@@ -1628,6 +2693,7 @@ async function refreshRunList() {
     try {
         const data = await api('/api/step/6/list_runs');
         const runs = data.runs || [];
+        const championRunDir = data.champion_run_dir || null;
         const populate = (selId) => {
             const sel = document.getElementById(selId);
             if (!sel) return;
@@ -1636,7 +2702,7 @@ async function refreshRunList() {
             if (!runs.length) {
                 const opt = document.createElement('option');
                 opt.value = '';
-                opt.textContent = '(no training runs yet — finish Step 6 first)';
+                opt.textContent = '(no training runs yet — finish Step 5 first)';
                 sel.appendChild(opt);
                 return;
             }
@@ -1646,6 +2712,7 @@ async function refreshRunList() {
                 let label = r.name;
                 if (r.model || r.epochs) label += ` — ${r.model || '?'} · ${r.epochs || '?'} epochs`;
                 if (!r.has_best && r.has_last) label += ' [last.pt only]';
+                if (r.is_champion) label += ' [champion]';
                 opt.textContent = label;
                 sel.appendChild(opt);
             }
@@ -1654,12 +2721,117 @@ async function refreshRunList() {
             const savedS7 = state && state.steps['7'] && state.steps['7'].config && state.steps['7'].config.run_dir;
             const savedS8 = state && state.steps['8'] && state.steps['8'].config && state.steps['8'].config.run_dir;
             if (selId === 's7-run-dir' && savedS7) sel.value = savedS7;
-            if (selId === 's8-run-dir' && savedS8) sel.value = savedS8;
+            // Step 8 (Task 9): prefer the promoted champion over a stale saved
+            // config value, so promoting a new champion actually changes what
+            // Inference defaults to next time the panel loads.
+            if (selId === 's8-run-dir') {
+                if (championRunDir) sel.value = championRunDir;
+                else if (savedS8) sel.value = savedS8;
+            }
         };
         populate('s7-run-dir');
         populate('s8-run-dir');
+        const badge = document.getElementById('s8-champion-badge');
+        if (badge) badge.style.display = championRunDir ? 'inline-block' : 'none';
     } catch (e) {
         console.warn('refreshRunList failed:', e);
+    }
+}
+
+// ── Step 7 Rounds ledger + Promote (Task 9) ─────────────────────────────────
+
+const _ROUNDS_GATE_TOOLTIPS = {
+    pass: 'Within tolerance versus the baseline (current champion, or best prior round).',
+    fail: 'Mask mAP50-95 regressed more than the tolerance (0.005) versus the baseline; do not promote.',
+    flag: 'Recall or a per-class AP regressed more than tolerance versus the baseline; review before promoting.',
+    unpinned: 'This run\'s split was not a frozen transect holdout, so the comparison is informational only, not a clean gate.',
+};
+
+function _roundsGateBadge(value) {
+    if (!value) return '';
+    const base = String(value).split(':')[0];
+    const cls = base === 'pass' ? 'badge-success'
+        : base === 'fail' ? 'badge-error'
+        : base === 'flag' ? 'badge-warning'
+        : 'badge-info';
+    const tip = _ROUNDS_GATE_TOOLTIPS[base] || '';
+    return `<span class="badge ${cls}" style="margin-right:4px" title="${escAttr(tip)}">${escHtmlNav(value)}</span>`;
+}
+
+function _roundsDelta(cur, prevMap) {
+    if (cur == null || prevMap == null) return '&mdash;';
+    const d = cur - prevMap;
+    const sign = d >= 0 ? '+' : '';
+    return `${sign}${d.toFixed(3)}`;
+}
+
+async function refreshStep7Rounds() {
+    const tbody = document.getElementById('s7-rounds-tbody');
+    const note = document.getElementById('s7-rounds-champion-note');
+    if (!tbody) return;
+    try {
+        const data = await api('/api/step/7/rounds');
+        const rows = data.rounds || [];
+        const champion = data.champion || null;
+        if (note) {
+            note.textContent = champion
+                ? `Champion: ${champion.run_dir ? champion.run_dir.split('/').pop() : '(unknown)'} (mAP50-95 ${champion.map50_95_M != null ? champion.map50_95_M.toFixed(3) : '?'})`
+                : 'No champion promoted yet.';
+        }
+        if (!rows.length) {
+            tbody.innerHTML = '<tr><td colspan="8" style="padding:10px 8px;color:var(--text-dim)">No evaluated rounds yet. Run Evaluation above to add one.</td></tr>';
+            return;
+        }
+        let prevMap = null;
+        tbody.innerHTML = rows.map(r => {
+            const delta = _roundsDelta(r.map50_95_M, prevMap);
+            prevMap = r.map50_95_M != null ? r.map50_95_M : prevMap;
+            const isChamp = champion && champion.run_dir === r.run_dir;
+            const gates = _roundsGateBadge(r.gate_map) + _roundsGateBadge(r.gate_class) + _roundsGateBadge(r.gate_recall);
+            const promoteBtn = isChamp
+                ? '<span class="badge badge-info" title="This run is the current champion.">champion</span>'
+                : `<button class="btn btn-outline btn-sm" onclick='confirmPromoteRun(${JSON.stringify(r.run_dir)})' title="Make this run the champion. It becomes the default weights for Inference and for fine-tuning.">Promote</button>`;
+            return `<tr>
+                <td style="padding:6px 8px;border-bottom:1px solid var(--border)">${escHtmlNav(r.round != null ? r.round : '')}</td>
+                <td style="padding:6px 8px;border-bottom:1px solid var(--border)">${escHtmlNav(r.run_name || '')}</td>
+                <td style="padding:6px 8px;border-bottom:1px solid var(--border)">${escHtmlNav(r.base_model || '')}</td>
+                <td style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:right">${r.map50_95_M != null ? r.map50_95_M.toFixed(3) : '&mdash;'}</td>
+                <td style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:right">${delta}</td>
+                <td style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:right">${r.recall_M != null ? r.recall_M.toFixed(3) : '&mdash;'}</td>
+                <td style="padding:6px 8px;border-bottom:1px solid var(--border)">${gates}</td>
+                <td style="padding:6px 8px;border-bottom:1px solid var(--border)">${promoteBtn}</td>
+            </tr>`;
+        }).join('');
+    } catch (e) {
+        console.warn('refreshStep7Rounds failed:', e);
+        tbody.innerHTML = `<tr><td colspan="8" style="padding:10px 8px;color:var(--error)">Error loading rounds: ${escHtmlNav(String(e))}</td></tr>`;
+    }
+}
+
+// Reuses the standard reset-confirm overlay's modal chrome (styled confirm,
+// not window.confirm()) for the Promote action's "are you sure" step.
+function confirmPromoteRun(runDir) {
+    const titleEl = document.getElementById('confirm-title');
+    if (titleEl) titleEl.textContent = 'Promote to champion?';
+    const msgEl = document.getElementById('confirm-msg');
+    if (msgEl) {
+        msgEl.textContent = 'Make this run the champion? It becomes the default weights for Inference and for fine-tuning.';
+    }
+    const okBtn = document.getElementById('confirm-ok-btn');
+    if (okBtn) { okBtn.textContent = 'Confirm Promote'; okBtn.onclick = () => { closeConfirmModal(); promoteRun(runDir); }; }
+    const ov = document.getElementById('confirm-overlay');
+    if (ov) ov.classList.add('visible');
+}
+
+async function promoteRun(runDir) {
+    try {
+        const data = await post('/api/step/7/promote', { run_dir: runDir });
+        if (data.error) { alert('Promote failed: ' + data.error); return; }
+        await refreshStep7Rounds();
+        await refreshRunList();
+        await refreshStep6ModelRunOptions();
+    } catch (e) {
+        alert('Promote failed: ' + e);
     }
 }
 
@@ -2165,6 +3337,11 @@ setTimeout(startSam3MiniPoll, 500);
     // data-project-loaded="true". In that case go straight to the 8-step view.
     const preloaded = document.body.dataset.projectLoaded === 'true';
     const data = await api('/api/project/state');
+    if (data._locked) {
+        // Module locked (VICARIUS): show the lock message here, never bounce.
+        document.body.innerHTML = buildLockPage();
+        return;
+    }
     if (preloaded && data.loaded && data.state) {
         state = data.state;
         enterApp();

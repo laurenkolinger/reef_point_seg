@@ -55,7 +55,7 @@ sync_scripts() {
 
   # Sub-tools (safe wholesale; we did not patch them)
   for d in TCRMPcvr_makeAllPoints TCRMPcvr_recodeSpecies TCRMPcvr_chooseImages \
-           TCRMPclip_routeChosenImages TCRMPclip_segmentImages \
+           TCRMPclip_placePoints TCRMPclip_segmentImages \
            TCRMPclip_cpcID TCRMPclip_ocrID_batch \
            TCRMPtrain_oceankindCV; do
     if [ -d "$SRC/$d" ]; then
@@ -82,7 +82,7 @@ sync_one_step() {
     [step1]="TCRMPcvr_makeAllPoints"
     [step2]="TCRMPcvr_recodeSpecies"
     [step3]="TCRMPcvr_chooseImages"
-    [step4]="TCRMPclip_routeChosenImages"
+    [step4]="TCRMPclip_placePoints"
     [step5]="TCRMPclip_segmentImages"
     [step6]="TCRMPtrain_oceankindCV"
     [step7]="TCRMPtrain_oceankindCV"

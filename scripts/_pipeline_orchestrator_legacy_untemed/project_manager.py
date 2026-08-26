@@ -27,7 +27,7 @@ STEP_NAMES = {
     "1": "Make All Points",
     "2": "Recode Species",
     "3": "Choose Images",
-    "4": "Route Chosen Images (OCR)",
+    "4": "Place Points",
     "5": "Segment Images (SAM3)",
     "6": "Train Model",
     "7": "Evaluate Model",

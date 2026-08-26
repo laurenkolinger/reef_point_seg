@@ -14,13 +14,21 @@ import pandas as pd
 
 
 def browse_remap_logs(repo_dir, extra_dirs=None):
-    """Find all remap_log_*.json files in known locations."""
+    """Find all remap_log_*.json files in known locations.
+
+    Canonical location is `{repo_dir}/scripts/TCRMPcvr_recodeSpecies/output/`.
+    An older glob pattern missing the `scripts/` prefix is kept for
+    back-compat with projects that symlinked the legacy tree.
+    """
     results = []
 
-    # Standard location: recodeSpecies output
-    pattern = os.path.join(repo_dir, "TCRMPcvr_recodeSpecies", "output", "remap_log_*.json")
-    for path in sorted(glob.glob(pattern)):
-        results.append(_parse_remap_meta(path))
+    patterns = [
+        os.path.join(repo_dir, "scripts", "TCRMPcvr_recodeSpecies", "output", "remap_log_*.json"),
+        os.path.join(repo_dir, "TCRMPcvr_recodeSpecies", "output", "remap_log_*.json"),
+    ]
+    for pattern in patterns:
+        for path in sorted(glob.glob(pattern)):
+            results.append(_parse_remap_meta(path))
 
     # Scan any extra directories (e.g., past project dirs)
     for d in (extra_dirs or []):
@@ -93,11 +101,24 @@ def apply_remaps(all_points_path, master_codes_path, remap_log_path, output_dir)
     new_codes = df_codes.copy()
     log_entries = []
 
+    # Canonical vocabulary lookup so a code-only remap (the Label Manager
+    # composes {old,new} with no names) adopts the new code's canonical name and
+    # category instead of blanking them.
+    _codes_lk = df_codes.fillna("")
+    code_to_name = dict(zip(_codes_lk["code"].astype(str), _codes_lk["name"].astype(str)))
+    code_to_cat = dict(zip(_codes_lk["code"].astype(str), _codes_lk["category"].astype(str)))
+
     for rm in remaps:
-        old_code = rm["old_code"]
-        new_code = rm["new_code"]
-        new_name = rm.get("new_name", "")
-        new_cat = rm.get("new_category", "")
+        # Accept both the canonical recode-tool shape
+        # {old_code,new_code,new_name,new_category} and the Label Manager compose
+        # shape {old,new} (also {from,to}). Skip an entry missing a usable old or
+        # new code rather than crashing the whole recode.
+        old_code = str(rm.get("old_code") or rm.get("old") or rm.get("from") or "").strip()
+        new_code = str(rm.get("new_code") or rm.get("new") or rm.get("to") or "").strip()
+        if not old_code or not new_code:
+            continue
+        new_name = str(rm.get("new_name") or "").strip() or code_to_name.get(new_code, "")
+        new_cat = str(rm.get("new_category") or "").strip() or code_to_cat.get(new_code, "")
 
         mask = new_points["species_code"] == old_code
         n_affected = int(mask.sum())

@@ -377,6 +377,20 @@ body::after {
     font-size: 11px;
 }
 
+/* Completed-action state: the step's primary button turns solid black once
+ * its work has succeeded, signalling "done" while Next lights up pink. */
+.btn-done {
+    background: #000;
+    border-color: #000;
+    color: #fff;
+    cursor: default;
+}
+.btn-done:hover {
+    background: #000;
+    border-color: #000;
+    color: #fff;
+}
+
 .btn-group {
     display: flex;
     gap: 8px;
@@ -447,6 +461,30 @@ body::after {
 .remap-table td {
     padding: 6px 8px;
     border-bottom: 1px solid var(--border-dim);
+}
+
+/* ── Step nav footer zones (3-zone bar rendered by orchestrator.js) ── */
+/* The footer is a flexbox (see .step-nav-footer in index.html). These three
+ * spans split it into Prev (left), center actions (Save and Close), and Next
+ * (right). The center group centers itself between the two edge zones. */
+.nav-zone-left {
+    display: flex;
+    align-items: center;
+    flex: 1;
+    justify-content: flex-start;
+}
+.nav-zone-center {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+    justify-content: center;
+}
+.nav-zone-right {
+    display: flex;
+    align-items: center;
+    flex: 1;
+    justify-content: flex-end;
 }
 
 /* ── Step Panels ──────────────────────────────────────────── */
@@ -633,4 +671,42 @@ body::after {
     .sidebar { width: 60px; min-width: 60px; padding: 12px 8px; }
     .step-info { display: none; }
     .main-panel { padding: 16px; }
+}
+
+/* ── Reset-confirm modal (styled replacement for browser confirm()) ───────── */
+.confirm-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 5200;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(4, 4, 16, 0.78);
+}
+.confirm-overlay.visible { display: flex; }
+.confirm-modal {
+    background: var(--surface);
+    border: 1px solid var(--magenta);
+    border-radius: 6px;
+    padding: 20px 24px;
+    max-width: 460px;
+    width: calc(100% - 48px);
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+}
+.confirm-title {
+    font-weight: 700;
+    color: var(--text);
+    font-size: 16px;
+    margin-bottom: 10px;
+}
+.confirm-msg {
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1.45;
+    margin-bottom: 16px;
+}
+.confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
 }

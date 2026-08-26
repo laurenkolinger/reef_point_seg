@@ -26,8 +26,10 @@ echo "  Checking for stale orchestrator + sub-app processes..."
 STALE_PATTERNS=(
     "run_pipeline.py"
     "TCRMPcvr_recodeSpecies/src/app.py"
-    "TCRMPclip_routeChosenImages/src/app.py"
+    "TCRMPclip_placePoints/src/app.py"
     "TCRMPclip_segmentImages/src/app.py"
+    "TCRMPclip_combinedAnnotate/src/app.py"
+    "TCRMPclip_addExpertIDs/src/app.py"
 )
 KILLED=0
 for pat in "${STALE_PATTERNS[@]}"; do
@@ -40,7 +42,7 @@ for pat in "${STALE_PATTERNS[@]}"; do
 done
 
 # Free default ports too (catches anything else bound to them)
-for p in "$PORT" 5055 5065 5070; do
+for p in "$PORT" 5055 5065 5066 5070 5075 5080; do
     pids=$(lsof -ti:"$p" 2>/dev/null || true)
     for pid in $pids; do
         kill "$pid" 2>/dev/null && echo "    killed pid $pid (port $p)" && KILLED=$((KILLED+1))

@@ -75,6 +75,7 @@ fi
 echo "Installing core pip dependencies..."
 "${PIP}" install \
     "flask>=3.0" \
+    "flask-cors>=4.0" \
     "pandas>=2.0" \
     "numpy>=1.26" \
     "pyyaml>=6.0" \

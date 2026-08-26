@@ -221,6 +221,10 @@
         }
         .step-nav-footer .btn[disabled] { opacity: 0.35; pointer-events: none; }
 
+        /* Disabled nav tile (data-step-disabled): visible but inert, tooltip kept */
+        .step-nav li.step-disabled { opacity: 0.45; cursor: default; }
+        .step-nav li.step-disabled:hover { background: transparent; }
+
         /* ── Batch progress readout (Step 4 / Step 5) ────────────────── */
         .batch-readout {
             display: inline-flex;
@@ -342,39 +346,51 @@
                     <div class="step-status" id="step3-status-text">locked</div>
                 </div>
             </li>
-            <li data-step="4" onclick="switchStep(4)">
+            <!-- Step 4 = the combined annotator (4.test, promoted). It keeps the
+                 internal route key step4test; only its DISPLAY number is 4.
+                 The legacy Place Points + Segment tiles are archived from the
+                 sidebar; their panels stay in the DOM. -->
+            <li data-step="step4test" onclick="switchStep('step4test')"
+                style="cursor:pointer"
+                title="Step 4 (Place + Segment): place a point and SAM3 segments it in one pass. The routed OCR/CPC points show as a read-only guide, so SAM does not pre-run. Number keys arm a species (R flags REVIEW), click places and segments, Enter or double-click finishes. Exports YOLO-segmentation training files; its Next leads to Train Model.">
                 <div class="step-circle">4</div>
                 <div class="step-info">
-                    <div class="step-title">Place Points</div>
-                    <div class="step-status" id="step4-status-text">locked</div>
-                </div>
-            </li>
-            <li data-step="5" onclick="switchStep(5)">
-                <div class="step-circle">5</div>
-                <div class="step-info">
-                    <div class="step-title">Segment (SAM3)</div>
-                    <div class="step-status" id="step5-status-text">locked</div>
+                    <div class="step-title">Place + Segment</div>
+                    <div class="step-status">combined annotator</div>
                 </div>
             </li>
             <li data-step="6" onclick="switchStep(6)">
-                <div class="step-circle">6</div>
+                <div class="step-circle" data-num="5">5</div>
                 <div class="step-info">
                     <div class="step-title">Train Model</div>
                     <div class="step-status" id="step6-status-text">locked</div>
                 </div>
             </li>
             <li data-step="7" onclick="switchStep(7)">
-                <div class="step-circle">7</div>
+                <div class="step-circle" data-num="6">6</div>
                 <div class="step-info">
                     <div class="step-title">Evaluate Model</div>
                     <div class="step-status" id="step7-status-text">locked</div>
                 </div>
             </li>
             <li data-step="8" onclick="switchStep(8)">
-                <div class="step-circle">8</div>
+                <div class="step-circle" data-num="7">7</div>
                 <div class="step-info">
                     <div class="step-title">Model Inference</div>
                     <div class="step-status" id="step8-status-text">locked</div>
+                </div>
+            </li>
+            <!-- Refine loop (step4loop): non-chain tile driving the active-learning
+                 review loop (Infer -> Refine -> Train -> Evaluate -> Infer). Seeds a
+                 chosen Step 7 inference batch's predictions into the Step 4 labelset
+                 as pending model masks, then opens the combined annotator in resume
+                 mode so the reviewer accepts/fixes/rejects them. -->
+            <li data-step="step4loop" onclick="switchStep('step4loop')"
+                title="Model-assisted labeling: review the model's predicted masks, correct them, and feed them back into the labelset (active-learning loop)">
+                <div class="step-circle">&#8635;</div>
+                <div class="step-info">
+                    <div class="step-title">Refine (4.loop)</div>
+                    <div class="step-status">model-assist review</div>
                 </div>
             </li>
             <li class="nav-section" aria-hidden="true"
@@ -382,13 +398,29 @@
                 <div class="step-info"><div class="step-title"
                     style="opacity:.55;font-size:11px;letter-spacing:.09em;text-transform:uppercase">Review</div></div>
             </li>
-            <li data-step="expertids" onclick="switchStep('expertids')"
-                style="cursor:pointer;border-left:3px solid #00c8dc"
-                title="Send the masks you flagged REVIEW to an outside taxonomic expert and fold their answers back in. Publishes flagged masks to the GitHub Pages review site, gives you the email request text, and ingests the reviewer CSV they return into consensus and accept. Re-runnable any time; never blocks training.">
+            <!-- Edit Masks: non-chain tile that opens the standalone editMasks
+                 app directly against the current project's Step 4 export, so a
+                 reviewer can relabel/fix existing masks without re-running
+                 Step 4 or seeding new predictions (no active-learning pass, no
+                 config panel - just Open). -->
+            <li data-step="editmasks" onclick="switchStep('editmasks')"
+                title="Edit existing masks: relabel or fix masks already saved by Step 4, without re-running the pipeline">
+                <div class="step-circle">&#9998;</div>
+                <div class="step-info">
+                    <div class="step-title">Edit Masks</div>
+                    <div class="step-status">relabel + fix</div>
+                </div>
+            </li>
+            {# Disabled 2026-07-09: data-step renamed to data-step-disabled so
+               getNavOrder()/switchStep() skip the tile. Re-enable by renaming it
+               back to data-step and restoring onclick="switchStep('expertids')". #}
+            <li data-step-disabled="expertids" class="step-disabled"
+                style="border-left:3px solid #00c8dc"
+                title="Temporarily disabled while the expert review pathway is finalized (2026-07-09). Re-enable by renaming data-step-disabled back to data-step.">
                 <div class="step-circle" style="background:#00c8dc;color:#06222a">&#9733;</div>
                 <div class="step-info">
                     <div class="step-title">Expert Review I/O</div>
-                    <div class="step-status">review I/O &middot; run any time</div>
+                    <div class="step-status">review I/O &middot; (disabled)</div>
                 </div>
             </li>
         </ul>
@@ -674,7 +706,7 @@
                     <div class="form-group">
                         <label>TCRMP Clip Directory (source images, read-only)</label>
                         <input type="text" id="s4-clip-dir"
-                            title="Absolute path to the Dropbox TCRMP_clip directory holding original video stills. Default: empty. Read-only source for the OCR pipeline.">
+                            title="Absolute path to the TCRMP_clip directory holding original video stills. Leave empty to use the local supporting_data/TCRMP_clip full set. Read-only source for the routing/OCR pass.">
                     </div>
                 </details>
                 <div class="btn-group">
@@ -718,6 +750,311 @@
                 </div>
                 <div class="log-output" id="s4-log" style="display:none"></div>
                 <div class="step-nav-footer" id="nav-footer-4"></div>
+            </div>
+        </div>
+
+        <!-- ── Step 4.test: Combined Annotator (place + SAM3 segment) ── -->
+        <div class="step-panel" id="panel-step4test">
+            <div class="card">
+                <h2>Step 4: Place + Segment <span style="font-size:13px;color:var(--text-dim)">(combined annotator)</span></h2>
+                <div class="step-description">
+                    <p>This step folds point placement and segmentation into one pass: you place a point and SAM3 immediately makes a mask for it, so you never leave the image to switch tools. It replaces the separate Place Points + Segment steps.</p>
+                    <p><strong>Routes Step 3's chosen images itself:</strong> on launch, this step runs the routing/OCR pass over Step 3's selected frames in the background, writing reference points into its own <code>routed_input/{year}/ids/sam_click_prompts.json</code>, then opens the combined window. Those routed points show as a read-only reference layer (toggle on by default); OCR is unreliable, so treat them as a guide, not an auto-segmentation. Reuse is automatic; after re-selecting images in Step 3, use Reset Step to clear the routed images so the next Open re-routes from scratch.</p>
+                    <p><strong>How to drive it:</strong> tap a number key <code>1</code>..<code>N</code> to arm a species label (<code>R</code> arms REVIEW); arming enters add mode. Click the image to place a point and run SAM3; click again to refine; press <code>Enter</code> to finish the mask. <code>Space</code> = next image, <code>K</code> = shortcuts menu, <code>M</code> = merge. The opacity slider controls mask fill opacity.</p>
+                    <p><strong>Export:</strong> advancing past the last frame of a batch opens an "Export now?" dialog. Exporting writes YOLO-segmentation training files (<code>all_images/</code>, <code>all_labels/</code>, <code>data.yaml</code>) into this tool's own output dir, then offers "Open next batch" or "Save and close".</p>
+                    <p style="color:var(--text-dim);font-size:12px"><strong>Note:</strong> The SAM3 parameters below control segmentation. Export writes the YOLO training structure (<code>all_images/</code>, <code>all_labels/</code>, <code>data.yaml</code>); the Train step (Step 5) reads it automatically.</p>
+                    <p><strong>Requires:</strong> dual NVIDIA GPUs (CUDA).</p>
+                </div>
+
+                <!-- Combined Step-4+5 settings. 4.test replaces Steps 4 and 5, so
+                     these are the same controls (values + tooltips) as the Step-4
+                     (target-only, read-only reference) and Step-5 (SAM3) panels.
+                     Sent with Open. -->
+                <div class="checkbox-group">
+                    <input type="checkbox" id="s4test-target-only" checked
+                        title="Limit annotation + export to frames whose labels are in Step 3's target list. Default: on. Turn off to include every routed frame regardless of label.">
+                    <label for="s4test-target-only">Target labels only</label>
+                </div>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="s4test-reference" checked
+                        title="Render the routed OCR/CPC points read-only on the canvas. Default: on. Read-only reference points never register as labels and are never exported.">
+                    <label for="s4test-reference">
+                        Show existing points as read-only reference (do not register as labels)
+                        <span style="color:var(--text-dim);font-size:12px;display:block;margin-left:22px">
+                            Routed points render large + muted as a guide. They never populate the
+                            Labels panel and are never written to the YOLO export.
+                        </span>
+                    </label>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Review batch size
+                            <span class="info-circle" title="Frames pulled into the place + segment UI per batch. Default: 10. Only takes effect on the next Start.">&#9432;</span>
+                        </label>
+                        <select id="s4test-batch-size"
+                            title="Frames pulled into the SAM3 review UI per batch. Default: 10. Only takes effect on the next Start.">
+                            <option value="5">5 frames</option>
+                            <option value="10" selected>10 frames (default)</option>
+                            <option value="20">20 frames</option>
+                            <option value="all">All (no batching)</option>
+                        </select>
+                        <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
+                            How many frames the place + segment UI loads at a time before
+                            Export Batch. Only takes effect on the next Start.
+                        </div>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Clip image source (routing)
+                            <span class="info-circle" title="Folder of source clip images the routing pass reads when routing Step 3's chosen frames. Default: the pipeline clip dir. Leave blank to use the default.">&#9432;</span>
+                        </label>
+                        <input type="text" id="s4test-clip-dir" placeholder="(default: pipeline clip dir)"
+                            title="Folder of source clip images the routing pass reads when routing Step 3's chosen frames. Default: the pipeline clip dir. Leave blank to use the default.">
+                    </div>
+                    <div class="form-group">
+                        <label>Exported images
+                            <span class="info-circle" title="Symlink exported images into all_images/ instead of copying them. Default: on (saves disk). Turn off to write real file copies (portable dataset, more disk).">&#9432;</span>
+                        </label>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="s4test-symlink" checked
+                                title="Symlink exported images into all_images/ instead of copying them. Default: on (saves disk). Turn off to write real file copies (portable dataset, more disk).">
+                            <label for="s4test-symlink">Symlink exported images (off = real copies)</label>
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="s4test-lores" checked
+                                title="Annotate on low-res (~1920px long edge) images. Every routed frame larger than 1920px is delivered from its downscaled lores copy with point coordinates scaled to match; frames already <=1920px are used as-is. Fixes SAM lag/imprecision/recognition on 4K frames. Default: on. (Frames whose lores copy is missing fall back to the original, never skipped.)">
+                            <label for="s4test-lores">Low res only (annotate 4K frames at ~1920px)</label>
+                        </div>
+                    </div>
+                </div>
+                <details class="advanced">
+                    <summary>SAM3 segmentation parameters</summary>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Confidence Threshold
+                                <span class="info-circle" title="Minimum SAM3 mask score to accept. Default: 0.5. Lower = more masks survive (noisier); higher = stricter.">&#9432;</span>
+                            </label>
+                            <input type="number" id="s4test-confidence" value="0.5" step="0.05"
+                                title="Minimum SAM3 mask score to accept. Default: 0.5. Lower = more masks survive (noisier); higher = stricter.">
+                        </div>
+                        <div class="form-group">
+                            <label>Min Mask Area (px)
+                                <span class="info-circle" title="Drop masks smaller than this many pixels. Default: 500. Filters spurious tiny segments.">&#9432;</span>
+                            </label>
+                            <input type="number" id="s4test-min-area" value="500"
+                                title="Drop masks smaller than this many pixels. Default: 500. Filters spurious tiny segments.">
+                        </div>
+                        <div class="form-group">
+                            <label>Merge Distance (px)
+                                <span class="info-circle" title="Merge nearby masks of the same class whose centroids are within this pixel distance. Default: 30. 0 disables merging.">&#9432;</span>
+                            </label>
+                            <input type="number" id="s4test-merge-dist" value="30"
+                                title="Merge nearby masks of the same class whose centroids are within this pixel distance. Default: 30. 0 disables merging.">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Overlap Strategy
+                                <span class="info-circle" title="How to resolve overlapping masks. Default: larger_wins. 'higher_score' prefers higher-confidence; 'first_wins' keeps the earlier mask.">&#9432;</span>
+                            </label>
+                            <select id="s4test-overlap"
+                                title="How to resolve overlapping masks. Default: larger_wins. 'higher_score' prefers higher-confidence; 'first_wins' keeps the earlier mask.">
+                                <option value="larger_wins">larger_wins</option>
+                                <option value="higher_score">higher_score</option>
+                                <option value="first_wins">first_wins</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Thin Mask Ratio
+                                <span class="info-circle" title="Drop masks whose min-side / max-side bbox ratio falls below this. Default: 0.10. Filters slivers/strips.">&#9432;</span>
+                            </label>
+                            <input type="number" id="s4test-thin-ratio" value="0.10" step="0.01"
+                                title="Drop masks whose min-side / max-side bbox ratio falls below this. Default: 0.10. Filters slivers/strips.">
+                        </div>
+                        <div class="form-group">
+                            <label>Polygon Simplify Epsilon
+                                <span class="info-circle" title="Ramer-Douglas-Peucker epsilon (relative to perimeter) used to simplify exported polygons. Default: 0.001. Raise for coarser polygons, lower for faithful curves.">&#9432;</span>
+                            </label>
+                            <input type="number" id="s4test-simplify" value="0.001" step="0.0005"
+                                title="Ramer-Douglas-Peucker epsilon (relative to perimeter) used to simplify exported polygons. Default: 0.001. Raise for coarser polygons, lower for faithful curves.">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>SAM3 Tracker Device
+                                <span class="info-circle" title="CUDA device for the SAM3 point-prompt tracker. Default: cuda:1. Use a different index than the exemplar device so the two can run concurrently.">&#9432;</span>
+                            </label>
+                            <input type="text" id="s4test-tracker-device" value="cuda:1"
+                                title="CUDA device for the SAM3 point-prompt tracker. Default: cuda:1. Use a different index than the exemplar device so the two can run concurrently.">
+                        </div>
+                        <div class="form-group">
+                            <label>SAM3 Exemplar Device
+                                <span class="info-circle" title="CUDA device for the SAM3 exemplar/scan pass. Default: cuda:0. Keep distinct from the tracker device to avoid contention.">&#9432;</span>
+                            </label>
+                            <input type="text" id="s4test-exemplar-device" value="cuda:0"
+                                title="CUDA device for the SAM3 exemplar/scan pass. Default: cuda:0. Keep distinct from the tracker device to avoid contention.">
+                        </div>
+                    </div>
+                </details>
+
+                <div class="btn-group">
+                    <button class="btn btn-magenta" id="s4test-run-btn" onclick="openStep4test()"
+                        title="Route Step 3's chosen images (background), then open the combined annotator in a new browser window when it's ready.">Open Combined Annotator</button>
+                    <button class="btn btn-outline btn-sm" onclick="openStep4testFolder()"
+                        title="Open this tool's output folder in the system file manager.">Open Folder</button>
+                </div>
+                <!-- In-flight routing, surfaced on the tile itself so a background
+                     pass is never invisible - it survives closing the launch window
+                     and a full page reload, and it can always be stopped here. -->
+                <div id="s4test-route-banner" style="display:none;margin-top:16px;padding:12px;border:1px solid var(--border);border-radius:8px">
+                    <div class="service-status-row">
+                        <span class="health-dot checking" id="s4test-route-dot"></span>
+                        <span id="s4test-route-text">Routing chosen images&hellip;</span>
+                    </div>
+                    <div id="s4test-route-barwrap" style="margin-top:10px;height:6px;border-radius:3px;background:var(--border);overflow:hidden">
+                        <div id="s4test-route-bar" style="height:100%;width:0%;background:var(--accent);transition:width .3s"></div>
+                    </div>
+                    <p id="s4test-route-hint" style="color:var(--text-dim);font-size:12px;margin:8px 0 4px">
+                        A routing pass is running in the background and is holding the GPU. It runs about one image per second.
+                    </p>
+                    <div class="btn-group" id="s4test-route-actions">
+                        <button class="btn btn-danger btn-sm" onclick="stopStep4testRoute()"
+                            title="Cancel the routing pass and free the GPU. Images already routed are kept on disk, so reopening resumes where it stopped instead of starting over.">Stop Routing</button>
+                    </div>
+                </div>
+                <div id="s4test-service" style="display:none;margin-top:16px">
+                    <div class="service-status-row">
+                        <span class="health-dot" id="s4test-health"></span>
+                        <span id="s4test-health-text">Starting...</span>
+                        <span class="elapsed-timer" id="s4test-elapsed"></span>
+                    </div>
+                    <p style="color:var(--text-dim);font-size:12px;margin:4px 0">
+                        The combined annotator runs in its own window. Place points + segment per image, export per batch, then return here.
+                    </p>
+                    <div class="btn-group">
+                        <button class="btn btn-danger btn-sm" onclick="stopStep4test()" title="Stop the combined annotator service and close its window.">Stop Service</button>
+                    </div>
+                </div>
+                <div class="log-output" id="s4test-log" style="display:none"></div>
+                <div class="step-nav-footer" id="nav-footer-step4test"></div>
+            </div>
+        </div>
+
+        <!-- ── Refine (4.loop): active-learning model-assist review loop ──── -->
+        <div class="step-panel" id="panel-step4loop">
+            <div class="card">
+                <h2>Refine (4.loop) <span style="font-size:13px;color:var(--text-dim)">(model-assist review)</span></h2>
+                <div class="step-description">
+                    <p><strong>Do this:</strong> pick an inference batch, review every cyan model mask (accept/fix/reject), ADD anything the model missed, then export.</p>
+                    <p><strong>What happens:</strong> the predictions are seeded as pending masks into the Step 4 labelset, the annotator opens on just those frames, and your corrections are appended to the training export. Rejecting everything on a frame keeps it as a negative example (teaches the model its false positives).</p>
+                    <p><strong>Next:</strong> Step 5 Train reads the appended corrections (the loop: Infer &rarr; Refine &rarr; Train &rarr; Evaluate &rarr; Infer).</p>
+                    <p><strong>Requires:</strong> a completed Step 7 (Inference) batch to review, and a trained Step 5 model with a frozen split (Refine will not seed frames onto the held-out transects).</p>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group" style="flex:2">
+                        <label>Inference batch to review</label>
+                        <div style="display:flex;gap:6px">
+                            <select id="s4loop-run-dir" style="flex:1"
+                                title="Which inference batch to review; only batches with predictions.json appear"></select>
+                            <button class="btn btn-outline btn-sm" onclick="refreshStep4loopRuns()">Refresh</button>
+                        </div>
+                        <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
+                            Populated from Step 7 (Model Inference) output batches. Run Inference first if empty.
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Min confidence</label>
+                        <input type="number" id="s4loop-conf" value="0.25" step="0.05" min="0" max="1"
+                            title="Minimum confidence for proposing a mask. Lower surfaces more candidates for you to prune; every mask still requires your accept.">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Max frames</label>
+                        <input type="number" id="s4loop-max" value="0" min="0"
+                            title="0 = all frames in the batch">
+                    </div>
+                    <div class="checkbox-group" style="align-self:flex-end;padding-bottom:6px">
+                        <input type="checkbox" id="s4loop-skip-empty"
+                            title="Skip frames where the model found nothing. Leave OFF: reviewing empty frames is how missed corals get added.">
+                        <label for="s4loop-skip-empty">Skip empty frames</label>
+                    </div>
+                </div>
+
+                <div id="s4loop-seed-result"></div>
+
+                <div class="btn-group">
+                    <button class="btn btn-magenta" id="s4loop-open-btn" onclick="openStep4loop()"
+                        title="Seed the chosen batch's predictions as pending masks, then open the combined annotator in resume mode on just those frames.">Seed + Open Review</button>
+                    <button class="btn btn-danger btn-sm" id="s4loop-stop-btn" onclick="stopStep4loop()" style="display:none"
+                        title="Stop the Refine review service and close its window.">Stop Service</button>
+                    <button class="btn btn-outline btn-sm" id="s4loop-folder-btn" onclick="openStep4loopFolder()"
+                        title="Open this tool's loop_rounds folder in the system file manager.">Open Folder</button>
+                </div>
+
+                <div id="s4loop-service" style="display:none;margin-top:16px">
+                    <div class="service-status-row">
+                        <span class="health-dot" id="s4loop-health"></span>
+                        <span id="s4loop-health-text">Starting...</span>
+                        <span class="elapsed-timer" id="s4loop-elapsed"></span>
+                    </div>
+                    <p style="color:var(--text-dim);font-size:12px;margin:4px 0">
+                        The Refine review runs in its own window. Accept/fix/reject each proposed mask, add anything missed, export, then return here.
+                    </p>
+                </div>
+                <div class="log-output" id="s4loop-log" style="display:none"></div>
+
+                <!-- After-export card: shown when the annotator session ends (window
+                     closes) so the reviewer can jump straight to retraining. -->
+                <div id="s4loop-next-card" style="display:none;margin-top:16px;padding:14px;background:var(--surface-light);border-left:3px solid var(--magenta-light);border-radius:4px">
+                    <div style="font-weight:600;margin-bottom:8px">Corrections exported. Retrain now:</div>
+                    <div class="btn-group">
+                        <button class="btn btn-magenta btn-sm" id="s4loop-goto-retrain" onclick="gotoStep6Preset('retrain')"
+                            title="Retrains from the COCO-pretrained base on ALL accumulated labels (original + every Refine round). Most robust against forgetting; preferred for the model you keep.">Full retrain (recommended)</button>
+                        <button class="btn btn-outline btn-sm" id="s4loop-goto-finetune" onclick="gotoStep6Preset('finetune')"
+                            title="Continues from your best weights. 10x lower learning rate protects what the model already knows; freezing the backbone prevents overfitting on a small correction batch. Never uses 'resume' (that is only for crashed runs).">Fine-tune from champion (fast)</button>
+                    </div>
+                </div>
+
+                <div class="step-nav-footer" id="nav-footer-step4loop"></div>
+            </div>
+        </div>
+
+        <!-- ── Edit Masks: standalone relabel/fix tool, no seeding pass ────── -->
+        <div class="step-panel" id="panel-editmasks">
+            <div class="card">
+                <h2>Edit Masks <span style="font-size:13px;color:var(--text-dim)">(relabel + fix)</span></h2>
+                <div class="step-description">
+                    <p><strong>Do this:</strong> click Open Edit Masks, fix or relabel any mask already saved by Step 4, then export.</p>
+                    <p><strong>What happens:</strong> the editMasks tool opens directly on this project's Step 4 export - no new predictions are seeded, you are editing existing masks in place.</p>
+                    <p><strong>Requires:</strong> a completed Step 4 (Place + Segment) session so there are masks on disk to edit.</p>
+                </div>
+
+                <div class="btn-group">
+                    <button class="btn btn-magenta" id="s4em-open-btn" onclick="openEditMasks()"
+                        title="Open the standalone Edit Masks tool against this project's current Step 4 export.">Open Edit Masks</button>
+                    <button class="btn btn-danger btn-sm" id="s4em-stop-btn" onclick="stopEditMasks()" style="display:none"
+                        title="Stop the Edit Masks service and close its window.">Stop Service</button>
+                    <button class="btn btn-outline btn-sm" id="s4em-folder-btn" onclick="openEditMasksFolder()"
+                        title="Open this project's Step 4 export folder (the masks Edit Masks operates on) in the system file manager.">Open Folder</button>
+                </div>
+
+                <div id="s4em-service" style="display:none;margin-top:16px">
+                    <div class="service-status-row">
+                        <span class="health-dot" id="s4em-health"></span>
+                        <span id="s4em-health-text">Starting...</span>
+                        <span class="elapsed-timer" id="s4em-elapsed"></span>
+                    </div>
+                    <p style="color:var(--text-dim);font-size:12px;margin:4px 0">
+                        Edit Masks runs in its own window. Relabel or fix masks, export, then return here.
+                    </p>
+                </div>
+                <div class="log-output" id="s4em-log" style="display:none"></div>
+
+                <div class="step-nav-footer" id="nav-footer-editmasks"></div>
             </div>
         </div>
 
@@ -885,12 +1222,12 @@
         <!-- ── Step 6: Train Segmentation Model (oceankind_CV / ultralytics) ── -->
         <div class="step-panel" id="panel-6">
             <div class="card">
-                <h2>Step 6: Train Segmentation Model</h2>
+                <h2>Step 5: Train Segmentation Model</h2>
                 <div class="step-description">
-                    <p>Step 6 trains the YOLO segmentation model that does the actual coral detection. Its weights are the deliverable the later steps evaluate and run.</p>
+                    <p>Step 5 trains the YOLO segmentation model that does the actual coral detection. Its weights are the deliverable the later steps evaluate and run.</p>
                     <p><strong>Do this:</strong> name the run (or leave it blank for an auto-stamped name), pick the base model, epochs, image size, and device, then start training.</p>
-                    <p><strong>What happens:</strong> the trainer reads the YOLO-format dataset from Step 5 (<code>all_images/</code>, <code>all_labels/</code>, <code>data.yaml</code>), splits it into train/valid/test by stratified sampling, then trains an Ultralytics YOLO segmentation model. Training runs tens of minutes to hours depending on dataset size, epochs, imgsz, and GPU; logs persist, so you can close the orchestrator and come back. Outputs land in <code>{step6_dir}/dataset/</code> (splits) and <code>{step6_dir}/runs/&lt;run_name&gt;/</code> (weights, plots, metrics).</p>
-                    <p><strong>Next:</strong> Step 7 reads <code>runs/&lt;run_name&gt;/weights/best.pt</code> to evaluate the trained model on the held-out test split.</p>
+                    <p><strong>What happens:</strong> the trainer reads the YOLO-format dataset from Step 4 (<code>all_images/</code>, <code>all_labels/</code>, <code>data.yaml</code>), splits it into train/valid/test by stratified sampling, then trains an Ultralytics YOLO segmentation model. Training runs tens of minutes to hours depending on dataset size, epochs, imgsz, and GPU; logs persist, so you can close the orchestrator and come back. Outputs land in <code>{step6_dir}/dataset/</code> (splits) and <code>{step6_dir}/runs/&lt;run_name&gt;/</code> (weights, plots, metrics).</p>
+                    <p><strong>Next:</strong> Step 6 reads <code>runs/&lt;run_name&gt;/weights/best.pt</code> to evaluate the trained model on the held-out test split.</p>
                     <p style="color:var(--text-dim);font-size:12px">
                         <strong>Time-impact legend</strong> below each field:
                         <span style="color:#4ecca3">★ free</span> (bounds/naming, no compute cost) &nbsp;
@@ -920,6 +1257,15 @@
                         <button type="button" class="btn btn-magenta btn-sm" onclick="importStep6Preset()">Import</button>
                     </div>
                     <div id="s6-preset-desc" style="font-size:11px;color:var(--text-dim);margin-top:6px;font-style:italic"></div>
+                    <!-- Refine-loop quick presets (Task 8): apply the built-in
+                         finetune/retrain param sets straight from the server, same
+                         values the after-export card on the Refine panel jumps to. -->
+                    <div class="btn-group" style="margin-top:10px">
+                        <button type="button" class="btn btn-outline btn-sm" id="s6-preset-retrain" onclick="applyStep6BuiltinPreset('retrain')"
+                            title="Retrains from the COCO-pretrained base on ALL accumulated labels (original + every Refine round). Most robust against forgetting; preferred for the model you keep.">Full retrain preset (recommended)</button>
+                        <button type="button" class="btn btn-outline btn-sm" id="s6-preset-finetune" onclick="applyStep6BuiltinPreset('finetune')"
+                            title="Continues from your best weights. 10x lower learning rate protects what the model already knows; freezing the backbone prevents overfitting on a small correction batch. Never uses 'resume' (that is only for crashed runs).">Fine-tune preset (fast loop)</button>
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -941,7 +1287,13 @@
                             Base model
                             <span style="color:#ff6b7f;font-size:10px">★★★ major</span>
                         </label>
-                        <select id="s6-model" title="Base seg model weights. Default: yolo11m-seg.pt. Passed to ultralytics as the weights initializer; n->x = ~4x more params + wall time.">
+                        <select id="s6-model" title="Base seg model weights. Default: yolo11m-seg.pt. Passed to ultralytics as the weights initializer; n->x = ~4x more params + wall time. 'Continue from a previous run' options fine-tune from that run's best.pt instead of a fresh COCO-pretrained base.">
+                            <optgroup label="Continue from a previous run" id="s6-model-runs-optgroup">
+                                <!-- Populated by refreshStep6ModelRunOptions(): one option per
+                                     Step 5 run with weights/best.pt (value = <run_dir>/weights/best.pt),
+                                     plus a leading "Champion (promoted best)" option when
+                                     {step6_dir}/champion.json exists. Empty until a project has runs. -->
+                            </optgroup>
                             <optgroup label="YOLO11 segmentation (stable, default)">
                                 <option value="yolo11n-seg.pt">yolo11n-seg (fastest, ~2.6M params)</option>
                                 <option value="yolo11s-seg.pt">yolo11s-seg (~10M)</option>
@@ -960,6 +1312,8 @@
                         <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
                             Size n->x = ~4× more params, ~4× wall time. For ~hundreds of frames, m is the sweet spot.
                             YOLO26 is newer/better in theory but has open ONNX/TensorRT export bugs as of 2026-04.
+                            Picking a "Continue from a previous run" option fine-tunes from that run's weights
+                            instead of training from scratch.
                         </div>
                     </div>
                     <div class="form-group">
@@ -1055,6 +1409,23 @@
                     </div>
                 </div>
 
+                <div class="form-row">
+                    <div class="checkbox-group" style="align-self:center">
+                        <input type="checkbox" id="s6-pin-split" checked
+                            title="Freeze the validation/test split by transect across retraining rounds (default: transect 5 = validation, transect 6 = test, held out at every site). New frames always go to train. Keeps every round's metrics comparable and stops video-adjacent frames from leaking into the holdout (inflated mAP). Leave ON for Refine loops.">
+                        <label for="s6-pin-split">Freeze the validation/test split (pinned by transect)</label>
+                    </div>
+                    <div class="form-group">
+                        <label>Freeze layers (fine-tune only)</label>
+                        <input type="number" id="s6-freeze" value="" min="0" placeholder="(none = train all layers)"
+                            title="Number of leading backbone layers to freeze during training. Default: empty (train every layer). Set by the Fine-tune preset (10) to protect pretrained features when continuing from previous weights; leave empty for a full retrain.">
+                        <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
+                            Only meaningful when continuing from a previous run's weights (Base model above,
+                            or Fine-tune preset). Passed as ultralytics <code>freeze=</code>; empty = unset (train all layers).
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Device / DDP selector — which GPU(s) should host the run.
                      DDP is explained below the control so it's discoverable. -->
                 <div style="margin-top:12px;padding:12px;background:var(--surface-light);border-radius:4px">
@@ -1101,8 +1472,9 @@
                     </div>
                 </div>
 
-                <!-- Class-inclusion picker — which classes from step 5's export
-                     should actually be trained on. Defaults to "all". -->
+                <!-- Class-inclusion picker — which classes from the Step 4
+                     (combined annotator) export should actually be trained on.
+                     Defaults to "all". -->
                 <div style="margin-top:12px;padding:12px;background:var(--surface-light);border-radius:4px">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
                         <label style="font-weight:600;margin:0">
@@ -1110,7 +1482,7 @@
                             <span style="color:#4ecca3;font-size:10px">★ free</span>
                         </label>
                         <div>
-                            <button type="button" class="btn btn-outline btn-sm" onclick="refreshStep6Classes()">Refresh from Step 5</button>
+                            <button type="button" class="btn btn-outline btn-sm" onclick="refreshStep6Classes()">Refresh from Step 4</button>
                             <button type="button" class="btn btn-outline btn-sm" onclick="selectAllStep6Classes(true)">Select all</button>
                             <button type="button" class="btn btn-outline btn-sm" onclick="selectAllStep6Classes(false)">Clear</button>
                         </div>
@@ -1118,10 +1490,10 @@
                     <div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">
                         Labels for unselected classes are stripped from the split; images that
                         would become empty-of-targets are dropped. Counts are read from
-                        <code>step5_segmentImages/all_labels/</code>.
+                        <code>step4test_combinedAnnotate/all_labels/</code>.
                     </div>
                     <div id="s6-classes-list" style="max-height:220px;overflow-y:auto;padding:6px;background:var(--surface);border-radius:3px;font-size:12px">
-                        <span style="color:var(--text-dim)">Click <em>Refresh from Step 5</em> to load the class list.</span>
+                        <span style="color:var(--text-dim)">Click <em>Refresh from Step 4</em> to load the class list.</span>
                     </div>
                 </div>
 
@@ -1367,12 +1739,12 @@
         <!-- ── Step 7: Evaluate Model ─────────────────────────────────── -->
         <div class="step-panel" id="panel-7">
             <div class="card">
-                <h2>Step 7: Evaluate Model</h2>
+                <h2>Step 6: Evaluate Model</h2>
                 <div class="step-description">
-                    <p>Step 7 measures how well the trained model performs on frames it never saw during training, so you can judge whether it is good enough to run. It assembles a report you can read and share.</p>
-                    <p><strong>Do this:</strong> pick a completed Step 6 training run, keep the split on <code>test</code>, and run the evaluation (or press Use recommended defaults first).</p>
-                    <p><strong>What happens:</strong> Ultralytics <code>val</code> runs the chosen run against the held-out test split from Step 6, then the report is built with each metric defined in plain English, a per-class breakdown, sample overlay imagery, and the run's training curves. Outputs are <code>report.md</code>, <code>metrics.json</code>, <code>report.pdf</code>, and a <code>previews/</code> folder, all under <code>{step7_dir}/eval_&lt;run&gt;/</code>; you can also copy the PDF to a folder you choose.</p>
-                    <p><strong>Next:</strong> Step 8 reads the same run's <code>weights/best.pt</code> to run inference on new frames.</p>
+                    <p>Step 6 measures how well the trained model performs on frames it never saw during training, so you can judge whether it is good enough to run. It assembles a report you can read and share.</p>
+                    <p><strong>Do this:</strong> pick a completed Step 5 training run, keep the split on <code>test</code>, and run the evaluation (or press Use recommended defaults first).</p>
+                    <p><strong>What happens:</strong> Ultralytics <code>val</code> runs the chosen run against the held-out test split from Step 5, then the report is built with each metric defined in plain English, a per-class breakdown, sample overlay imagery, and the run's training curves. Outputs are <code>report.md</code>, <code>metrics.json</code>, <code>report.pdf</code>, and a <code>previews/</code> folder, all under <code>{step7_dir}/eval_&lt;run&gt;/</code>; you can also copy the PDF to a folder you choose.</p>
+                    <p><strong>Next:</strong> Step 7 reads the same run's <code>weights/best.pt</code> to run inference on new frames.</p>
                 </div>
 
                 <!-- Quick-start banner — one-click sensible defaults. -->
@@ -1418,12 +1790,12 @@
                         <label>Training run to evaluate</label>
                         <div style="display:flex;gap:6px">
                             <select id="s7-run-dir" style="flex:1" onchange="onStep7RunChange()"
-                                title="Pick a completed Step 6 training run (subdir with weights/best.pt). Default: empty. Passed as the evaluation target."></select>
+                                title="Pick a completed Step 5 training run (subdir with weights/best.pt). Default: empty. Passed as the evaluation target."></select>
                             <button class="btn btn-outline btn-sm" onclick="refreshRunList()">Refresh</button>
                         </div>
                         <div style="font-size:11px;color:var(--text-dim);margin-top:3px">
-                            Any completed Step 6 run; lists subdirs with <code>weights/best.pt</code>.
-                            Run Step 6 at least once to populate.
+                            Any completed Step 5 run; lists subdirs with <code>weights/best.pt</code>.
+                            Run Step 5 at least once to populate.
                         </div>
                     </div>
                     <div class="form-group">
@@ -1512,6 +1884,46 @@
                     <div id="s7-report" style="font-size:13px;line-height:1.45;max-height:640px;overflow-y:auto;padding:8px 14px;background:var(--surface);border-radius:3px">
                     </div>
                 </div>
+
+                <!-- Rounds ledger (Task 9): every evaluated run in this project's
+                     active-learning loop, with regression gates vs the current
+                     champion (or the best prior round when no champion exists yet). -->
+                <div id="s7-rounds-block" style="margin-top:16px;padding:16px;background:var(--surface-light);border-radius:4px">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+                        <strong style="color:var(--magenta-light)">Rounds</strong>
+                        <span id="s7-rounds-champion-note" style="color:var(--text-dim);font-size:12px"></span>
+                        <span class="spacer" style="flex:1"></span>
+                        <button class="btn btn-outline btn-sm" onclick="refreshStep7Rounds()">Refresh</button>
+                    </div>
+                    <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">
+                        Every evaluated training run in this project's Refine loop. Gates compare
+                        this round's mask metrics against the current champion (or the best prior
+                        round). <span style="color:var(--success)">pass</span> = within tolerance,
+                        <span style="color:var(--error)">fail</span> = mAP regressed beyond tolerance,
+                        <span style="color:var(--warning)">flag</span> = recall or a per-class AP
+                        regressed, <span style="color:var(--text-dim)">unpinned</span> = the split was
+                        not a frozen transect holdout, so the comparison is informational only.
+                    </div>
+                    <div style="overflow-x:auto">
+                        <table id="s7-rounds-table" style="width:100%;border-collapse:collapse;font-size:12px">
+                            <thead>
+                                <tr>
+                                    <th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)">Round</th>
+                                    <th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)">Run</th>
+                                    <th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)">Base</th>
+                                    <th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--border)">mAP50-95(M)</th>
+                                    <th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--border)">&Delta; vs prev</th>
+                                    <th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--border)">Recall(M)</th>
+                                    <th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)">Gates</th>
+                                    <th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)">Promote</th>
+                                </tr>
+                            </thead>
+                            <tbody id="s7-rounds-tbody">
+                                <tr><td colspan="8" style="padding:10px 8px;color:var(--text-dim)">No evaluated rounds yet. Run Evaluation above to add one.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
                 <div class="step-nav-footer" id="nav-footer-7"></div>
             </div>
         </div>
@@ -1519,16 +1931,16 @@
         <!-- ── Step 8: Model Inference ────────────────────────────────── -->
         <div class="step-panel" id="panel-8">
             <div class="card">
-                <h2>Step 8: Model Inference</h2>
+                <h2>Step 7: Model Inference</h2>
                 <div class="step-description">
-                    <p>Step 8 runs the trained model over new frames it was never trained on, so you can see how it behaves on real unseen data and find where it struggles. It saves overlay renderings and a manifest of predictions.</p>
+                    <p>Step 7 runs the trained model over new frames it was never trained on, so you can see how it behaves on real unseen data and find where it struggles. It saves overlay renderings and a manifest of predictions.</p>
                     <p><strong>Do this:</strong> pick the trained run, choose a source of frames, and run inference. Sources:</p>
                     <ul style="color:var(--text-dim);font-size:13px;margin-left:20px">
                         <li><strong>Directory</strong> — any folder of .jpg/.png images.</li>
                         <li><strong>Unused TCRMP frames</strong> — random or systematic sample of images in <code>TCRMP_clip/</code> that are NOT in this project's Step 3 <code>selected_frames.csv</code>. Useful for finding blind spots in the training set.</li>
                         <li><strong>Full TCRMP image set</strong> — every raw frame under <code>TCRMP_clip/</code>.</li>
                     </ul>
-                    <p><strong>What happens:</strong> the model runs over the chosen frames using <code>weights/best.pt</code> from the selected Step 6 run, writing overlay images and a prediction manifest to the output folder, then a gallery renders below. You can tag each frame <strong>yes / no / skip</strong> to flag where the model is struggling, a verdict only, no mask editing.</p>
+                    <p><strong>What happens:</strong> the model runs over the chosen frames using <code>weights/best.pt</code> from the selected Step 5 run, writing overlay images and a prediction manifest to the output folder, then a gallery renders below. You can tag each frame <strong>yes / no / skip</strong> to flag where the model is struggling, a verdict only, no mask editing.</p>
                 </div>
 
                 <div class="form-group">
@@ -1543,10 +1955,12 @@
 
                 <div class="form-row">
                     <div class="form-group" style="flex:2">
-                        <label>Model run to use</label>
+                        <label>Model run to use
+                            <span id="s8-champion-badge" class="badge badge-info" style="display:none;margin-left:6px;font-size:10px" title="This run is the promoted champion (Step 6's Rounds table). Pre-selected by default.">champion</span>
+                        </label>
                         <div style="display:flex;gap:6px">
                             <select id="s8-run-dir" style="flex:1"
-                                title="Trained Step 6 run to use for inference. Default: empty. weights/best.pt is picked automatically."></select>
+                                title="Trained Step 5 run to use for inference. Default: the promoted champion if one exists, else empty. weights/best.pt is picked automatically."></select>
                             <button class="btn btn-outline btn-sm" onclick="refreshRunList()">Refresh</button>
                         </div>
                     </div>
@@ -1666,15 +2080,18 @@
         <div class="msg" id="open-ui-msg">Starting UI, waiting for it to come up&hellip;</div>
         <div class="sub" id="open-ui-sub"></div>
         <div class="actions">
-            <button class="btn btn-outline btn-sm" onclick="hideOpenUiOverlay()">Close</button>
+            <button class="btn btn-outline btn-sm" onclick="hideOpenUiOverlay()"
+                title="Hide this dialog. The launch keeps running, and its progress stays visible on the step's tile, where you can stop it. To cancel outright, close the tool's window.">Hide</button>
         </div>
     </div>
 </div>
 
-<!-- Reset-confirm modal (styled replacement for the browser confirm()) -->
+<!-- Generic confirm modal (styled replacement for the browser confirm()).
+     Reused by Reset Step and by the Step 7 Rounds table's Promote action;
+     both set #confirm-title/#confirm-msg/#confirm-ok-btn text before opening. -->
 <div class="confirm-overlay" id="confirm-overlay" aria-hidden="true">
     <div class="confirm-modal">
-        <div class="confirm-title">Reset this step?</div>
+        <div class="confirm-title" id="confirm-title">Reset this step?</div>
         <div class="confirm-msg" id="confirm-msg"></div>
         <div class="confirm-actions">
             <button class="btn btn-outline btn-sm" onclick="closeConfirmModal()">Cancel</button>
@@ -1683,7 +2100,7 @@
     </div>
 </div>
 
-<script src="/static/orchestrator.js?v=20260624-review-io"></script>
+<script src="/static/orchestrator.js?v=20260710-edit-masks"></script>
 <script>window.EXPERTIDS_BASE = '/expertids';</script>
 <script src="{{ url_for('expertids.static', filename='expertids.js') }}?v=1"></script>
 </body>

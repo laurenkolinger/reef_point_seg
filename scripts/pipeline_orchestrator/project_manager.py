@@ -6,7 +6,6 @@ import os
 import json
 import glob
 import shutil
-import uuid
 import copy
 from datetime import datetime
 
@@ -21,13 +20,18 @@ STEP_DIRS = {
     "6": "step6_trainModel",
     "7": "step7_evaluateModel",
     "8": "step8_inference",
+    # The 4.test combined annotator (replaces Steps 4+5) writes its YOLO export
+    # and segmentations/ here. Resolvable via resolve_step_dir(step="step4test").
+    # NOT a numbered chain step (absent from STEP_KEYS), so it is not auto-created
+    # at project setup; 4.test creates it on first routing/export.
+    "step4test": "step4test_combinedAnnotate",
 }
 
 STEP_NAMES = {
     "1": "Make All Points",
     "2": "Recode Species",
     "3": "Choose Images",
-    "4": "Route Chosen Images (OCR)",
+    "4": "Place Points",
     "5": "Segment Images (SAM3)",
     "6": "Train Model",
     "7": "Evaluate Model",
@@ -38,8 +42,50 @@ STEP_NAMES = {
 STEP_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8"]
 
 
+def find_projects(projects_root):
+    """[(project_id, project_dir)] for every <projects_root>/*/project.json.
+
+    project_id is the project.json 'id' (falls back to the dir name). Used to
+    resolve a returned expert CSV's project back to its on-disk step dirs, and
+    to enumerate projects for the multi-project review-site dropdown."""
+    out = []
+    try:
+        entries = sorted(os.listdir(projects_root))
+    except (FileNotFoundError, NotADirectoryError):
+        return out
+    for entry in entries:
+        pj = os.path.join(projects_root, entry, 'project.json')
+        if not os.path.isfile(pj):
+            continue
+        try:
+            with open(pj) as f:
+                pid = (json.load(f).get('id') or entry)
+        except Exception:
+            pid = entry
+        out.append((pid, os.path.join(projects_root, entry)))
+    return out
+
+
+def resolve_step_dir(project_id, projects_root, step="5"):
+    """Map a canonical project_id to its <project_dir>/<step dir>, or '' if no
+    project under projects_root has that id."""
+    if not project_id:
+        return ""
+    for pid, pdir in find_projects(projects_root):
+        if pid == project_id:
+            return os.path.join(pdir, STEP_DIRS.get(str(step), ""))
+    return ""
+
+
 def create_project(name, base_dir):
-    """Create a new project directory with project.json and step subdirs."""
+    """Create a new project directory with project.json and step subdirs.
+
+    One folder per project: the folder is named ``YY-MM-DD_{name}`` with NO
+    random hash suffix, so a project has a single, stable, predictable home.
+    If a folder of that name already exists, raise — the caller should Open the
+    existing project instead of minting a duplicate (this is what produced the
+    pile of ``{name}_{date}_{hash}`` folders and made exports land in the wrong
+    one)."""
     name = name.strip().replace(" ", "_")
     if not name:
         raise ValueError("Project name cannot be empty")
@@ -47,20 +93,25 @@ def create_project(name, base_dir):
     base_dir = os.path.abspath(base_dir)
     os.makedirs(base_dir, exist_ok=True)
 
-    date_str = datetime.now().strftime("%Y%m%d")
-    short_uuid = uuid.uuid4().hex[:6]
-    dir_name = f"{name}_{date_str}_{short_uuid}"
+    date_str = datetime.now().strftime("%y-%m-%d")
+    dir_name = f"{date_str}_{name}"
     project_dir = os.path.join(base_dir, dir_name)
+    if os.path.exists(project_dir):
+        raise ValueError(
+            f"A project folder already exists: {dir_name}. "
+            f"Open it instead of creating a new one.")
     os.makedirs(project_dir)
 
-    # Create step subdirs
-    for step_dir in STEP_DIRS.values():
-        os.makedirs(os.path.join(project_dir, step_dir), exist_ok=True)
+    # Create step subdirs (numbered chain steps only; step4test_combinedAnnotate
+    # is created lazily by the 4.test routing/export, not at project setup).
+    for s in STEP_KEYS:
+        os.makedirs(os.path.join(project_dir, STEP_DIRS[s]), exist_ok=True)
 
     now = datetime.now().isoformat()
     state = {
         "id": dir_name,
         "name": name,
+        "description": "",
         "created_at": now,
         "updated_at": now,
         "project_dir": project_dir,
@@ -131,6 +182,15 @@ def load_project(project_dir):
             and state["steps"].get("8", {}).get("status") == "locked"):
         state["steps"]["8"]["status"] = "pending"
 
+    # 4.test promotion bridge: the combined annotator (non-chain "step4test")
+    # replaces Steps 4 + 5, so those chain slots never complete and would leave
+    # Step 6 (train) permanently locked. Once Step 3 is done, unlock Step 6
+    # directly so the promoted flow can reach it; _run_step6's preflight is the
+    # real gate on the 4.test export contents.
+    if (state["steps"].get("3", {}).get("status") == "completed"
+            and state["steps"].get("6", {}).get("status") == "locked"):
+        state["steps"]["6"]["status"] = "pending"
+
     # Reconcile current_step
     for s in STEP_KEYS:
         if state["steps"][s]["status"] not in ("completed",):
@@ -166,13 +226,24 @@ def auto_link_outputs(state, completed_step):
     if cs == "1":
         # Find all_points CSV (may have date suffix)
         ap_files = sorted(glob.glob(os.path.join(step_dir, "all_points*.csv")))
+        # Match both the legacy `master_codes*.csv` name and the VICARIUS
+        # metadata-library name `tcrmp_species_codes*.csv`. Either may land
+        # in step_dir depending on whether step 1 ran end-to-end or was
+        # linked via /api/step/1/link.
         mc_files = sorted(glob.glob(os.path.join(step_dir, "master_codes*.csv")))
+        if not mc_files:
+            mc_files = sorted(glob.glob(os.path.join(step_dir, "tcrmp_species_codes*.csv")))
+        # `step1_link` writes the resolved master_codes path directly into
+        # step1.outputs before calling complete_step → auto_link_outputs.
+        # Prefer that explicit value when the on-disk glob misses.
+        mc_from_outputs = state["steps"]["1"].get("outputs", {}).get("master_codes")
         if ap_files:
             next_step["config"]["all_points"] = ap_files[-1]
             state["steps"][cs]["outputs"]["all_points"] = ap_files[-1]
-        if mc_files:
-            next_step["config"]["master_codes"] = mc_files[-1]
-            state["steps"][cs]["outputs"]["master_codes"] = mc_files[-1]
+        mc_path = mc_files[-1] if mc_files else mc_from_outputs
+        if mc_path:
+            next_step["config"]["master_codes"] = mc_path
+            state["steps"][cs]["outputs"]["master_codes"] = mc_path
 
     elif cs == "2":
         ap_files = sorted(glob.glob(os.path.join(step_dir, "all_points*.csv")))
@@ -193,6 +264,12 @@ def auto_link_outputs(state, completed_step):
         ap = state["steps"]["2"].get("outputs", {}).get("all_points_recoded")
         if ap:
             next_step["config"]["all_points"] = ap
+        # 4.test replaces Steps 4+5 (non-chain "step4test"), so completing Step 3
+        # should make train (Step 6) reachable directly. _run_step6 preflights the
+        # 4.test export, so unlocking here cannot train on missing data.
+        s6 = state["steps"].get("6")
+        if s6 is not None and s6.get("status") == "locked":
+            s6["status"] = "pending"
 
     elif cs == "4":
         next_step["config"]["input_dir"] = step_dir

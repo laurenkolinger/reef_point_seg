@@ -32,7 +32,7 @@ PYTHON_PATHS = {
     1: os.path.join(REPO_DIR, "TCRMPcvr_makeAllPoints", "env", "bin", "python"),
     2: os.path.join(REPO_DIR, "TCRMPcvr_recodeSpecies", "env", "bin", "python"),
     3: os.path.join(REPO_DIR, "TCRMPcvr_chooseImages", "env", "bin", "python"),
-    4: os.path.join(REPO_DIR, "TCRMPclip_routeChosenImages", "env", "bin", "python"),
+    4: os.path.join(REPO_DIR, "TCRMPclip_placePoints", "env", "bin", "python"),
     5: "/home/bizon/anaconda3/envs/sam3reef/bin/python",
     # Steps 6/7/8 all run ultralytics, so they share the step-6 env.
     6: os.path.join(REPO_DIR, "TCRMPtrain_oceankindCV", "env", "bin", "python"),
@@ -45,7 +45,7 @@ ENTRY_POINTS = {
     1: os.path.join(REPO_DIR, "TCRMPcvr_makeAllPoints", "run.py"),
     2: os.path.join(REPO_DIR, "TCRMPcvr_recodeSpecies", "src", "app.py"),
     3: os.path.join(REPO_DIR, "TCRMPcvr_chooseImages", "src", "select_images.py"),
-    4: os.path.join(REPO_DIR, "TCRMPclip_routeChosenImages", "src", "app.py"),
+    4: os.path.join(REPO_DIR, "TCRMPclip_placePoints", "src", "app.py"),
     5: os.path.join(REPO_DIR, "TCRMPclip_segmentImages", "src", "app.py"),
     # Step 6 isn't a python script — it's a shell driver that chains split + train.
     6: os.path.join(REPO_DIR, "TCRMPtrain_oceankindCV", "run_step6.sh"),
@@ -59,7 +59,7 @@ WORKING_DIRS = {
     1: os.path.join(REPO_DIR, "TCRMPcvr_makeAllPoints"),
     2: os.path.join(REPO_DIR, "TCRMPcvr_recodeSpecies"),
     3: os.path.join(REPO_DIR, "TCRMPcvr_chooseImages"),
-    4: os.path.join(REPO_DIR, "TCRMPclip_routeChosenImages"),
+    4: os.path.join(REPO_DIR, "TCRMPclip_placePoints"),
     5: os.path.join(REPO_DIR, "TCRMPclip_segmentImages"),
     6: os.path.join(REPO_DIR, "TCRMPtrain_oceankindCV"),
     7: os.path.join(REPO_DIR, "TCRMPtrain_oceankindCV"),

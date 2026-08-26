@@ -17,10 +17,17 @@ from urllib.error import URLError
 from orchestrator_config import PYTHON_PATHS, ENTRY_POINTS, WORKING_DIRS, REPO_DIR
 
 
+# Hold ~1 hour of heavy ultralytics-verbose output. Older lines roll off;
+# the client offset logic below maps stale offsets into the surviving window
+# so the stream never stops flowing.
+_LOG_MAXLEN = 20000
+
+
 class StageRunner:
     def __init__(self):
         self.processes = {}       # step -> Popen
-        self.logs = {}            # step -> deque of log lines
+        self.logs = {}            # step -> deque of log lines (capped)
+        self.log_totals = {}      # step -> monotonic count of all lines ever produced
         self.log_threads = {}     # step -> Thread
         self.ports = {}           # step -> port (for Flask stages)
         self._lock = threading.Lock()
@@ -44,6 +51,9 @@ class StageRunner:
                     if not line:
                         break
                     log.append(line.rstrip("\n"))
+                    # Track total-ever-produced so the client can follow the
+                    # stream even after old lines fall off the capped deque.
+                    self.log_totals[step] = self.log_totals.get(step, 0) + 1
             except (ValueError, OSError):
                 pass
 
@@ -65,7 +75,8 @@ class StageRunner:
         if env_extra:
             env.update(env_extra)
 
-        self.logs[step] = deque(maxlen=5000)
+        self.logs[step] = deque(maxlen=_LOG_MAXLEN)
+        self.log_totals[step] = 0
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -95,7 +106,8 @@ class StageRunner:
         if env_extra:
             env.update(env_extra)
 
-        self.logs[step] = deque(maxlen=5000)
+        self.logs[step] = deque(maxlen=_LOG_MAXLEN)
+        self.log_totals[step] = 0
         self.ports[step] = port
 
         proc = subprocess.Popen(
@@ -137,9 +149,39 @@ class StageRunner:
         }
 
     def get_log(self, step, offset=0):
-        """Get log lines from offset."""
-        log = list(self.logs.get(step, []))
-        return log[offset:]
+        """
+        Return lines since the given client offset plus bookkeeping fields.
+
+        The deque is capped (see _LOG_MAXLEN), so the oldest lines are rolled
+        off when the child is very chatty. We still track `total` — the
+        monotonic count of all lines ever produced. The client's `offset` is
+        interpreted against that total. If the client has fallen off the
+        back of the surviving window, we hand them what's still in memory
+        and record how many lines were dropped, so the UI can show a marker
+        and resynchronize rather than freezing.
+
+        Returns (lines, new_offset, dropped) where:
+            lines       : the list of lines from the client's position forward
+            new_offset  : total-ever-produced (the value the client should send next)
+            dropped     : how many lines fell off the front since the client
+                          last polled (non-zero means the client had to skip)
+        """
+        with self._lock:
+            window = list(self.logs.get(step, []))
+            total = self.log_totals.get(step, 0)
+        window_size = len(window)
+        window_start = max(0, total - window_size)
+        dropped = 0
+        if offset < window_start:
+            # Client fell behind; skip forward to the oldest surviving line.
+            dropped = window_start - offset
+            start_in_window = 0
+        else:
+            start_in_window = offset - window_start
+            if start_in_window > window_size:
+                start_in_window = window_size
+        lines = window[start_in_window:]
+        return lines, total, dropped
 
     def health_check(self, port):
         """Check if a Flask app is responding on a port."""
@@ -172,6 +214,10 @@ class StageRunner:
             self.kill(step)
 
     def is_running(self, step):
+        """Cheap liveness probe: no log-deque copy, just the process poll.
+        The status endpoints reconcile cached phases against liveness on
+        every UI poll (2.5s), so the common alive path must not pay
+        poll_status's full-log copy."""
         with self._lock:
             proc = self.processes.get(step)
         return proc is not None and proc.poll() is None

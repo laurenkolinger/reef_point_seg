@@ -105,3 +105,15 @@ WORKING_DIRS = {int(k): v for k, v in _cfg["working_dirs"].items()}
 DEFAULT_STEP_CONFIGS = _cfg["step_defaults"]
 PRESET_DIRS = _cfg["preset_dirs"]
 VICARIUS = _cfg.get("vicarius", {"enabled": False})
+
+# ── Step 6 default overrides ────────────────────────────────────────────────
+# Source of truth for step 6 form defaults (pipeline.yaml is owned by the
+# module config, not the orchestrator). Applied here so new projects and
+# orchestrator restarts inherit the current policy:
+#   - run_name defaults to blank (user opts in to reusing a run-name)
+#   - device defaults to "0,1" (DDP across both GPUs by default)
+# Anything already present in pipeline.yaml is respected if explicitly set;
+# these overrides only fill in missing keys / flip values the user requested.
+_s6 = DEFAULT_STEP_CONFIGS.setdefault("6", {})
+_s6["run_name"] = ""                 # always blank — see Step 6 UX rules
+_s6["device"] = "0,1"                # DDP across cuda:0 + cuda:1 by default
