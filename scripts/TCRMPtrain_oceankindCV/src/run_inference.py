@@ -22,10 +22,17 @@ import random
 import sys
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 
 IMG_EXT = ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')
+
+AST = timezone(timedelta(hours=-4))
+
+
+def ast_now():
+    """AST (UTC-4, fixed) timestamp, seconds precision, ISO-8601."""
+    return datetime.now(AST).isoformat(timespec='seconds')
 
 
 def arg_parse():
@@ -46,6 +53,9 @@ def arg_parse():
     p.add_argument('--iou', type=float, default=0.7)
     p.add_argument('--save_overlays', action='store_true')
     p.add_argument('--save_crops', action='store_true')
+    p.add_argument('--save_predictions', action='store_true',
+                   help='Also write predictions.json with per-detection normalized mask '
+                        'polygons and confidences (machine-readable, consumed by the Refine loop)')
     p.add_argument('--device', default='0')
 
     # Rendering controls — all user-settable from step 8 panel.
@@ -133,6 +143,32 @@ def collect_source(args):
         return candidates[::step][:n]
 
     return []
+
+
+def build_prediction_items(results_by_file, class_names):
+    """(filename, raw_abs, ultralytics_result) -> predictions.json items.
+    Keeps zero-detection frames (empty detections list); skips detections
+    whose result has no mask geometry."""
+    items = []
+    for filename, raw_abs, r in results_by_file:
+        h, w = int(r.orig_shape[0]), int(r.orig_shape[1])
+        dets = []
+        xyn = getattr(getattr(r, "masks", None), "xyn", None)
+        if xyn is not None:
+            for j, poly in enumerate(xyn):
+                flat = [round(float(v), 6) for pt in poly for v in pt]
+                if len(flat) < 6:
+                    continue
+                cid = int(float(r.boxes.cls[j]))
+                dets.append({
+                    "class_id": cid,
+                    "class": str(class_names.get(cid, cid)),
+                    "confidence": round(float(r.boxes.conf[j]), 4),
+                    "polygon_xyn": flat,
+                })
+        items.append({"filename": filename, "raw": raw_abs,
+                      "width": w, "height": h, "detections": dets})
+    return items
 
 
 def main():
@@ -272,6 +308,7 @@ def main():
     with_any = 0
     confidences_by_class = {}
     unknown_class_total = 0
+    results_by_file = []
     t0 = time.time()
 
     for idx, src in enumerate(images):
@@ -286,6 +323,9 @@ def main():
             total_preds += n_det
             if n_det > 0:
                 with_any += 1
+
+            if args.save_predictions:
+                results_by_file.append((os.path.basename(src), src, r))
 
             rel_overlay = ''
             if args.save_overlays:
@@ -364,6 +404,30 @@ def main():
         'args': vars(args),
         'generated_at': datetime.now().isoformat(),
     }
+
+    if args.save_predictions:
+        pred_items = build_prediction_items(results_by_file, names)
+        skipped_maskless = sum(
+            1 for (_, _, r) in results_by_file
+            if getattr(getattr(r, 'masks', None), 'xyn', None) is None
+            and (r.boxes is not None and len(r.boxes) > 0)
+        )
+        predictions = {
+            'schema_version': 1,
+            'generated_at': ast_now(),
+            'run_dir': args.run_dir,
+            'imgsz': args.imgsz,
+            'conf': args.conf,
+            'iou': args.iou,
+            'class_names': {str(k): v for k, v in names.items()},
+            'items': pred_items,
+        }
+        with open(os.path.join(args.out_dir, 'predictions.json'), 'w') as f:
+            json.dump(predictions, f, indent=2, default=str)
+        manifest['predictions'] = 'predictions.json'
+        print(f'[infer] wrote predictions.json ({len(pred_items)} items, '
+              f'{skipped_maskless} detections skipped for missing mask geometry)')
+
     with open(os.path.join(args.out_dir, 'manifest.json'), 'w') as f:
         json.dump(manifest, f, indent=2, default=str)
 

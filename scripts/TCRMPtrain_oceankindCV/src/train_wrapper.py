@@ -39,6 +39,9 @@ def arg_parse():
     p.add_argument('--optimizer', default='auto',
                    help='auto | SGD | Adam | AdamW | RMSProp')
     p.add_argument('--seed', type=int, default=0)
+    p.add_argument('--freeze', type=int, default=None,
+                   help='Number of leading layers to freeze for fine-tuning from previous '
+                        'weights. Unset = ultralytics default (no freezing).')
 
     # --- LR schedule ------------------------------------------------------
     p.add_argument('--lr0', type=float, default=0.01,
@@ -103,24 +106,13 @@ def _as_bool(s):
     return str(s).strip().lower() in ('1', 'true', 't', 'yes', 'y')
 
 
-def main():
-    args = arg_parse()
-    if not os.path.isfile(args.src):
-        print(f'ERROR: data yaml not found: {args.src}', file=sys.stderr)
-        sys.exit(1)
-    os.makedirs(args.project, exist_ok=True)
+def build_train_kwargs(args):
+    """Assemble the kwargs dict passed to model.train(**kwargs).
 
-    # Echo the knobs that matter so the run is reproducible from logs alone.
-    print(f'[train] data={args.src}')
-    print(f'[train] project={args.project} name={args.name}')
-    print(f'[train] model={args.model} epochs={args.epochs} imgsz={args.imgsz} '
-          f'batch={args.batch} optimizer={args.optimizer}')
-    print(f'[train] HSV hue={args.hsv_h} sat={args.hsv_s} val={args.hsv_v}')
-    print(f'[train] geom rot={args.degrees} trans={args.translate} scale={args.scale} '
-          f'shear={args.shear} persp={args.perspective} flipud={args.flipud} fliplr={args.fliplr}')
-    print(f'[train] mix mosaic={args.mosaic} mixup={args.mixup} '
-          f'copy_paste={args.copy_paste} erase={args.erasing} auto_aug={args.auto_augment}')
-
+    Pulled out of main() so it can be unit-tested without a GPU or a real
+    YOLO model load. Any argparse.Namespace with the same attributes as
+    arg_parse() produces works (e.g. a hand-built one in tests).
+    """
     kwargs = dict(
         data=args.src,
         epochs=args.epochs,
@@ -159,6 +151,32 @@ def main():
         erasing=args.erasing,
         auto_augment=args.auto_augment if args.auto_augment and args.auto_augment.lower() != 'none' else None,
     )
+    if args.freeze is not None:
+        kwargs['freeze'] = args.freeze
+    return kwargs
+
+
+def main():
+    args = arg_parse()
+    if not os.path.isfile(args.src):
+        print(f'ERROR: data yaml not found: {args.src}', file=sys.stderr)
+        sys.exit(1)
+    os.makedirs(args.project, exist_ok=True)
+
+    # Echo the knobs that matter so the run is reproducible from logs alone.
+    print(f'[train] data={args.src}')
+    print(f'[train] project={args.project} name={args.name}')
+    print(f'[train] model={args.model} epochs={args.epochs} imgsz={args.imgsz} '
+          f'batch={args.batch} optimizer={args.optimizer}')
+    print(f'[train] HSV hue={args.hsv_h} sat={args.hsv_s} val={args.hsv_v}')
+    print(f'[train] geom rot={args.degrees} trans={args.translate} scale={args.scale} '
+          f'shear={args.shear} persp={args.perspective} flipud={args.flipud} fliplr={args.fliplr}')
+    print(f'[train] mix mosaic={args.mosaic} mixup={args.mixup} '
+          f'copy_paste={args.copy_paste} erase={args.erasing} auto_aug={args.auto_augment}')
+    if args.freeze is not None:
+        print(f'[train] freeze={args.freeze}')
+
+    kwargs = build_train_kwargs(args)
 
     model = YOLO(args.model)
     model.train(**kwargs)

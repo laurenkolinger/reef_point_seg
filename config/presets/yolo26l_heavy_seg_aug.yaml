@@ -1,0 +1,88 @@
+# ======================================================================
+# Step 6 training preset — "YOLO 26l-seg, heavy seg augmentation"
+#
+# Why this preset exists:
+#   Benchmarking yolo11l-seg on 18aprilpm_PA, the best-performing ablation
+#   was `ablation_02_heavy_seg_aug2`: mAP50-95(M) 0.5782 at epoch 573
+#   (vs ~0.555 for the baseline aug recipe). The aug recipe — not the
+#   model size — was the lever that moved the needle.
+#
+#   A parallel yolo26m-seg run with baseline aug tied the 11l baseline
+#   (~0.554) but did not beat the heavy-aug result, so we could not tell
+#   whether the 26 architecture itself is helping.
+#
+#   This preset isolates the architecture by pairing yolo26l-seg with the
+#   heavy_seg_aug2 hyperparameters. If the final mAP50-95(M) clears
+#   ~0.58, the architecture is pulling weight and 26l becomes the new
+#   default; if it lands at ~0.55-0.57, stick with 11l + heavy aug.
+#
+# How to use:
+#   Step 6 panel → "Load preset" dropdown → select this file → Import.
+#   Values below overwrite the current form fields; anything not listed
+#   here is left alone. Tweak anything afterward before Start Training.
+# ======================================================================
+
+_meta:
+  name: "YOLO 26l-seg — heavy seg aug"
+  description: "yolo26l-seg + ablation_02 heavy aug recipe (mosaic 0.7 / mixup 0.2 / copy_paste 0.4). Architecture-vs-recipe isolation test; target mAP50-95(M) ~0.58+."
+
+params:
+  # ── Core training ─────────────────────────────────────────────────
+  model: yolo26l-seg.pt           # The architecture under test. Swap to
+                                  # yolo26m-seg.pt for a smaller/faster run
+                                  # with the same aug recipe.
+  epochs: 1000                    # Hard cap. Patience almost always ends runs earlier.
+  imgsz: 1024                     # Pixels (square). Matches every comparison run on this dataset.
+  batch: 16                       # Multiple of 2 for DDP. Bump to 32 only on a single GPU w/ ≥32 GB.
+
+  # ── Split & patience ──────────────────────────────────────────────
+  valid_ratio: 0.2
+  test_ratio: 0.1
+  min_samples: 10
+  patience: 150                   # Heavy aug peaks late (ablation_02 best @ epoch 573).
+
+  # ── Device ────────────────────────────────────────────────────────
+  device: "0,1"                   # DDP across both GPUs. Matches the 11l ablations and the
+                                  # yolo26m-seg baseline so wall-clock is comparable. Drop to
+                                  # "0" if you want a parallel experiment on GPU 1.
+
+  # ── Color / HSV jitter ────────────────────────────────────────────
+  hsv_h: 0.03                     # Underwater-safe. NOT the COCO 0.2 default.
+  hsv_s: 0.7
+  hsv_v: 0.5
+  bgr: 0.0
+
+  # ── Geometric augmentation ────────────────────────────────────────
+  degrees: 10
+  translate: 0.1
+  scale: 0.5
+  shear: 0
+  perspective: 0
+  flipud: 0.5
+  fliplr: 0.5
+
+  # ── Sample mixing (the heavy_seg_aug2 recipe) ─────────────────────
+  # These are the three knobs that separated ablation_02 from the rest.
+  # Raising them further tends to hurt; lowering brings you back to baseline.
+  mosaic: 0.7                     # ↑ from 0.5 (baseline).
+  mixup: 0.2                      # ↑ from 0.1.
+  cutmix: 0.0
+  copy_paste: 0.4                 # ↑ from 0.2. Biggest lever for sparse single-class seg.
+  copy_paste_mode: flip
+  close_mosaic: 10                # Disable mosaic during the last N epochs ("polish" phase).
+
+  # ── Optimizer & LR schedule ───────────────────────────────────────
+  optimizer: auto
+  lr0: 0.01                       # Matches ablation_02. (ablation_05/06 tried 0.005 and did
+                                  # not beat 0.01 — don't drop lr0 unless you also raise epochs.)
+  lrf: 0.01
+  momentum: 0.937
+  weight_decay: 0.0005
+  warmup_epochs: 3.0
+  cos_lr: true
+
+  # ── Loss weights ──────────────────────────────────────────────────
+  box: 7.5
+  cls: 0.5
+  dfl: 1.5
+  label_smoothing: 0.0

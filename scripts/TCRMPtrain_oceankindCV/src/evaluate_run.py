@@ -41,7 +41,25 @@ import shutil
 import sys
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+
+# Atlantic Standard Time, fixed UTC-4, no daylight saving.
+AST = timezone(timedelta(hours=-4))
+
+
+def ast_now():
+    """AST ISO-8601 timestamp, second precision, e.g. 2026-06-25T08:13:42-04:00."""
+    return datetime.now(AST).isoformat(timespec='seconds')
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Rounds-ledger / promotion-gate constants (env-overridable)
+# ─────────────────────────────────────────────────────────────────────────
+
+GATE_MAP_EPS = float(os.environ.get('TCRMP_GATE_MAP_EPS', '0.005'))
+GATE_CLASS_DROP = float(os.environ.get('TCRMP_GATE_CLASS_DROP', '0.05'))
+GATE_RECALL_DROP = float(os.environ.get('TCRMP_GATE_RECALL_DROP', '0.05'))
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -61,6 +79,7 @@ def arg_parse():
     p.add_argument('--preview_count', type=int, default=8)
     p.add_argument('--pdf_export_dir', default='')
     p.add_argument('--device', default='0')
+    p.add_argument('--rounds_dir', default='', help='if set, append/update a row in {rounds_dir}/rounds.csv')
     return p.parse_args()
 
 
@@ -2662,6 +2681,316 @@ def build_pdf(report_md, metrics, ctx, previews, args, pdf_path):
 # ─────────────────────────────────────────────────────────────────────────
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Rounds ledger: active-learning loop bookkeeping across retraining rounds
+#
+# append_round_row() is a PURE function: it takes a run_dir + a metrics dict
+# already shaped like extract_metrics()'s output (plus a dataset_dir) and
+# writes/updates one row of {rounds_dir}/rounds.csv. It never imports
+# ultralytics, so it is directly unit-testable with fabricated metrics.
+# ─────────────────────────────────────────────────────────────────────────
+
+ROUNDS_CSV_HEADER = [
+    'round', 'at', 'run_name', 'run_dir', 'base_model', 'split_pinned',
+    'n_train', 'n_valid', 'n_test',
+    'map50_M', 'map50_95_M', 'recall_M', 'precision_M',
+    'map50_B', 'map50_95_B',
+    'gate_map', 'gate_class', 'gate_recall',
+    'per_class_json',
+]
+
+
+def _read_rounds_csv(rounds_csv_path):
+    """Return list of row dicts (possibly empty) from an existing rounds.csv."""
+    if not os.path.isfile(rounds_csv_path):
+        return []
+    with open(rounds_csv_path, newline='') as f:
+        return list(_csv.DictReader(f))
+
+
+def _write_rounds_csv(rounds_csv_path, rows):
+    os.makedirs(os.path.dirname(rounds_csv_path), exist_ok=True)
+    with open(rounds_csv_path, 'w', newline='') as f:
+        w = _csv.DictWriter(f, fieldnames=ROUNDS_CSV_HEADER)
+        w.writeheader()
+        for row in rows:
+            w.writerow({k: row.get(k, '') for k in ROUNDS_CSV_HEADER})
+
+
+def _run_name_of(run_dir):
+    return os.path.basename(os.path.normpath(run_dir))
+
+
+def _base_model_of(run_dir):
+    """Read `model:` out of run_dir/args.yaml. Returns '' if unavailable."""
+    args_yaml = os.path.join(run_dir, 'args.yaml')
+    if not os.path.isfile(args_yaml):
+        return ''
+    try:
+        import yaml
+        with open(args_yaml) as f:
+            data = yaml.safe_load(f) or {}
+        return str(data.get('model', '') or '')
+    except Exception:
+        return ''
+
+
+def _count_images(dataset_dir, split_dirname):
+    p = os.path.join(dataset_dir, split_dirname, 'images')
+    if not os.path.isdir(p):
+        return 0
+    try:
+        return sum(1 for n in os.listdir(p)
+                   if n.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')))
+    except Exception:
+        return 0
+
+
+def _split_pinned(dataset_dir):
+    """True only when split_manifest.json exists and holdout_mode == 'transect'.
+    adopted-random / pinned-random / transect-degraded / missing manifest -> False."""
+    manifest_path = os.path.join(dataset_dir, 'split_manifest.json')
+    if not os.path.isfile(manifest_path):
+        return False
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        return manifest.get('holdout_mode') == 'transect'
+    except Exception:
+        return False
+
+
+def _classes_trained(dataset_dir):
+    """Set of class NAMES that have at least one labeled instance in the
+    train split. Used so gate_class ignores classes never trained on (a
+    never-trained class reporting ~0 AP must not trip the regression gate)."""
+    data_yaml_path = os.path.join(dataset_dir, 'data.yaml')
+    names = {}
+    if os.path.isfile(data_yaml_path):
+        try:
+            import yaml
+            with open(data_yaml_path) as f:
+                data = yaml.safe_load(f) or {}
+            raw_names = data.get('names') or {}
+            if isinstance(raw_names, dict):
+                names = {int(k): v for k, v in raw_names.items() if v is not None}
+            elif isinstance(raw_names, list):
+                names = {i: v for i, v in enumerate(raw_names) if v is not None}
+        except Exception:
+            names = {}
+
+    train_lbl_dir = os.path.join(dataset_dir, 'train', 'labels')
+    present_ids = set()
+    if os.path.isdir(train_lbl_dir):
+        for fn in os.listdir(train_lbl_dir):
+            if not fn.lower().endswith('.txt'):
+                continue
+            try:
+                with open(os.path.join(train_lbl_dir, fn)) as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if not parts:
+                            continue
+                        try:
+                            present_ids.add(int(parts[0]))
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+
+    if names:
+        return {nm for cid, nm in names.items() if cid in present_ids}
+    # No data.yaml names available: fall back to whatever class ids we saw,
+    # stringified, so the caller still has something to compare against.
+    return {str(cid) for cid in present_ids}
+
+
+def _load_champion(rounds_dir):
+    champion_path = os.path.join(rounds_dir, 'champion.json')
+    if not os.path.isfile(champion_path):
+        return None
+    try:
+        with open(champion_path) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _select_baseline_row(rows, champion):
+    """Baseline for gate comparisons: the CURRENT champion's row if one
+    exists (matched by run_dir, falling back to run_name), else the row
+    with the highest map50_95_M among existing rows. NEVER the last-
+    appended row by position. Returns a row dict or None."""
+    if champion:
+        champ_run_dir = champion.get('run_dir')
+        champ_run_name = _run_name_of(champ_run_dir) if champ_run_dir else None
+        for row in rows:
+            if champ_run_dir and row.get('run_dir') == champ_run_dir:
+                return row
+            if champ_run_name and row.get('run_name') == champ_run_name:
+                return row
+        # Champion recorded but no matching row yet (e.g. champion.json
+        # fixture points at a run not present in rounds.csv): fall back to
+        # its own recorded map50_95_M as a synthetic baseline row.
+        if 'map50_95_M' in champion:
+            return {'map50_95_M': champion['map50_95_M'], 'recall_M': None,
+                    'per_class_json': None}
+
+    best = None
+    best_val = None
+    for row in rows:
+        try:
+            v = float(row.get('map50_95_M', ''))
+        except Exception:
+            continue
+        if best_val is None or v > best_val:
+            best_val = v
+            best = row
+    return best
+
+
+def _prev_per_class(rounds_dir, baseline_row):
+    """Load the baseline row's per-class AP(M) vector (class name -> AP(M))
+    from its sidecar JSON. Returns {} if unavailable."""
+    if not baseline_row:
+        return {}
+    rel = baseline_row.get('per_class_json')
+    if not rel:
+        return {}
+    path = rel if os.path.isabs(rel) else os.path.join(rounds_dir, rel)
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return {k: v.get('mask_map50_95') for k, v in data.items()
+                if isinstance(v, dict) and v.get('mask_map50_95') is not None}
+    except Exception:
+        return {}
+
+
+def _class_code(name):
+    """Short gate-report code for a class name: first letters of each
+    whitespace/underscore-separated token, uppercased (e.g. 'Porites
+    astreoides' -> 'PA'). Falls back to the first two chars."""
+    tokens = [t for t in name.replace('_', ' ').split(' ') if t]
+    if len(tokens) >= 2:
+        return ''.join(t[0] for t in tokens[:4]).upper()
+    return name[:2].upper() if name else '??'
+
+
+def append_round_row(rounds_dir, run_dir, metrics_dict, dataset_dir):
+    """Write/update one row of {rounds_dir}/rounds.csv for this run's eval.
+
+    Pure function: no ultralytics import, no network/model access. Idempotent
+    and lineage-aware:
+      - keyed by run_name (basename of run_dir): re-evaluating an existing
+        run UPDATES its row in place, never appends a duplicate.
+      - gate baseline is the CURRENT champion (champion.json) if present,
+        else the highest-mAP prior round; never the last-appended row.
+
+    Returns the row dict that was written.
+    """
+    os.makedirs(rounds_dir, exist_ok=True)
+    rounds_csv_path = os.path.join(rounds_dir, 'rounds.csv')
+    rows = _read_rounds_csv(rounds_csv_path)
+
+    run_name = _run_name_of(run_dir)
+
+    existing_idx = None
+    for i, row in enumerate(rows):
+        if row.get('run_name') == run_name or row.get('run_dir') == run_dir:
+            existing_idx = i
+            break
+
+    # Baseline is selected from rows EXCLUDING this run's own prior row (if
+    # any), so a re-eval of the same run never baselines against itself.
+    other_rows = [r for i, r in enumerate(rows) if i != existing_idx]
+    champion = _load_champion(rounds_dir)
+    baseline_row = _select_baseline_row(other_rows, champion)
+
+    overall = metrics_dict.get('overall', {})
+    per_class = metrics_dict.get('per_class', {})
+
+    pinned = _split_pinned(dataset_dir)
+
+    round_num = existing_idx + 1 if existing_idx is not None else len(rows) + 1
+    per_class_rel = f'rounds/round_{round_num}_per_class.json'
+    per_class_abs = os.path.join(rounds_dir, per_class_rel)
+    os.makedirs(os.path.dirname(per_class_abs), exist_ok=True)
+    with open(per_class_abs, 'w') as f:
+        json.dump(per_class, f, indent=2, default=str)
+
+    map50_95_m = overall.get('mask_map50_95')
+    recall_m = overall.get('mask_recall')
+
+    if not pinned:
+        gate_map = gate_class = gate_recall = 'unpinned'
+    elif baseline_row is None:
+        gate_map = gate_class = gate_recall = 'pass'
+    else:
+        try:
+            prev_map = float(baseline_row.get('map50_95_M'))
+        except Exception:
+            prev_map = None
+        if prev_map is None or map50_95_m is None:
+            gate_map = 'pass'
+        else:
+            gate_map = 'pass' if map50_95_m >= prev_map - GATE_MAP_EPS else 'fail'
+
+        try:
+            prev_recall = float(baseline_row.get('recall_M'))
+        except Exception:
+            prev_recall = None
+        if prev_recall is None or recall_m is None:
+            gate_recall = 'pass'
+        else:
+            gate_recall = 'pass' if recall_m >= prev_recall - GATE_RECALL_DROP else 'flag'
+
+        trained_classes = _classes_trained(dataset_dir)
+        prev_per_class = _prev_per_class(rounds_dir, baseline_row)
+        dropped_codes = []
+        for cls_name, cur_d in per_class.items():
+            if trained_classes and cls_name not in trained_classes:
+                continue  # never-trained class: ignore per FIX 9 / Task 7 rule 5b
+            cur_ap = cur_d.get('mask_map50_95') if isinstance(cur_d, dict) else None
+            prev_ap = prev_per_class.get(cls_name)
+            if cur_ap is None or prev_ap is None:
+                continue
+            if prev_ap - cur_ap > GATE_CLASS_DROP:
+                dropped_codes.append(_class_code(cls_name))
+        gate_class = 'pass' if not dropped_codes else 'flag:' + ','.join(sorted(dropped_codes))
+
+    row = {
+        'round': round_num,
+        'at': ast_now(),
+        'run_name': run_name,
+        'run_dir': run_dir,
+        'base_model': _base_model_of(run_dir),
+        'split_pinned': 'true' if pinned else 'false',
+        'n_train': _count_images(dataset_dir, 'train'),
+        'n_valid': _count_images(dataset_dir, 'valid'),
+        'n_test': _count_images(dataset_dir, 'test'),
+        'map50_M': overall.get('mask_map50'),
+        'map50_95_M': map50_95_m,
+        'recall_M': recall_m,
+        'precision_M': overall.get('mask_precision'),
+        'map50_B': overall.get('box_map50'),
+        'map50_95_B': overall.get('box_map50_95'),
+        'gate_map': gate_map,
+        'gate_class': gate_class,
+        'gate_recall': gate_recall,
+        'per_class_json': per_class_rel,
+    }
+
+    if existing_idx is not None:
+        rows[existing_idx] = row
+    else:
+        rows.append(row)
+
+    _write_rounds_csv(rounds_csv_path, rows)
+    return row
+
 
 # ─────────────────────────────────────────────────────────────────────────
 # Main
@@ -2694,6 +3023,16 @@ def main():
         json.dump({'metrics': metrics, 'context': ctx, 'previews': previews,
                    'args': vars(args), 'generated_at': datetime.now().isoformat()},
                   f, indent=2, default=str)
+
+    if args.rounds_dir:
+        try:
+            row = append_round_row(args.rounds_dir, args.run_dir, metrics, args.dataset_dir)
+            print(f"[eval] rounds ledger updated: round={row['round']} "
+                  f"gate_map={row['gate_map']} gate_class={row['gate_class']} "
+                  f"gate_recall={row['gate_recall']}")
+        except Exception as e:
+            traceback.print_exc()
+            print(f'[eval] rounds ledger update failed: {e}')
 
     print('[eval] building PDF...')
     try:

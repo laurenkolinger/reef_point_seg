@@ -210,30 +210,32 @@ def main():
 
     # Prompt to overwrite if output dir exists (skipped when --yes is passed,
     # e.g. orchestrator-driven runs have no TTY and can't answer input()).
-    if os.path.exists(train_out_dir) or os.path.exists(valid_out_dir) or os.path.exists(test_out_dir):
+    _needs_wipe = (
+        os.path.exists(train_out_dir)
+        or os.path.exists(valid_out_dir)
+        or os.path.exists(test_out_dir)
+    )
+    if _needs_wipe:
         print("\n⚠️  WARNING: Output Directory Exists, data will be overwritten ", end="")
-
         if args.assume_yes:
             print("(--yes set, continuing)\n")
         elif input("Y/N?:").lower() != "y":
             print("❌ EXITING...\n")
-            exit()
+            sys.exit()
         else:
             print("✅ CONTINUING...\n")
-            # Delete existing output dir
-            try:
-                if os.path.exists(train_out_dir): 
-                    shutil.rmtree(train_out_dir)
-                    print(f"🗑️  Removed existing {train_out_dir}")
-                if os.path.exists(valid_out_dir): 
-                    shutil.rmtree(valid_out_dir)
-                    print(f"🗑️  Removed existing {valid_out_dir}")
-                if os.path.exists(test_out_dir): 
-                    shutil.rmtree(test_out_dir)
-                    print(f"🗑️  Removed existing {test_out_dir}")
-            except OSError as error:
-                print(f"❌ Error: {error}")
-                sys.exit()
+        # Delete existing output dirs so the subsequent makedirs() succeeds.
+        # This runs for BOTH --yes and interactive-yes paths; previously it
+        # was nested under the interactive branch only, which produced
+        # "[Errno 17] File exists" under --yes.
+        try:
+            for _d in (train_out_dir, valid_out_dir, test_out_dir):
+                if os.path.exists(_d):
+                    shutil.rmtree(_d)
+                    print(f"🗑️  Removed existing {_d}")
+        except OSError as error:
+            print(f"❌ Error: {error}")
+            sys.exit()
 
     print("\n📂 Creating output directories...")
     print(f"🚂 TRAIN: {train_out_dir}")
