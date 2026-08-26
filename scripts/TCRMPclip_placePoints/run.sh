@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the TCRMP Route Chosen Images app and open browser
+# Launch the TCRMP Place Points app and open browser
 cd "$(dirname "$0")"
 
 PORT="${1:-5065}"

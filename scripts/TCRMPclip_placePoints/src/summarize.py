@@ -54,7 +54,11 @@ def summarize_year(year, sam_json_path):
         site = m.group(1).upper()
         transect = int(m.group(2))
         pts = entry.get('points', [])
-        labeled = sum(1 for p in pts if p.get('species'))
+        # REVIEW points carry species 'REVIEW' but are not a real ID — exclude
+        # them from the species-found count so the percentage isn't inflated.
+        labeled = sum(1 for p in pts
+                      if p.get('species') and p.get('species') != 'REVIEW'
+                      and not p.get('review'))
 
         sites[site]['transects'].add(transect)
         sites[site]['images'] += 1

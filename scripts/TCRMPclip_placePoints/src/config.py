@@ -1,5 +1,5 @@
 """
-Configuration for TCRMPclip_routeChosenImages.
+Configuration for TCRMPclip_placePoints.
 
 Edit paths here and rerun. All settings are logged to output/config_log.json
 on each run so you know what was used.
@@ -8,7 +8,7 @@ on each run so you know what was used.
 import os
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_DIR = os.path.dirname(_SCRIPT_DIR)                # scripts/TCRMPclip_routeChosenImages
+_PROJECT_DIR = os.path.dirname(_SCRIPT_DIR)                # scripts/TCRMPclip_placePoints
 _SCRIPTS_DIR = os.path.dirname(_PROJECT_DIR)               # scripts/
 _REPO_DIR = os.path.dirname(_SCRIPTS_DIR)                  # seg_AI_img_full_april2026
 _SUPPORTING = os.path.join(_REPO_DIR, 'supporting_data')
@@ -25,10 +25,10 @@ TARGET_SPECIES_ONLY = 1
 SELECTED_FRAMES = os.path.join(
     _SCRIPTS_DIR, 'TCRMPcvr_chooseImages', 'output', 'selected_frames.csv')
 
-# TCRMP_clip root (READ-ONLY source images). Production reads from Dropbox;
-# offline testing can point at supporting_data/TCRMP_clip (2018+2024 subset).
-# Orchestrator passes TCRMP_CLIP_DIR via env var.
-CLIP_DIR = '/home/bizon/UVI Dropbox/SMITH LAB TEAM FOLDER/TCRMP/TCRMP_clip'
+# TCRMP_clip root (READ-ONLY source images). Reads from the local
+# supporting_data/TCRMP_clip tree (the full year/period set). The orchestrator
+# may override via the TCRMP_CLIP_DIR env var.
+CLIP_DIR = os.path.join(_SUPPORTING, 'TCRMP_clip')
 
 # CPC point coords (pre-2020 frames) — static index in supporting_data.
 CPC_DIR = os.path.join(_SUPPORTING, 'cpc_all')

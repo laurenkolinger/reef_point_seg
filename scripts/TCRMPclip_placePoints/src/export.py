@@ -19,6 +19,64 @@ import shutil
 from PIL import Image, ImageDraw, ImageFont
 
 
+LORES_LONG_EDGE = 1920
+
+
+def _lores_twin(raw_src):
+    """Deterministic lores path for an ALREADY-RESOLVED raw image.
+
+    Mirrors the source tree `.../TCRMP_clip/...` into `.../TCRMP_clip_lores/...`
+    and suffixes the stem with `_lores.jpg` (exactly how make_lores_variants.py
+    writes them). Keyed off the real resolved path, NOT a reconstructed frame
+    name, so it works for every on-disk naming variant (canonical, folder-encoded,
+    `251104_...`, `(1)` copies) and never has to "guess" a name. Returns None if
+    the path is not under a TCRMP_clip tree."""
+    if not raw_src:
+        return None
+    marker = os.sep + "TCRMP_clip" + os.sep
+    if marker not in raw_src:
+        return None
+    mirrored = raw_src.replace(marker, os.sep + "TCRMP_clip_lores" + os.sep, 1)
+    stem, _ = os.path.splitext(mirrored)
+    return stem + "_lores.jpg"
+
+
+def lores_delivery(raw_src, lores_mode, long_edge=LORES_LONG_EDGE):
+    """Decide which image file to deliver for a frame, and the point-scale factor.
+
+    Returns (path_to_copy, scale). NEVER skips a frame:
+      - lores_mode off, or no resolvable image  -> (raw_src, 1.0)
+      - image already <= long_edge              -> (raw_src, 1.0)  # already low-res
+      - >long_edge and a lores twin exists       -> (twin, long_edge/orig_long)
+      - >long_edge but no lores twin on disk     -> (raw_src, 1.0)  # deliver original
+
+    So with lores_mode on, EVERY selected frame is delivered at <= long_edge when
+    a lores copy exists, and otherwise falls back to the original rather than
+    being dropped."""
+    if not (lores_mode and raw_src and os.path.isfile(raw_src)):
+        return raw_src, 1.0
+    try:
+        with Image.open(raw_src) as im:
+            ow, oh = im.size
+    except Exception:
+        return raw_src, 1.0
+    if max(ow, oh) <= long_edge:
+        return raw_src, 1.0
+    twin = _lores_twin(raw_src)
+    if twin and os.path.isfile(twin):
+        # Scale from the twin's ACTUAL saved dimensions (not a recomputed 1920
+        # constant), so the point scale is self-correcting even if the twin was
+        # generated at a different long edge, and there is no magic number shared
+        # across files to drift out of sync.
+        try:
+            with Image.open(twin) as tim:
+                tw, th = tim.size
+        except Exception:
+            return raw_src, 1.0
+        return twin, max(tw, th) / float(max(ow, oh))
+    return raw_src, 1.0
+
+
 # ── Font loading (shared with test image generation) ─────────────────
 
 def _load_fonts(size_large=48, size_small=28):
@@ -158,6 +216,12 @@ def build_sam_entry(raw_filename, points):
         }
         if pt.get('added'):
             sp['added'] = True
+        # REVIEW points flow downstream as their OWN positive SAM3 prompt (not a
+        # negative refinement like non-target '?'); step 5 segments them, tags
+        # the mask REVIEW, and ships it to the expert-review site (never trained).
+        if pt.get('review') or pt.get('species_code') == 'REVIEW':
+            sp['review'] = True
+            sp['species'] = 'REVIEW'
         sam_points.append(sp)
     return {
         'raw_image': f"raw/{raw_filename}",
@@ -187,7 +251,7 @@ CSV_FIELDNAMES = [
 ]
 
 
-def export_batch(detections, export_dir, log_fn=None):
+def export_batch(detections, export_dir, log_fn=None, lores_mode=None):
     """Export a batch of detections to year-organized output.
 
     Args:
@@ -197,13 +261,18 @@ def export_batch(detections, export_dir, log_fn=None):
             {label, x, y, species_code, species_name, category, ...}
         export_dir: root export directory (year subdirs created within)
         log_fn: optional callable(msg) for logging
+        lores_mode: deliver every >1920px frame via its lores twin (points
+            scaled to match). None -> read env TCRMP_LORES_MODE ("1" = on).
 
     Returns:
         dict with export stats: {exported_raw, exported_pts, point_records,
-                                  test_images, years_affected}
+                                  test_images, years_affected, lores_delivered}
     """
     if log_fn is None:
         log_fn = lambda msg: None
+
+    if lores_mode is None:
+        lores_mode = os.environ.get('TCRMP_LORES_MODE', '') == '1'
 
     # Group detections by year
     by_year = {}
@@ -217,6 +286,7 @@ def export_batch(detections, export_dir, log_fn=None):
         'point_records': 0,
         'test_images': 0,
         'years_affected': set(),
+        'lores_delivered': 0,
     }
 
     for year, year_dets in sorted(by_year.items()):
@@ -245,11 +315,21 @@ def export_batch(detections, export_dir, log_fn=None):
             raw_src = det.get('raw_path')
             points = det['points']
 
-            # Copy raw image (READ from import, WRITE to export)
-            if raw_src and os.path.exists(raw_src):
+            # Lores delivery: key off the ALREADY-RESOLVED raw path (no name
+            # guessing, so nothing is ever skipped). A >1920px frame is copied
+            # from its lores twin and its points scaled to match; an already-small
+            # frame or one with no lores twin is copied as-is (scale 1.0).
+            copy_src, _scale = lores_delivery(raw_src, lores_mode)
+            if _scale != 1.0:
+                points = [dict(p, x=round(float(p['x']) * _scale),
+                               y=round(float(p['y']) * _scale)) for p in points]
+                stats['lores_delivered'] += 1
+
+            # Copy the chosen image (lores twin or original) into the export.
+            if copy_src and os.path.exists(copy_src):
                 dst = os.path.join(raw_dir, raw_name)
                 if not os.path.exists(dst):
-                    shutil.copy2(raw_src, dst)
+                    shutil.copy2(copy_src, dst)
                 stats['exported_raw'] += 1
 
             # Build SAM entry
@@ -271,7 +351,9 @@ def export_batch(detections, export_dir, log_fn=None):
                     if getattr(_cfg, 'TARGET_SPECIES_ONLY', 0):
                         from app import ALL_TARGET_SPECIES
                         test_points = [p for p in points
-                                       if p.get('species_code', '') in ALL_TARGET_SPECIES]
+                                       if p.get('species_code', '') in ALL_TARGET_SPECIES
+                                       or p.get('review')
+                                       or p.get('species_code') == 'REVIEW']
                     generate_test_image(raw_dst, test_points, test_out)
                     stats['test_images'] += 1
                 except Exception as e:

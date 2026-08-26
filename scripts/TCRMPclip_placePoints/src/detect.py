@@ -32,7 +32,19 @@ def get_ocr_reader(gpu=True):
     global _ocr_reader
     if _ocr_reader is None:
         import easyocr
-        _ocr_reader = easyocr.Reader(['en'], gpu=gpu, verbose=False)
+        # Offline-first: the default Reader() urlretrieve-downloads any missing
+        # or md5-corrupt model at first use, which crashes an OCR run when the
+        # lab network's DNS is down (it drops out intermittently). The models
+        # are cached in ~/.EasyOCR/model after first install, so construct with
+        # downloads disabled and only fall back to a downloading constructor
+        # when the offline one fails (fresh machine or corrupt model file).
+        try:
+            _ocr_reader = easyocr.Reader(['en'], gpu=gpu, verbose=False,
+                                         download_enabled=False)
+        except Exception as exc:
+            print(f"[detect] offline EasyOCR init failed ({exc}); "
+                  f"retrying with downloads enabled.", flush=True)
+            _ocr_reader = easyocr.Reader(['en'], gpu=gpu, verbose=False)
     return _ocr_reader
 
 

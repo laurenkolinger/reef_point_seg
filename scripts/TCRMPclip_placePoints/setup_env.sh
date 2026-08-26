@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────
-# TCRMPclip_routeChosenImages - Environment Setup
+# TCRMPclip_placePoints - Environment Setup
 # Creates a local conda env for unified CPC+OCR point review.
 #
 # Requirements: conda, NVIDIA GPU with CUDA 12.8+ driver
@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_DIR="${SCRIPT_DIR}/env"
 PYTHON_VERSION="3.11"
 
-echo "=== TCRMPclip_routeChosenImages Environment Setup ==="
+echo "=== TCRMPclip_placePoints Environment Setup ==="
 echo "Location: ${SCRIPT_DIR}"
 echo ""
 
