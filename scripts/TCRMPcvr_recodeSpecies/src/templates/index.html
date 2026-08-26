@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TCRMP Species Recode</title>
+<title>TCRMP Label Recode</title>
 <!-- VICARIUS-aligned typography: Inter body, Space Mono code,
      Syne headings, Silkscreen reserved for small pixel kickers only. -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -119,6 +119,23 @@
     font-family: 'Inter', sans-serif;
   }
   .bar label input { margin-right: 6px; accent-color: var(--magenta); }
+
+  /* Secondary bar for bulk-exclude + unexcluded-only toggles */
+  .bar.bulk {
+    margin-top: -4px;
+    padding: 8px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border-dim);
+    border-radius: var(--radius);
+  }
+  .bar.bulk label {
+    font-family: 'Space Mono', 'Consolas', monospace;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+  }
+  .bar.bulk label:hover { color: var(--pink); }
 
   .wrap {
     max-height: calc(100vh - 240px);
@@ -252,13 +269,26 @@
 </head>
 <body>
 
-<h1>TCRMP Species Recode</h1>
+<h1>TCRMP Label Recode</h1>
 <p class="sub">{{ "{:,}".format(total_points) }} points &middot; {{ rows|length }} codes &middot;
   Edit <b>new_code / new_name / new_category</b>, check <b>exclude</b> to omit from top-10 ranking, then Save &amp; Recode.</p>
 
 <div class="bar">
-  <input type="text" id="filter" placeholder="Filter by code or name...">
-  <label><input type="checkbox" id="changedOnly"> Show changed only</label>
+  <input type="text" id="filter" placeholder="Filter by code or name..."
+         title="Case-insensitive substring filter. Matches against code, name, and category columns as you type.">
+  <label title="Hides rows whose new_code / new_name / new_category match the original. Useful for reviewing just the edits you've made.">
+    <input type="checkbox" id="changedOnly"> Show changed only
+  </label>
+</div>
+
+<!-- Bulk-exclude shortcut + togglable unexcluded-only filter -->
+<div class="bar bulk">
+  <label title="Bulk-ticks every Exclude checkbox. Then uncheck individual rows to keep them -- a fast way to whittle a long list down to the handful you care about.">
+    <input type="checkbox" id="startAllExcluded"> Start all excluded
+  </label>
+  <label title="Hides excluded rows so you can focus on the labels you're keeping. Toggle off to see the full list again.">
+    <input type="checkbox" id="unexcludedOnly"> Show unexcluded only
+  </label>
 </div>
 
 <div class="wrap">
@@ -277,10 +307,14 @@
   <td>{{ r.category }}</td>
   <td>{{ r.name }}</td>
   <td class="ct">{{ "{:,}".format(r.count) }}</td>
-  <td><input class="rm" data-field="new_code" data-orig="{{ r.code }}" value="{{ r.code }}"></td>
-  <td><input class="rm" data-field="new_name" data-orig="{{ r.name }}" value="{{ r.name }}"></td>
-  <td><input class="rm" data-field="new_category" data-orig="{{ r.category }}" value="{{ r.category }}"></td>
-  <td class="chk"><input type="checkbox" class="excl" data-code="{{ r.code }}"></td>
+  <td><input class="rm" data-field="new_code" data-orig="{{ r.code }}" value="{{ r.code }}"
+             title="Edit to rename or merge this label. Setting new_code different from the original merges all points from the old code into the new code."></td>
+  <td><input class="rm" data-field="new_name" data-orig="{{ r.name }}" value="{{ r.name }}"
+             title="Edit to rename or merge this label. Setting new_code different from the original merges all points from the old code into the new code."></td>
+  <td><input class="rm" data-field="new_category" data-orig="{{ r.category }}" value="{{ r.category }}"
+             title="Edit to rename or merge this label. Setting new_code different from the original merges all points from the old code into the new code."></td>
+  <td class="chk"><input type="checkbox" class="excl" data-code="{{ r.code }}"
+             title="Omit this label from the Top-10 ranking. The label still exists after recode; it just doesn't count in the summary."></td>
 </tr>
 {% endfor %}
 </tbody>
@@ -288,12 +322,15 @@
 </div>
 
 <div class="bottom">
-  <button class="btn" id="saveBtn">Save &amp; Recode</button>
+  <button class="btn" id="saveBtn"
+          title="Apply all pending renames/merges and the exclude set. Writes recoded all_points + master_codes + a remap_log.json timestamped audit trail to output/.">
+    Save &amp; Recode
+  </button>
   <span class="changes"><span id="cnt">0</span> changes pending</span>
 </div>
 
 <div id="results">
-  <h2>Top 10 Corals by Point Count</h2>
+  <h2>Top 10 Labels by Point Count</h2>
   <table class="r-table" id="top10table"></table>
   <p class="files" id="filesInfo"></p>
 </div>
@@ -302,24 +339,44 @@
 const tbody = document.getElementById('tbody');
 const filterEl = document.getElementById('filter');
 const changedOnlyEl = document.getElementById('changedOnly');
+const startAllExcludedEl = document.getElementById('startAllExcluded');
+const unexcludedOnlyEl = document.getElementById('unexcludedOnly');
 const cntEl = document.getElementById('cnt');
 const saveBtn = document.getElementById('saveBtn');
 
 function applyFilters() {
   const q = filterEl.value.toLowerCase();
   const co = changedOnlyEl.checked;
+  const uo = unexcludedOnlyEl.checked;
   for (const tr of tbody.rows) {
     const code = tr.dataset.code.toLowerCase();
     const name = tr.dataset.name;
     const cat = tr.dataset.cat;
     const matchQ = !q || code.includes(q) || name.includes(q) || cat.includes(q);
     const hasChange = tr.querySelector('.rm.changed') !== null;
-    tr.style.display = (matchQ && (!co || hasChange)) ? '' : 'none';
+    const isExcluded = tr.querySelector('.excl').checked;
+    const passExcl = !uo || !isExcluded;
+    tr.style.display = (matchQ && (!co || hasChange) && passExcl) ? '' : 'none';
   }
 }
 
 filterEl.addEventListener('input', applyFilters);
 changedOnlyEl.addEventListener('change', applyFilters);
+unexcludedOnlyEl.addEventListener('change', applyFilters);
+
+// Bulk-exclude toggle: operate on the FULL table, not just visible rows.
+// Fires a synthetic 'change' event on each checkbox so the existing per-row
+// styling handler (tr.excluded toggle) stays the single source of truth.
+startAllExcludedEl.addEventListener('change', function() {
+  const target = startAllExcludedEl.checked;
+  for (const cb of tbody.querySelectorAll('.excl')) {
+    if (cb.checked !== target) {
+      cb.checked = target;
+      cb.dispatchEvent(new Event('change', {bubbles: true}));
+    }
+  }
+  applyFilters();
+});
 
 // Change detection
 tbody.addEventListener('input', function(e) {
@@ -327,13 +384,15 @@ tbody.addEventListener('input', function(e) {
     const inp = e.target;
     inp.classList.toggle('changed', inp.value !== inp.dataset.orig);
     updateCount();
+    applyFilters();
   }
 });
 
-// Exclude checkbox styling
+// Exclude checkbox styling + live filter refresh
 tbody.addEventListener('change', function(e) {
   if (e.target.classList.contains('excl')) {
     e.target.closest('tr').classList.toggle('excluded', e.target.checked);
+    applyFilters();
   }
 });
 
@@ -396,7 +455,7 @@ saveBtn.addEventListener('click', async function() {
 
     // Show results
     const t10 = document.getElementById('top10table');
-    t10.innerHTML = '<tr><th>#</th><th>Code</th><th>Species</th><th style="text-align:right">Points</th></tr>' +
+    t10.innerHTML = '<tr><th>#</th><th>Code</th><th>Label</th><th style="text-align:right">Points</th></tr>' +
       data.top10_corals.map(c =>
         `<tr><td>${c.rank}</td><td><strong>${c.code}</strong></td><td>${c.name}</td><td style="text-align:right">${c.count.toLocaleString()}</td></tr>`
       ).join('');
