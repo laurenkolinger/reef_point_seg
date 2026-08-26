@@ -69,6 +69,9 @@ SUITES=(
   "py TCRMPclip_combinedAnnotate/tests/test_segment_app.py"
   # SAM3 must boot from the local HF cache when lab DNS is down (2026-08-13).
   "py TCRMPclip_combinedAnnotate/tests/test_sam_offline_load.py"
+  # Cached SAM3 tracker backfill (2026-08-26): second boot skips the CPU
+  # video-model load; TCRMP_SAM3_REAL_PARITY=1 adds the real-checkpoint check.
+  "py TCRMPclip_combinedAnnotate/tests/test_sam_tracker_cache.py"
   "py TCRMPclip_combinedAnnotate/tests/test_draw_clip.py"
   "py TCRMPclip_combinedAnnotate/tests/test_batch_flow.py"
   "py TCRMPclip_combinedAnnotate/tests/test_provenance.py"

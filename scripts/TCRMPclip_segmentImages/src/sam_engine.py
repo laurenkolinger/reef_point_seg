@@ -14,12 +14,26 @@ masks, IoU pinned ~0.5). _load_image_tracker() backfills those nested weights.
 The exemplar/detector model (Sam3Model) loads cleanly and needs no backfill.
 """
 
+import hashlib
 import logging
+import os
+
 import numpy as np
 import torch
 from PIL import Image
 
 log = logging.getLogger(__name__)
+
+# How the most recent _load_image_tracker() call obtained full tracker weights:
+#   "flat"           checkpoint layout was already flat, nothing to backfill
+#   "cache"          backfill weights read from the module-local cache file
+#   "video_backfill" full Sam3VideoModel loaded on CPU to lift nested weights
+# Tests and boot logs read this to prove the cache path is actually taken.
+LAST_TRACKER_LOAD_PATH = None
+
+# Bump when the cache payload layout changes; stale files are simply ignored
+# (the fingerprint no longer matches) and rewritten on the next backfill.
+_TRACKER_CACHE_VERSION = 1
 
 
 def _hf_load(cls, *args, **kwargs):
@@ -39,6 +53,87 @@ def _hf_load(cls, *args, **kwargs):
         return cls.from_pretrained(*args, **kwargs)
 
 
+def _tracker_cache_dir():
+    """Module-local cache dir for the merged tracker weights. Lives under
+    supporting_data/ (already gitignored, like the model_weights it sits
+    beside). Overridable for tests via TCRMP_SAM3_CACHE_DIR."""
+    override = os.environ.get("TCRMP_SAM3_CACHE_DIR")
+    if override:
+        return override
+    src = os.path.dirname(os.path.abspath(__file__))          # .../<app>/src
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(src)))
+    return os.path.join(repo, "supporting_data", "sam3_cache")
+
+
+def _fingerprint_from_stats(snapshot_id, weight_stats, dtype):
+    """Pure cache-key derivation: sha256 over the resolved checkpoint snapshot
+    id (the HF commit hash directory name), each weight file's (name, size,
+    mtime_ns), the requested dtype, and the cache schema version. Any checkpoint
+    update, re-download, or dtype change yields a new key, so a stale cache can
+    never be loaded silently."""
+    h = hashlib.sha256()
+    h.update(f"v{_TRACKER_CACHE_VERSION}|{snapshot_id}|{dtype}".encode())
+    for name, size, mtime_ns in sorted(weight_stats):
+        h.update(f"|{name}:{size}:{mtime_ns}".encode())
+    return h.hexdigest()[:16]
+
+
+def _checkpoint_fingerprint(dtype):
+    """Fingerprint the locally-cached facebook/sam3 checkpoint. Returns a hex
+    key, or None when the snapshot cannot be resolved offline (then the cache
+    is simply skipped; the video backfill path still works)."""
+    try:
+        from huggingface_hub import snapshot_download
+        snap = snapshot_download("facebook/sam3", local_files_only=True)
+        stats = []
+        for fn in sorted(os.listdir(snap)):
+            if fn.endswith((".safetensors", ".bin")) or fn == "config.json":
+                st = os.stat(os.path.join(snap, fn))
+                stats.append((fn, st.st_size, st.st_mtime_ns))
+        if not stats:
+            return None
+        return _fingerprint_from_stats(os.path.basename(snap), stats, dtype)
+    except Exception as exc:
+        log.warning("SAM3 checkpoint fingerprint unavailable (%s); "
+                    "tracker weight cache disabled for this boot.", exc)
+        return None
+
+
+def _load_cached_backfill(cache_path, missing):
+    """Load the cached backfill state_dict if it covers every missing key.
+    Returns the state_dict or None (corrupt/stale cache is deleted)."""
+    try:
+        sd = torch.load(cache_path, map_location="cpu", weights_only=True)
+        if missing <= set(sd.keys()):
+            return sd
+        log.warning("SAM3 tracker cache %s does not cover %d missing keys; "
+                    "rebuilding.", cache_path, len(missing - set(sd.keys())))
+    except Exception as exc:
+        log.warning("SAM3 tracker cache %s unreadable (%s); rebuilding.",
+                    cache_path, exc)
+    try:
+        os.remove(cache_path)
+    except OSError:
+        pass
+    return None
+
+
+def _write_cached_backfill(cache_path, sd, missing):
+    """Persist only the backfilled (originally-missing) keys — ~9 MB instead of
+    the full multi-GB tracker state. Atomic write so a killed boot can never
+    leave a truncated cache behind."""
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        payload = {k: v for k, v in sd.items() if k in missing}
+        tmp = cache_path + ".tmp"
+        torch.save(payload, tmp)
+        os.replace(tmp, cache_path)
+        log.info("SAM3 tracker backfill cached to %s (%d keys).",
+                 cache_path, len(payload))
+    except Exception as exc:
+        log.warning("Could not write SAM3 tracker cache %s: %s", cache_path, exc)
+
+
 def _load_image_tracker(dtype):
     """Build the single-image SAM3 point/box tracker with fully-loaded weights.
 
@@ -48,7 +143,14 @@ def _load_image_tracker(dtype):
     We build the standalone tracker (correct single-image forward + processor
     interface), then backfill the nested weights from the video checkpoint and
     fail loudly if any originally-missing weight is left unrecovered.
+
+    The backfill result is cached (Task 1.2, 2026-08-26): the first boot
+    persists the recovered keys to a module-local file keyed by the checkpoint
+    fingerprint; later boots load that file directly and skip the CPU-side
+    Sam3VideoModel load entirely (the slow part on a cold page cache: a second
+    multi-GB safetensors read plus full video-model construction).
     """
+    global LAST_TRACKER_LOAD_PATH
     from transformers import Sam3TrackerModel, Sam3VideoModel
 
     model, info = _hf_load(
@@ -57,7 +159,22 @@ def _load_image_tracker(dtype):
     )
     missing = set(info.get("missing_keys", []))
     if not missing:
+        LAST_TRACKER_LOAD_PATH = "flat"
         return model  # checkpoint layout already flat; nothing to backfill
+
+    key = _checkpoint_fingerprint(dtype)
+    cache_path = (os.path.join(_tracker_cache_dir(), f"tracker_backfill_{key}.pt")
+                  if key else None)
+
+    if cache_path and os.path.isfile(cache_path):
+        sd = _load_cached_backfill(cache_path, missing)
+        if sd is not None:
+            model.load_state_dict(sd, strict=False)
+            LAST_TRACKER_LOAD_PATH = "cache"
+            log.info("SAM3 tracker weights backfilled from cache %s "
+                     "(%d keys; video-model load skipped).",
+                     cache_path, len(missing))
+            return model
 
     # Load the video checkpoint on CPU just to lift the tracker submodule.
     video = _hf_load(Sam3VideoModel, "facebook/sam3", torch_dtype=dtype)
@@ -77,8 +194,11 @@ def _load_image_tracker(dtype):
             "init (e.g. %s). The facebook/sam3 checkpoint layout may have "
             "changed." % (len(unrecovered), sorted(unrecovered)[:3])
         )
+    LAST_TRACKER_LOAD_PATH = "video_backfill"
     log.info("SAM3 tracker weights backfilled from sam3_video checkpoint "
              "(%d nested keys recovered).", len(missing))
+    if cache_path:
+        _write_cached_backfill(cache_path, sd, missing)
     return model
 
 
