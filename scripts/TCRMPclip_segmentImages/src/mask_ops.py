@@ -300,6 +300,221 @@ def union_masks(mask_a, mask_b):
     return mask_a | mask_b
 
 
+# Placeholder species codes that are NOT a real organism ID. Two masks both
+# carrying one of these are DIFFERENT organisms awaiting different expert IDs —
+# unioning them would silently destroy one mask's distinct review state, so they
+# are excluded from same-id grouping entirely.
+PLACEHOLDER_SPECIES = frozenset({'REVIEW', '', '?'})
+
+
+def _merge_review_state(survivor, absorbed):
+    """Carry an absorbed mask's expert-review state onto the survivor when two
+    real same-species masks are unioned.
+
+    - review_uid: keep the survivor's if set, else adopt the absorbed one's.
+    - reviews[]: concatenate, de-duplicated by (reviewer, code, confidence, at).
+    - expert_id: prefer an existing expert_id over none (an accepted ID must not
+      be silently downgraded to pending).
+
+    Returns True on success, or False to signal the caller MUST REFUSE to merge
+    this pair (two DIFFERENT accepted expert_ids conflict — merging would force
+    a single organism to claim two different expert codes).
+    """
+    s_eid = survivor.get('expert_id')
+    a_eid = absorbed.get('expert_id')
+
+    def _accepted_code(eid):
+        if isinstance(eid, dict) and eid.get('mode') == 'EXPERT':
+            return eid.get('code')
+        return None
+
+    s_code = _accepted_code(s_eid)
+    a_code = _accepted_code(a_eid)
+    if s_code is not None and a_code is not None and s_code != a_code:
+        # Two conflicting expert-accepted IDs — refuse.
+        return False
+
+    # review_uid: survivor wins if present, else inherit the absorbed one's.
+    if not survivor.get('review_uid') and absorbed.get('review_uid'):
+        survivor['review_uid'] = absorbed['review_uid']
+
+    # reviews[]: concatenate + de-dup (keep order, survivor first).
+    s_reviews = survivor.get('reviews') or []
+    a_reviews = absorbed.get('reviews') or []
+    if a_reviews:
+        seen = set()
+        combined_reviews = []
+        for r in list(s_reviews) + list(a_reviews):
+            key = (
+                (r or {}).get('reviewer'), (r or {}).get('code'),
+                (r or {}).get('confidence'), (r or {}).get('at'),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            combined_reviews.append(r)
+        survivor['reviews'] = combined_reviews
+
+    # expert_id: prefer an accepted ID over none (never downgrade).
+    if s_code is None and a_code is not None:
+        survivor['expert_id'] = a_eid
+        # Promote the accepted species/name/category alongside the expert_id so
+        # the survivor stays coloured expert-green (mirrors reload semantics).
+        for f in ('species', 'name', 'category'):
+            if f in absorbed and absorbed.get(f) is not None:
+                survivor[f] = absorbed[f]
+
+    # Carry the pending-review flag if either side was flagged.
+    if absorbed.get('review') and not survivor.get('review'):
+        survivor['review'] = True
+
+    return True
+
+
+def merge_overlapping_same_id(masks, image_height, image_width,
+                              simplify_epsilon=0.001, min_area=1):
+    """Union OVERLAPPING masks that share the same REAL species/label into one.
+
+    On-demand counterpart to the segmentation-time `larger_wins` overlap
+    resolution (which DROPS the smaller of two overlapping same-species masks
+    instead of unioning them). Here we keep every pixel: any two non-rejected
+    masks with the same REAL `species` that physically overlap are unioned, the
+    survivor's geometry recomputed, and the absorbed mask removed.
+
+    Placeholder species (REVIEW / '' / '?') are NEVER grouped together: two
+    REVIEW masks are distinct organisms awaiting different expert IDs, so
+    unioning them would silently drop one mask's review_uid / reviews[] /
+    expert_id. They pass through untouched.
+
+    When real same-species masks ARE unioned, the survivor PRESERVES the review
+    state of every absorbed mask: review_uid is carried forward, reviews[] are
+    merged, and an accepted expert_id is never downgraded (prefer expert over
+    pending). If two members carry DIFFERENT accepted expert_ids, that pair is
+    REFUSED (left unmerged) and reported via the returned `refused` list.
+
+    Operates only on the binary footprints decoded from each mask's RLE, so it
+    needs no SAM3 engine. Rejected masks are left untouched (they are "deleted"
+    in the operator's mental model). The lowest-id mask in each overlap group
+    becomes the survivor so its identity/colour stays stable.
+
+    Args:
+        masks: list of mask dicts (each with 'id', 'species', 'rle', 'status').
+        image_height, image_width: frame dimensions for RLE decode.
+        simplify_epsilon: polygon simplification for the recomputed survivor.
+        min_area: drop a unioned survivor below this many pixels (defensive).
+
+    Returns:
+        (new_masks, merged_count, refused) where new_masks is the rebuilt mask
+        list, merged_count is how many masks were absorbed (removed), and
+        refused is a list of {'survivor_id', 'absorbed_id', 'reason'} describing
+        any pair left unmerged due to conflicting accepted expert IDs.
+    """
+    h, w = int(image_height), int(image_width)
+    if h <= 0 or w <= 0:
+        return masks, 0, []
+
+    # Decode every live mask once. Rejected masks pass through untouched.
+    # Masks carrying a placeholder species also pass through (see above).
+    live = []   # (mask_dict, binary)
+    passthrough = []
+    for m in masks:
+        if m.get('status') == 'rejected':
+            passthrough.append(m)
+            continue
+        if (m.get('species') or '') in PLACEHOLDER_SPECIES:
+            passthrough.append(m)
+            continue
+        rle = m.get('rle')
+        if not rle:
+            passthrough.append(m)
+            continue
+        try:
+            binary = np.asarray(rle_decode(rle, shape=(h, w)), dtype=bool)
+        except Exception:
+            passthrough.append(m)
+            continue
+        live.append([m, binary])
+
+    # Group by REAL species, union any pair that overlaps (transitive via a
+    # simple union-find over indices within each species bucket).
+    by_species = {}
+    for i, (m, _b) in enumerate(live):
+        by_species.setdefault(m.get('species', ''), []).append(i)
+
+    parent = list(range(len(live)))
+
+    def _find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a, b):
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+
+    for _species, idxs in by_species.items():
+        for a in range(len(idxs)):
+            for b in range(a + 1, len(idxs)):
+                ia, ib = idxs[a], idxs[b]
+                if (live[ia][1] & live[ib][1]).any():
+                    _union(ia, ib)
+
+    # Collapse each group: lowest-id member is the survivor.
+    groups = {}
+    for i in range(len(live)):
+        groups.setdefault(_find(i), []).append(i)
+
+    new_masks = []
+    merged_count = 0
+    refused = []
+    for root, members in groups.items():
+        if len(members) == 1:
+            new_masks.append(live[members[0]][0])
+            continue
+        # Pick the survivor = lowest mask id (stable identity/colour).
+        members.sort(key=lambda i: live[i][0].get('id', 0))
+        survivor, surv_bin = live[members[0]]
+        combined = surv_bin.copy()
+        absorbed_members = []
+        for i in members[1:]:
+            absorbed = live[i][0]
+            # Refuse to merge a pair with conflicting accepted expert IDs —
+            # carry the review state first so any conflict is detected before we
+            # touch geometry.
+            if not _merge_review_state(survivor, absorbed):
+                refused.append({
+                    'survivor_id': survivor.get('id'),
+                    'absorbed_id': absorbed.get('id'),
+                    'reason': 'conflicting accepted expert IDs',
+                })
+                # Leave this member as its own mask (un-absorbed).
+                new_masks.append(absorbed)
+                continue
+            combined |= live[i][1]
+            absorbed_members.append(i)
+            merged_count += 1
+        if not absorbed_members:
+            # Every other member was refused — survivor stands alone unchanged.
+            new_masks.append(survivor)
+            continue
+        if int(combined.sum()) < min_area:
+            # Degenerate — keep originals rather than lose them.
+            new_masks.append(survivor)
+            for i in absorbed_members:
+                new_masks.append(live[i][0])
+            merged_count -= len(absorbed_members)
+            continue
+        update_mask_geometry(survivor, combined, simplify_epsilon)
+        new_masks.append(survivor)
+
+    new_masks.extend(passthrough)
+    # Preserve a stable order: by id ascending (matches list-pane sort intent).
+    new_masks.sort(key=lambda m: (m.get('id', 0)))
+    return new_masks, merged_count, refused
+
+
 # ── Build full mask dict from SAM3 result ───────────────────────────
 
 def build_mask_dict(mask_id, binary_mask, score, point_info, source_type="auto",

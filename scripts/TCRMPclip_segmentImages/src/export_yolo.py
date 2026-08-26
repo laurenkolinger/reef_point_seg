@@ -11,6 +11,7 @@ Produces:
 import json
 import logging
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -56,6 +57,55 @@ def mask_to_yolo_line(polygon_norm, class_id):
     return f'{class_id} {coords}'
 
 
+def _project_id_from_dir(export_dir):
+    """Nearest run_* path segment of export_dir (with the run_ prefix
+    stripped so it matches project.json's unprefixed 'id' field, which is
+    what the label-coverage matrix keys registry rows by), else its parent
+    folder name. Mirrors app.py's _derive_project_id (kept local here since
+    export_yolo must not import the Flask app module)."""
+    parts = os.path.abspath(export_dir).split(os.sep)
+    for p in reversed(parts):
+        if p.startswith('run_'):
+            return p[len('run_'):]
+    return os.path.basename(os.path.dirname(os.path.abspath(export_dir))) or 'project'
+
+
+def _upsert_registry_for_frame(filename, seg, export_dir):
+    """Upsert every mask of this frame (accepted AND rejected) into the
+    permanent cross-project mask registry, keyed by canonical uid. Never
+    raises: a registry hiccup must never break the export.
+    """
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        scripts_dir = os.path.dirname(os.path.dirname(here))
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from _reefreview.mask_registry import MaskRegistry, build_registry_record
+
+        registry_root = os.environ.get('TCRMP_MASK_REGISTRY_DIR') or MaskRegistry().root
+        reg = MaskRegistry(root=registry_root)
+        # The orchestrator stamps TCRMP_PROJECT_ID (project.json's unprefixed
+        # 'id') into os.environ for the annotator apps; the label-coverage
+        # matrix (_matrix/builder.py) groups/looks up registry rows by that
+        # SAME unprefixed id. Prefer it so registry writes and matrix reads
+        # agree on the key; fall back to the (also unprefixed) dir-derived id
+        # for a standalone launch with no orchestrator env.
+        project_id = os.environ.get('TCRMP_PROJECT_ID') or _project_id_from_dir(export_dir)
+        project_name = project_id
+
+        for mask in seg.get('masks', []):
+            try:
+                rec = build_registry_record(filename, mask, project_id, project_name)
+                if rec is None:
+                    continue
+                reg.upsert(rec)
+            except Exception as e:
+                log.warning("Registry upsert failed for a mask in %s (non-fatal): %s",
+                            filename, e)
+    except Exception as e:
+        log.warning("Registry upsert failed for %s (non-fatal): %s", filename, e)
+
+
 def update_data_yaml(export_dir, class_map):
     """Write/overwrite data.yaml with current class mapping."""
     # Sort by class_id for deterministic output
@@ -97,16 +147,38 @@ def export_batch(segmentations, export_dir, class_map, symlink=True):
 
     exported_images = 0
     exported_masks = 0
+    blocked_unlabeled = 0
     new_classes = 0
 
     for filename, seg in segmentations.items():
+        # Feed the cross-project canonical mask registry: every mask of this
+        # frame (accepted AND rejected) gets a census row, keyed on its
+        # content-stable uid. Runs before any skip guard below so a frame
+        # whose masks are all rejected (or otherwise excluded from export)
+        # still lands in the registry. Never fatal to the export.
+        _upsert_registry_for_frame(filename, seg, export_dir)
+
         image_path = seg.get('image_path_abs')
         if not image_path or not os.path.exists(image_path):
             log.warning("Skipping %s: image not found at %s", filename, image_path)
             continue
 
-        # Filter to accepted masks only
-        accepted = [m for m in seg.get('masks', []) if m.get('status') == 'accepted']
+        # Filter to accepted masks only. REVIEW-flagged masks are NEVER trained —
+        # they go to the expert-review export instead, so exclude them here even
+        # if a user accepted one.
+        accepted = [m for m in seg.get('masks', [])
+                    if m.get('status') == 'accepted'
+                    and not m.get('review') and m.get('species') != 'REVIEW']
+
+        # Backstop: an accepted mask with no species assigned must never reach
+        # the training set (it would silently become a dropped/uncounted
+        # label). Hard-skip it here and count it so nothing vanishes
+        # unreported.
+        unlabeled = [m for m in accepted if (m.get('species', '') or '') == '']
+        if unlabeled:
+            blocked_unlabeled += len(unlabeled)
+            accepted = [m for m in accepted if (m.get('species', '') or '') != '']
+
         if not accepted:
             continue
 
@@ -151,11 +223,13 @@ def export_batch(segmentations, export_dir, class_map, symlink=True):
     log_path = os.path.join(export_dir, 'export_log.txt')
     with open(log_path, 'a') as f:
         f.write(f'{datetime.now().isoformat()} — exported {exported_images} images, '
-                f'{exported_masks} masks, {new_classes} new classes\n')
+                f'{exported_masks} masks, {blocked_unlabeled} blocked-unlabeled, '
+                f'{new_classes} new classes\n')
 
     stats = {
         'exported_images': exported_images,
         'exported_masks': exported_masks,
+        'blocked_unlabeled': blocked_unlabeled,
         'new_classes': new_classes,
         'total_classes': len(class_map),
     }

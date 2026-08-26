@@ -6,7 +6,12 @@ Uses HuggingFace Transformers API (facebook/sam3):
   - Sam3TrackerModel + Sam3TrackerProcessor for point/box prompts
   - Sam3Model + Sam3Processor for exemplar (visual) scanning
 
-Reference: /mnt/rip/vicarius_drive/hopper/ai_sam3_friday13march26/scripts/
+Checkpoint note: facebook/sam3 ships as a `sam3_video` checkpoint. The
+single-image point/box tracker weights are nested under `tracker_model.*`,
+so a plain Sam3TrackerModel.from_pretrained() only partially loads and leaves
+the prompt encoder + mask decoder at random init (degenerate full-image/empty
+masks, IoU pinned ~0.5). _load_image_tracker() backfills those nested weights.
+The exemplar/detector model (Sam3Model) loads cleanly and needs no backfill.
 """
 
 import logging
@@ -15,6 +20,66 @@ import torch
 from PIL import Image
 
 log = logging.getLogger(__name__)
+
+
+def _hf_load(cls, *args, **kwargs):
+    """Offline-first from_pretrained. The lab network's DNS drops out
+    intermittently, and transformers raises instead of falling back to the
+    local cache when its online probe fails mid-load — which killed the
+    annotator at boot (2026-08-13) even with all of facebook/sam3 cached.
+    Try the cache first; touch the network only when something is genuinely
+    missing (fresh machine, first download). The cache-only flag is merged,
+    not passed positionally, so a caller passing local_files_only itself can
+    never raise TypeError and silently defeat the offline-first attempt."""
+    try:
+        return cls.from_pretrained(*args, **{**kwargs, "local_files_only": True})
+    except Exception as exc:
+        log.warning("Cache-only load failed for %s (%s); retrying online.",
+                    cls.__name__, exc)
+        return cls.from_pretrained(*args, **kwargs)
+
+
+def _load_image_tracker(dtype):
+    """Build the single-image SAM3 point/box tracker with fully-loaded weights.
+
+    facebook/sam3 is a `sam3_video` checkpoint whose tracker weights live under
+    `tracker_model.*`. Sam3TrackerModel.from_pretrained() therefore loads the
+    vision encoder but leaves the prompt encoder + mask decoder at random init.
+    We build the standalone tracker (correct single-image forward + processor
+    interface), then backfill the nested weights from the video checkpoint and
+    fail loudly if any originally-missing weight is left unrecovered.
+    """
+    from transformers import Sam3TrackerModel, Sam3VideoModel
+
+    model, info = _hf_load(
+        Sam3TrackerModel, "facebook/sam3", torch_dtype=dtype,
+        output_loading_info=True,
+    )
+    missing = set(info.get("missing_keys", []))
+    if not missing:
+        return model  # checkpoint layout already flat; nothing to backfill
+
+    # Load the video checkpoint on CPU just to lift the tracker submodule.
+    video = _hf_load(Sam3VideoModel, "facebook/sam3", torch_dtype=dtype)
+    prefix = "tracker_model."
+    sd = {
+        k[len(prefix):]: v
+        for k, v in video.state_dict().items()
+        if k.startswith(prefix)
+    }
+    del video
+    model.load_state_dict(sd, strict=False)
+
+    unrecovered = missing - set(sd.keys())
+    if unrecovered:
+        raise RuntimeError(
+            "SAM3 tracker weight load incomplete: %d weights left at random "
+            "init (e.g. %s). The facebook/sam3 checkpoint layout may have "
+            "changed." % (len(unrecovered), sorted(unrecovered)[:3])
+        )
+    log.info("SAM3 tracker weights backfilled from sam3_video checkpoint "
+             "(%d nested keys recovered).", len(missing))
+    return model
 
 
 class SAM3Engine:
@@ -28,12 +93,10 @@ class SAM3Engine:
 
         # Tracker model (point/box prompts)
         log.info("Loading SAM3 tracker model on %s...", self.device_tracker)
-        from transformers import Sam3TrackerModel, Sam3TrackerProcessor
+        from transformers import Sam3TrackerProcessor
 
-        self._tracker_proc = Sam3TrackerProcessor.from_pretrained("facebook/sam3")
-        self._tracker = Sam3TrackerModel.from_pretrained(
-            "facebook/sam3", torch_dtype=torch.bfloat16
-        ).to(self.device_tracker)
+        self._tracker_proc = _hf_load(Sam3TrackerProcessor, "facebook/sam3")
+        self._tracker = _load_image_tracker(torch.bfloat16).to(self.device_tracker)
         self._tracker.eval()
         log.info("Tracker ready. GPU mem: %.2f GB",
                  torch.cuda.memory_allocated(int(self.device_tracker[-1])) / 1e9)
@@ -237,7 +300,7 @@ class SAM3Engine:
             return
         log.info("Loading SAM3 exemplar model on %s...", self.device_exemplar)
         from transformers import Sam3Model, Sam3Processor
-        self._text_proc = Sam3Processor.from_pretrained("facebook/sam3")
-        self._text_model = Sam3Model.from_pretrained("facebook/sam3").to(self.device_exemplar)
+        self._text_proc = _hf_load(Sam3Processor, "facebook/sam3")
+        self._text_model = _hf_load(Sam3Model, "facebook/sam3").to(self.device_exemplar)
         self._text_model.eval()
         log.info("Exemplar model ready.")

@@ -1,7 +1,7 @@
 """
 TCRMP Segment Images — SAM3 Segmentation Review App
 
-Takes sam_click_prompts.json + raw images from TCRMPclip_routeChosenImages
+Takes sam_click_prompts.json + raw images from TCRMPclip_placePoints
 and runs SAM3 segmentation on each point. Provides a review UI for
 accepting/rejecting/refining masks, then exports to YOLO Segmentation format.
 
@@ -26,7 +26,7 @@ import config as cfg
 from mask_ops import (
     rle_encode, rle_decode, mask_to_polygon, mask_bbox, mask_centroid,
     resolve_overlaps, merge_close_masks, check_no_overlap, union_masks,
-    build_mask_dict, update_mask_geometry,
+    build_mask_dict, update_mask_geometry, merge_overlapping_same_id,
 )
 from export_yolo import load_class_map, save_class_map, export_batch, update_data_yaml
 from render_overlay import render_segmentation_overlays
@@ -36,7 +36,18 @@ CORS(app)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(BASE_DIR)
-REPO_DIR = os.path.dirname(PROJECT_DIR)
+REPO_DIR = os.path.dirname(PROJECT_DIR)         # this is actually the scripts/ dir
+
+# Shared expert-review helpers live in scripts/_reefreview/. Import is guarded
+# so a problem there can never stop the core segmentation app from running.
+sys.path.insert(0, REPO_DIR)
+try:
+    from _reefreview import review_export as _review_export
+    _REVIEW_OK = True
+except Exception as _re_err:  # pragma: no cover
+    _review_export = None
+    _REVIEW_OK = False
+    print(f"[review] _reefreview unavailable, expert-review export disabled: {_re_err}")
 
 # Load target species from TCRMPcvr_chooseImages config
 def _load_target_species():
@@ -59,6 +70,13 @@ def _load_target_species():
     return ['OFRA', 'PA', 'OA', 'OFAV', 'AL', 'MC', 'AA']
 
 TARGET_SPECIES = _load_target_species()
+
+
+def _is_review(p):
+    """A REVIEW-flagged prompt/mask: segmented as its OWN positive mask (unlike
+    a non-target '?' point, which is a negative refinement click), shipped to the
+    expert-review site, and never trained."""
+    return bool(p.get('review')) or p.get('species', p.get('species_code', '')) == 'REVIEW'
 
 
 def _load_target_label_info():
@@ -280,6 +298,9 @@ def index():
                            ],
                            target_species=TARGET_SPECIES,
                            target_labels=ALL_TARGET_LABELS,
+                           default_review_dir=cfg.REVIEW_DIR,
+                           default_contacts=cfg.REVIEW_CONTACTS,
+                           orchestrator_url=_orchestrator_url(),
                            orchestrated=bool(os.environ.get('TCRMP_INPUT_DIR')))
 
 
@@ -297,6 +318,13 @@ def configure():
     session['categories'] = categories
     session['review_batch_size'] = batch_size
     session['shuffle'] = bool(data.get('shuffle', False))
+
+    # Expert-review settings: where to push the queue, and who gets the CSV.
+    session['review_dir'] = (data.get('review_dir') or cfg.REVIEW_DIR)
+    _raw_contacts = data.get('contacts', cfg.REVIEW_CONTACTS)
+    if isinstance(_raw_contacts, str):
+        _raw_contacts = _raw_contacts.split(',')
+    session['contacts'] = [c.strip() for c in (_raw_contacts or []) if c and c.strip()]
 
     os.makedirs(session['export_dir'], exist_ok=True)
 
@@ -359,20 +387,20 @@ def configure():
                 selected_points = [
                     p for p in img_data.get('points', [])
                     if p.get('species', p.get('species_code', '')) in TARGET_SPECIES
-                    or _is_non_target(p)
+                    or _is_non_target(p) or _is_review(p)
                 ]
             elif real_categories:
                 selected_points = [
                     p for p in img_data.get('points', [])
                     if p.get('category', '') in real_categories
-                    or _is_non_target(p)
+                    or _is_non_target(p) or _is_review(p)
                 ]
-                # If TARGET_SPECIES_ONLY config flag, further filter (but keep non-targets)
+                # If TARGET_SPECIES_ONLY config flag, further filter (but keep non-targets + review)
                 if getattr(cfg, 'TARGET_SPECIES_ONLY', 0):
                     selected_points = [
                         p for p in selected_points
                         if p.get('species', p.get('species_code', '')) in TARGET_SPECIES
-                        or _is_non_target(p)
+                        or _is_non_target(p) or _is_review(p)
                     ]
             else:
                 selected_points = list(img_data.get('points', []))
@@ -442,6 +470,11 @@ def resume():
     session['export_dir'] = os.path.abspath(data['export_dir'])
     session['review_batch_size'] = data.get('review_batch_size', cfg.REVIEW_BATCH_SIZE)
     session['shuffle'] = bool(data.get('shuffle', False))
+    session['review_dir'] = (data.get('review_dir') or cfg.REVIEW_DIR)
+    _rc = data.get('contacts', cfg.REVIEW_CONTACTS)
+    if isinstance(_rc, str):
+        _rc = _rc.split(',')
+    session['contacts'] = [c.strip() for c in (_rc or []) if c and c.strip()]
 
     export_dir = session['export_dir']
     if not os.path.isdir(export_dir):
@@ -557,6 +590,10 @@ def _process_single_image(engine, item, export_dir):
     img_w, img_h = engine.set_image(image_path)
 
     def _is_negative(p):
+        # REVIEW always wins: a point flagged for expert review must produce its
+        # OWN positive mask, even if it also carries non_target/'?' (precedence).
+        if _is_review(p):
+            return False
         return p.get('non_target') is True \
             or p.get('species', p.get('species_code', '')) == '?'
 
@@ -583,6 +620,12 @@ def _process_single_image(engine, item, export_dir):
                 simplify_epsilon=cfg.POLYGON_SIMPLIFY_EPSILON,
             )
             if mask_dict is not None:
+                # REVIEW prompts produce a real mask, but it is flagged so YOLO
+                # export skips it and the batch export ships it to the expert.
+                if _is_review(pt):
+                    mask_dict['review'] = True
+                    mask_dict['species'] = 'REVIEW'
+                    mask_dict['category'] = 'Review'
                 mask_dict['mask'] = result['mask']
                 raw_masks.append(mask_dict)
 
@@ -816,6 +859,29 @@ def update_masks(filename):
             mask['status'] = updates[mid]
 
     seg['reviewed'] = True
+
+    # Provenance: stamp per-(image,label) outcomes the moment the operator
+    # finishes this frame, and upsert the flat ledger. Non-fatal on failure.
+    from provenance import compute_label_outcomes, write_provenance_csv
+    _source = os.environ.get('TCRMP_PROVENANCE_SOURCE', 'step5')
+    _reviewer = session.get('reviewer', os.environ.get('TCRMP_REVIEWER', ''))
+    outcomes = compute_label_outcomes(
+        seg, TARGET_SPECIES, source=_source, reviewer=_reviewer)
+    seg['label_outcomes'] = outcomes
+    try:
+        write_provenance_csv(
+            session['export_dir'],
+            os.path.splitext(filename)[0],
+            outcomes,
+            cfg.PROJECT_ID or _derive_project_id(session['export_dir']))
+    except Exception as e:
+        log(f"[provenance] csv write failed for {filename} (non-fatal): {e}")
+    try:
+        save_segmentations(session['export_dir'], year,
+                           session['segmentations_by_year'].get(year, {}))
+    except Exception as e:
+        log(f"[provenance] seg flush failed for {filename}: {e}")
+
     return jsonify({'ok': True})
 
 
@@ -832,6 +898,29 @@ def accept_all_masks(filename):
             mask['status'] = 'accepted'
             count += 1
     seg['reviewed'] = True
+
+    # Provenance: stamp per-(image,label) outcomes the moment the operator
+    # finishes this frame, and upsert the flat ledger. Non-fatal on failure.
+    from provenance import compute_label_outcomes, write_provenance_csv
+    _source = os.environ.get('TCRMP_PROVENANCE_SOURCE', 'step5')
+    _reviewer = session.get('reviewer', os.environ.get('TCRMP_REVIEWER', ''))
+    outcomes = compute_label_outcomes(
+        seg, TARGET_SPECIES, source=_source, reviewer=_reviewer)
+    seg['label_outcomes'] = outcomes
+    try:
+        write_provenance_csv(
+            session['export_dir'],
+            os.path.splitext(filename)[0],
+            outcomes,
+            cfg.PROJECT_ID or _derive_project_id(session['export_dir']))
+    except Exception as e:
+        log(f"[provenance] csv write failed for {filename} (non-fatal): {e}")
+    try:
+        save_segmentations(session['export_dir'], year,
+                           session['segmentations_by_year'].get(year, {}))
+    except Exception as e:
+        log(f"[provenance] seg flush failed for {filename}: {e}")
+
     return jsonify({'ok': True, 'accepted': count})
 
 
@@ -1246,6 +1335,157 @@ def merge_masks(filename):
     return jsonify({'ok': True, 'mask': mask_a, 'removed_id': id_b})
 
 
+@app.route('/api/image/<path:filename>/merge_same_id', methods=['POST'])
+def merge_same_id(filename):
+    """Union OVERLAPPING masks that share the same species/label into one.
+
+    On-demand, because segmentation-time overlap resolution uses
+    OVERLAP_STRATEGY='larger_wins', which DROPS the smaller of two overlapping
+    same-species masks rather than unioning them — so two SAM3 clicks on one
+    colony can leave the colony split across masks (one trimmed away). This
+    endpoint rebuilds the current frame's masks by unioning every overlapping
+    same-species group via mask_ops.merge_overlapping_same_id (pure RLE math,
+    no SAM3 engine needed) and reports how many masks were merged away.
+    """
+    seg, year = _find_segmentation(filename)
+    if not seg:
+        return jsonify({'error': 'not found'}), 404
+
+    h = int(seg.get('image_height') or 0)
+    w = int(seg.get('image_width') or 0)
+    if not h or not w:
+        return jsonify({'error': 'missing image dimensions'}), 400
+
+    masks = seg.get('masks', [])
+    new_masks, merged, refused = merge_overlapping_same_id(
+        masks, h, w, simplify_epsilon=cfg.POLYGON_SIMPLIFY_EPSILON)
+    seg['masks'] = new_masks
+    return jsonify({
+        'ok': True,
+        'merged': merged,
+        'refused': refused,
+        'masks': new_masks,
+    })
+
+
+# Mask fields the operator owns locally — a disk reload must NOT clobber these
+# (they hold unsaved accept/reject decisions and geometry edits).
+_OPERATOR_OWNED_FIELDS = (
+    'status', 'rle', 'polygon_px', 'polygon_norm', 'bbox', 'area',
+    'refinement_clicks', 'draw_edits', 'source_type', 'source_x', 'source_y',
+)
+# Imported review fields a disk reload MAY merge in (expert pipeline output).
+_IMPORTED_REVIEW_FIELDS = ('reviews', 'expert_id', 'review_uid', 'review')
+
+
+def _merge_imported_review_fields(current_masks, disk_masks):
+    """Merge expert-review fields from a freshly-read disk copy onto the
+    operator's in-memory masks WITHOUT clobbering unsaved accept/reject or
+    geometry edits.
+
+    Matching key: review_uid first (stable across the expert round-trip), then
+    id. For each matched mask we copy the imported review fields
+    (reviews[], expert_id, review_uid, review) and — only when an expert
+    actually accepted an ID (expert_id.mode == 'EXPERT') — the accepted species
+    /name/category. Operator-owned fields (status, geometry, refinement) are
+    left exactly as the operator has them in memory.
+
+    Returns (merged_count, expert_count): masks that gained imported fields,
+    and of those how many carry an expert-accepted ID.
+    """
+    def _key_index(masks):
+        by_uid, by_id = {}, {}
+        for m in masks:
+            uid = m.get('review_uid')
+            if uid:
+                by_uid[uid] = m
+            if m.get('id') is not None:
+                by_id[m.get('id')] = m
+        return by_uid, by_id
+
+    disk_by_uid, disk_by_id = _key_index(disk_masks)
+
+    merged_count = 0
+    expert_count = 0
+    for cm in current_masks:
+        dm = None
+        uid = cm.get('review_uid')
+        if uid and uid in disk_by_uid:
+            dm = disk_by_uid[uid]
+        elif cm.get('id') in disk_by_id:
+            dm = disk_by_id[cm.get('id')]
+        if dm is None:
+            continue
+
+        touched = False
+        for f in _IMPORTED_REVIEW_FIELDS:
+            if f in dm and dm.get(f) != cm.get(f):
+                cm[f] = dm[f]
+                touched = True
+
+        eid = dm.get('expert_id')
+        if eid and isinstance(eid, dict) and eid.get('mode') == 'EXPERT':
+            # An expert accepted an ID — promote the accepted species/name/cat
+            # so step-5 colours it expert-green. This is review metadata, not an
+            # operator geometry edit, so it's safe to merge.
+            for f in ('species', 'name', 'category'):
+                if f in dm and dm.get(f) != cm.get(f):
+                    cm[f] = dm[f]
+                    touched = True
+            expert_count += 1
+        if touched:
+            merged_count += 1
+
+    return merged_count, expert_count
+
+
+@app.route('/api/reload_segmentations', methods=['POST'])
+def reload_segmentations():
+    """Re-read the current image's segmentations.json from disk and MERGE IN the
+    imported review/expert fields (reviews[], expert_id, species-when-accepted)
+    onto the in-memory masks by review_uid/id — WITHOUT clobbering the
+    operator's unsaved accept/reject or geometry edits.
+
+    Lets imported expert/pending colours appear without restarting the app:
+    after the importer (or a teammate) writes accepted IDs into the on-disk
+    segmentations.json, the operator hits "Reload IDs" and the freshly-confirmed
+    masks light up green / pending-amber in place.
+    """
+    data = request.json or {}
+    filename = data.get('filename')
+    if not filename:
+        return jsonify({'error': 'filename required'}), 400
+
+    seg, year = _find_segmentation(filename)
+    if not seg or year is None:
+        return jsonify({'error': 'not found'}), 404
+
+    export_dir = session.get('export_dir')
+    if not export_dir:
+        return jsonify({'error': 'no export dir configured'}), 400
+
+    disk_segs = load_segmentations(export_dir, year)
+    disk_seg = disk_segs.get(filename)
+    if not disk_seg:
+        return jsonify({'error': 'no on-disk segmentation for this frame'}), 404
+
+    merged_count, expert_count = _merge_imported_review_fields(
+        seg.get('masks', []), disk_seg.get('masks', []))
+
+    return jsonify({
+        'ok': True,
+        'merged': merged_count,
+        'expert': expert_count,
+        'masks': seg.get('masks', []),
+    })
+
+
+def _orchestrator_url():
+    """The orchestrator base URL the 'Done' button can return to, if launched
+    from the pipeline orchestrator (else '')."""
+    return os.environ.get('TCRMP_ORCHESTRATOR_URL', '').rstrip('/')
+
+
 def _build_exclusion_mask(seg, margin_px=20):
     """Build a binary mask of all accepted/pending regions + a margin buffer.
     This prevents exemplar candidates from being thin borders around existing masks."""
@@ -1513,6 +1753,57 @@ def add_mask(filename):
     return jsonify({'ok': True, 'mask': mask_dict})
 
 
+def _derive_project_id(export_dir):
+    parts = os.path.abspath(export_dir).split(os.sep)
+    for p in reversed(parts):
+        if p.startswith('run_'):
+            return p
+    return os.path.basename(os.path.dirname(os.path.abspath(export_dir))) or 'project'
+
+
+def _export_review_bundle(to_export, batch_files):
+    """Ship this batch's REVIEW-flagged masks to the expert-review repo +
+    library, and auto-relabel any that a past expert already identified.
+    Best-effort: any failure is logged and never breaks the YOLO export."""
+    if not _REVIEW_OK:
+        return None
+    try:
+        export_dir = session['export_dir']
+        contacts = session.get('contacts') or [
+            c.strip() for c in (cfg.REVIEW_CONTACTS or '').split(',') if c.strip()]
+        # Canonical identity from the orchestrator (project.json); fall back to
+        # the path-derived id (and id-as-name) when launched standalone.
+        project_id = cfg.PROJECT_ID or _derive_project_id(export_dir)
+        project_name = cfg.PROJECT_NAME or project_id
+        stats = _review_export.export_flagged_masks(
+            to_export, batch_files,
+            export_dir=export_dir,
+            review_dir=session.get('review_dir') or cfg.REVIEW_DIR,
+            repo_url=cfg.REVIEW_REPO_URL,
+            library_dir=cfg.EXPERT_LIBRARY_DIR or None,
+            master_codes=cfg.MASTER_CODES_CSV,
+            contacts=contacts,
+            featured_codes=TARGET_SPECIES,
+            project_id=project_id,
+            project_name=project_name,
+            pad_px=cfg.REVIEW_CROP_PAD_PX,
+            max_edge=cfg.REVIEW_MAX_EDGE,
+            full_max_edge=cfg.REVIEW_FULL_MAX_EDGE,
+            overlap_thresh=cfg.REVIEW_OVERLAP_THRESH,
+            git_push=cfg.REVIEW_GIT_PUSH,
+            log_fn=lambda m: log(m),
+        )
+        if stats.get('new') or stats.get('auto_relabeled') or stats.get('skipped_missing_image'):
+            log(f"[review] batch: +{stats.get('new', 0)} queued, "
+                f"{stats.get('auto_relabeled', 0)} auto-relabeled, "
+                f"{stats.get('skipped_missing_image', 0)} skipped (missing image), "
+                f"pushed={stats.get('pushed')}, pending={stats.get('pending_total')}")
+        return stats
+    except Exception as e:
+        log(f"[review] export bundle failed (non-fatal): {e}")
+        return {'error': str(e)}
+
+
 @app.route('/api/export_batch', methods=['POST'])
 def do_export():
     """Export current batch to YOLO Segmentation format."""
@@ -1537,11 +1828,30 @@ def do_export():
         symlink=cfg.SYMLINK_IMAGES,
     )
 
+    # Ship REVIEW-flagged masks to the expert-review GitHub-Pages repo + the
+    # permanent cross-project library (auto-relabels any already known to a past
+    # expert). Runs before flush_all so in-place relabels persist.
+    review_stats = _export_review_bundle(to_export, batch_files)
+
+    # Provenance: stamp/refresh per-(image,label) outcomes at export. The
+    # flat ledger upsert means this supersedes any earlier finish-time row.
+    from provenance import compute_label_outcomes, write_provenance_csv
+    _source = os.environ.get('TCRMP_PROVENANCE_SOURCE', 'step5')
+    _reviewer = session.get('reviewer', os.environ.get('TCRMP_REVIEWER', ''))
     # Mark exported and generate reviewed overlay images
     for fn in batch_files:
         seg, year = _find_segmentation(fn)
         if seg:
             seg['exported'] = True
+            outcomes = compute_label_outcomes(
+                seg, TARGET_SPECIES, source=_source, reviewer=_reviewer)
+            seg['label_outcomes'] = outcomes
+            try:
+                write_provenance_csv(
+                    export_dir, os.path.splitext(fn)[0], outcomes,
+                    cfg.PROJECT_ID or _derive_project_id(export_dir))
+            except Exception as e:
+                log(f"[provenance] csv write failed for {fn} (non-fatal): {e}")
             render_segmentation_overlays(seg, fn, export_dir, year, stage="reviewed")
 
     flush_all()
@@ -1549,10 +1859,10 @@ def do_export():
     # Rebuild review list: unexported first, exported at end
     _build_review_list()
 
-    return jsonify({
-        'ok': True,
-        **stats,
-    })
+    out = {'ok': True, **stats}
+    if review_stats:
+        out['review'] = review_stats
+    return jsonify(out)
 
 
 @app.route('/api/status')
@@ -1568,16 +1878,32 @@ def status():
             'exported': n_exported,
             'total_masks': n_masks,
         }
+    # Batch progress for the orchestrator panel: how many review batches are
+    # done vs. remaining. A "done" batch is one whose offset is fully behind the
+    # current review_offset (the operator has exported/advanced past it).
+    batch_size = session.get('review_batch_size') or cfg.REVIEW_BATCH_SIZE
+    n_review = len(session['review_files'])
+    total_batches = ((n_review + batch_size - 1) // batch_size) if n_review else 0
+    batches_done = (session['review_offset'] // batch_size) if batch_size else 0
+    if batches_done > total_batches:
+        batches_done = total_batches
+    batches_remaining = max(total_batches - batches_done, 0)
+
     return jsonify({
         'configured': session['configured'],
         'phase': session['phase'],
         'processing_done': session['processing_idx'],
         'processing_total': len(session['processing_queue']),
-        'review_total': len(session['review_files']),
+        'review_total': n_review,
         'review_offset': session['review_offset'],
-        'review_batch_size': session['review_batch_size'],
+        'review_batch_size': batch_size,
         'total_classes': len(session['class_map']),
         'year_stats': year_stats,
+        # Batch progress (orchestrator panel reads these).
+        'batches_total': total_batches,
+        'batches_done': batches_done,
+        'batches_remaining': batches_remaining,
+        'orchestrator_url': _orchestrator_url(),
     })
 
 

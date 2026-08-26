@@ -17,12 +17,12 @@ _REPO_DIR = os.path.dirname(_SCRIPTS_DIR)                  # seg_AI_img_full_apr
 # (reads species list from TCRMPcvr_chooseImages config)
 TARGET_SPECIES_ONLY = 1
 
-# ── Input (from routeChosenImages output) ───────────────────────────
+# ── Input (from Place Points output) ───────────────────────────
 # Standalone default is the sibling sub-tool's output/ dir. The orchestrator
 # overrides this via TCRMP_INPUT_DIR to point at the active project's
 # step4_routeChosenImages/ folder.
 INPUT_DIR = os.path.join(
-    _SCRIPTS_DIR, 'TCRMPclip_routeChosenImages', 'output')
+    _SCRIPTS_DIR, 'TCRMPclip_placePoints', 'output')
 
 # ── SAM3 Model (HuggingFace Transformers: facebook/sam3) ────────────
 
@@ -73,3 +73,82 @@ if _ma: MIN_MASK_AREA_PX = int(_ma)
 _md = os.environ.get('TCRMP_MERGE_DISTANCE_PX', '')
 if _md: MERGE_DISTANCE_PX = int(_md)
 OVERLAP_STRATEGY = os.environ.get('TCRMP_OVERLAP_STRATEGY', '') or OVERLAP_STRATEGY
+
+# ── Expert-review export (REVIEW-flagged masks) ──────────────────────
+# REVIEW masks are segmented like targets but never trained; at each batch
+# export they are given a UID, rendered, and pushed to the expert-review
+# GitHub-Pages repo. A permanent cross-project library (gitignored, in the
+# module) records every reviewed UID + its eventual expert ID.
+
+# Canonical project identity (set by the orchestrator from project.json).
+# Empty when step 5 is launched standalone -> the app falls back to deriving
+# the id from the export dir and uses the id as the display name.
+PROJECT_ID = os.environ.get('TCRMP_PROJECT_ID', '')
+PROJECT_NAME = os.environ.get('TCRMP_PROJECT_NAME', '')
+
+# Pages repo working tree (a git clone of laurenkolinger/reefpointseg-review).
+REVIEW_DIR = os.environ.get('TCRMP_REVIEW_DIR', '') or '/mnt/tear/REVIEW_reefpointseg'
+REVIEW_REPO_URL = (os.environ.get('TCRMP_REVIEW_REPO_URL', '')
+                   or 'https://github.com/laurenkolinger/reefpointseg-review.git')
+# Permanent library dir; '' -> _reefreview.library.default_dir()
+# (<module>/inprocess/_expert_id_library).
+EXPERT_LIBRARY_DIR = os.environ.get('TCRMP_EXPERT_LIBRARY_DIR', '')
+# Auto git-push the review repo after each export / import.
+REVIEW_GIT_PUSH = (os.environ.get('TCRMP_REVIEW_GIT_PUSH', '1') == '1')
+# Closeup crop padding + downscale caps (keep the Pages repo small).
+REVIEW_CROP_PAD_PX = int(os.environ.get('TCRMP_REVIEW_CROP_PAD_PX', '') or 40)
+REVIEW_MAX_EDGE = int(os.environ.get('TCRMP_REVIEW_MAX_EDGE', '') or 720)
+REVIEW_FULL_MAX_EDGE = int(os.environ.get('TCRMP_REVIEW_FULL_MAX_EDGE', '') or 1400)
+# >50% auto-relabel threshold (intersection / area-of-new-mask).
+REVIEW_OVERLAP_THRESH = float(os.environ.get('TCRMP_REVIEW_OVERLAP_THRESH', '') or 0.5)
+# Default reviewer recipients (operator adds their own + their student's).
+REVIEW_CONTACTS = (os.environ.get('TCRMP_REVIEW_CONTACTS', '')
+                   or 'lauren.olinger@uvi.edu')
+# Canonical species-code dictionary for the viewer's codes.json.
+#
+# Resolution order (first existing file wins, except env which always wins):
+#   1. env TCRMP_MASTER_CODES — the orchestrator already passes the correct
+#      (recoded) dictionary here, so it must win unconditionally.
+#   2. The step-2 RECODED dictionary for THIS project. A standalone step-5
+#      launch into an existing project (INPUT_DIR/EXPORT_DIR point inside
+#      inprocess/<project>/step{4,5}_...) should prefer the post-recode codes
+#      over the canonical defaults. step2_recodeSpecies/ is a sibling of the
+#      step-4/step-5 folders, so the project root is the step dir's parent.
+#   3. A repo-level step2_recodeSpecies/master_codes_recoded.csv, if present.
+#   4. The canonical supporting_data/master_codes.csv (last resort).
+
+def _recoded_candidates():
+    """Yield possible recoded-dictionary paths, most-specific first."""
+    seen = set()
+    # Project roots derived from the (already env-resolved) step dirs.
+    for step_dir in (INPUT_DIR, EXPORT_DIR):
+        if not step_dir:
+            continue
+        # EXPORT_DIR may be <project>/step5_.../output, so walk up to the
+        # project root by looking for a step2_recodeSpecies sibling at the
+        # step-dir parent and at its grandparent.
+        for root in (os.path.dirname(step_dir),
+                     os.path.dirname(os.path.dirname(step_dir))):
+            cand = os.path.join(root, 'step2_recodeSpecies',
+                                'master_codes_recoded.csv')
+            if cand not in seen:
+                seen.add(cand)
+                yield cand
+    # Repo-level step2 recoded dictionary (mirrors the contract's example path).
+    repo_cand = os.path.join(_REPO_DIR, 'step2_recodeSpecies',
+                             'master_codes_recoded.csv')
+    if repo_cand not in seen:
+        yield repo_cand
+
+
+def _resolve_master_codes_csv():
+    env_override = os.environ.get('TCRMP_MASTER_CODES', '')
+    if env_override:
+        return env_override
+    for cand in _recoded_candidates():
+        if cand and os.path.isfile(cand):
+            return cand
+    return os.path.join(_REPO_DIR, 'supporting_data', 'master_codes.csv')
+
+
+MASTER_CODES_CSV = _resolve_master_codes_csv()
