@@ -4,10 +4,12 @@
 # Until then it is a self-describing contract for inputs / outputs / params.
 
 name: "reef_point_seg"
-version: "1.0.0"
+display_name: "Reef Point Seg"
+tags: ["AI", "TCRMP"]
+version: "1.3.0"           # 1.3.0: canonical per-mask registry (_mask_registry/manifest.csv) + standalone Edit Masks app + unnamed-mask label guard; 1.2.0: model-assist Refine loop (predictions.json, rounds.csv, split_manifest.json, loop_rounds/); 1.1.0: REVIEW flag + expert-review round-trip + Add-Expert-IDs tile
 type: "pipeline"           # multi-step; launches its own orchestrator UI
 author: "Lauren K Olinger"
-description: "Eight-step TCRMP coral segmentation pipeline: CVR point data -> CPC/OCR point verification -> SAM3 masks -> YOLO11 segmentation training, evaluation, and inference."
+description: "Eight-step TCRMP coral segmentation pipeline: CVR point data -> CPC/OCR point verification -> SAM3 masks -> YOLO11 segmentation training, evaluation, and inference. Includes a REVIEW flag that ships uncertain masks to an outside taxonomic expert via a GitHub-Pages viewer and folds their IDs back in (Add Expert IDs)."
 
 inputs:
   - name: "tcrmp_cvr"
@@ -19,54 +21,93 @@ inputs:
   - name: "tcrmp_clip"
     type: "directory"
     formats: [".jpg", ".jpeg"]
-    location: "${dropbox_clip_dir}"
-    description: "TCRMP video-derived clip frames. Production reads from Dropbox; override to ${tcrmp_clip_local_dir} for offline testing (2018 + 2024 years only)."
+    location: "${tcrmp_clip_local_dir}"
+    description: "TCRMP video-derived clip frames, read from the local supporting_data/TCRMP_clip tree (full year/period set; resolved by recursive whole-tree scan keyed on basename)."
 
   - name: "cpc_all"
     type: "directory"
     location: "${supporting_data_dir}/cpc_all"
     description: "Static pre-2020 CPCe point index (67 GB) produced once by legacy TCRMPclip_cpcID. Consumed by step 4."
 
+# ------------------------------------------------------------------------------
+# OUTPUTS - data-dictionary contract
+# ------------------------------------------------------------------------------
+# Each entry binds a physical artifact to a dataset descriptor under
+# _METADATA/dictionary/datasets/<dataset>.yaml. eml: true triggers EML 2.2.0
+# generation at run finalisation; entries with eml: false are awaiting a
+# descriptor (DD-C to draft).
 outputs:
-  - name: "all_points_csv"
-    format: ".csv"
-    location: "${projects_dir}/<project_id>/step1_makeAllPoints/all_points.csv"
-    description: "Unified point-level CVR dataset, ~2.3M rows."
+  - dataset: "reef_point_seg_all_points"               # step1 all_points.csv
+    path_template: "${projects_dir}/{project_id}/step1_makeAllPoints/all_points.csv"
+    eml: true
 
-  - name: "recoded_all_points"
-    format: ".csv"
-    location: "${projects_dir}/<project_id>/step2_recodeSpecies/all_points_recoded.csv"
-    description: "Post-remap species codes applied; timestamped variant."
+  - dataset: "reef_point_seg_master_codes"             # step2 species code table
+    path_template: "${projects_dir}/{project_id}/step2_recodeSpecies/master_codes.csv"
+    eml: true
 
-  - name: "selected_frames"
-    format: ".csv"
-    location: "${projects_dir}/<project_id>/step3_chooseImages/selected_frames.csv"
-    description: "~4,500 balanced frames selected for training."
+  - dataset: "reef_point_seg_recoded_all_points"       # step2 recoded points
+    path_template: "${projects_dir}/{project_id}/step2_recodeSpecies/all_points_recoded.csv"
+    eml: true
 
-  - name: "verified_points"
-    format: ".json"
-    location: "${projects_dir}/<project_id>/step4_routeChosenImages/<year>/ids/sam_click_prompts.json"
-    description: "Per-frame (x,y,species) click prompts consumed by SAM3."
+  - dataset: "reef_point_seg_remap_log"                # step2 species recoding audit log
+    path_template: "${projects_dir}/{project_id}/step2_recodeSpecies/remap_log.json"
+    eml: true
 
-  - name: "yolo_training_set"
-    format: "directory"
-    location: "${projects_dir}/<project_id>/step5_segmentImages/"
-    description: "all_images/, all_labels/, data.yaml, class_map.json — YOLO-format training set."
+  - dataset: "reef_point_seg_selected_frames"          # step3 balanced frame selection (cols incl point_source/point_source_path)
+    path_template: "${projects_dir}/{project_id}/step3_chooseImages/selected_frames.csv"
+    eml: true
 
-  - name: "trained_model"
-    format: ".pt"
-    location: "${projects_dir}/<project_id>/step6_trainModel/runs/<run_name>/weights/best.pt"
-    description: "Trained YOLO11-seg weights."
+  - dataset: "reef_point_seg_reserve_frames"           # step3 eligible-but-unselected refill pool (OCR-failure refill)
+    path_template: "${projects_dir}/{project_id}/step3_chooseImages/reserve_frames.csv"
+    eml: true
 
-  - name: "evaluation_report"
-    format: ".pdf"
-    location: "${projects_dir}/<project_id>/step7_evaluateModel/report.pdf"
-    description: "Multi-page evaluation report with per-class metrics, confusion matrix, preview images."
+  - dataset: "reef_point_seg_sam_click_prompts"        # step4 per-year click prompts JSON
+    path_template: "${projects_dir}/{project_id}/step4_routeChosenImages/{year}/ids/sam_click_prompts.json"
+    eml: true
 
-  - name: "inference_manifest"
-    format: ".json"
-    location: "${projects_dir}/<project_id>/step8_inference/manifest.json"
-    description: "Per-frame detection records for the inference run."
+  - dataset: "reef_point_seg_yolo_training_set"        # step5 SAM3 -> YOLO bundle
+    path_template: "${projects_dir}/{project_id}/step5_segmentImages/"
+    eml: true
+
+  - dataset: "reef_point_seg_export_manifest"          # step4 combinedAnnotate per-frame export reconciliation (cumulative; outcome per routed basename)
+    path_template: "${projects_dir}/{project_id}/step4test_combinedAnnotate/export_manifest.csv"
+    eml: true
+
+  - dataset: "reef_point_seg_trained_model"            # step6 YOLO11-seg weights
+    path_template: "${projects_dir}/{project_id}/step6_trainModel/runs/{run_name}/weights/best.pt"
+    eml: true
+
+  - dataset: "reef_point_seg_training_rounds"          # step6/7 rounds ledger (model-assist loop)
+    path_template: "${projects_dir}/{project_id}/step6_trainModel/rounds.csv"
+    eml: true
+
+  - dataset: "reef_point_seg_evaluation_report"        # step7 PDF report (path corrected: was one level too shallow)
+    path_template: "${projects_dir}/{project_id}/step7_evaluateModel/eval_{run_name}/report.pdf"
+    eml: true
+
+  - dataset: "reef_point_seg_evaluation_metrics"       # step7 metrics JSON (path corrected: was one level too shallow)
+    path_template: "${projects_dir}/{project_id}/step7_evaluateModel/eval_{run_name}/metrics.json"
+    eml: true
+
+  - dataset: "reef_point_seg_inference_manifest"       # step8 manifest.json (path corrected: was missing {run_name} level)
+    path_template: "${projects_dir}/{project_id}/step8_inference/{run_name}/manifest.json"
+    eml: true
+
+  - dataset: "reef_point_seg_inference_predictions"    # step8 predictions.json (model-assist loop)
+    path_template: "${projects_dir}/{project_id}/step8_inference/{run_name}/predictions.json"
+    eml: true
+
+  - dataset: "reef_point_seg_expert_review_bundle"     # REVIEW masks -> GitHub Pages queue
+    path_template: "/mnt/tear/REVIEW_reefpointseg/review_manifest.json"
+    eml: true
+
+  - dataset: "reef_point_seg_expert_id_library"        # permanent cross-project expert-ID store
+    path_template: "${projects_dir}/_expert_id_library/manifest.csv"
+    eml: true
+
+  - dataset: "reef_point_seg_mask_registry"            # permanent cross-project canonical mask census, upserted by every export
+    path_template: "${projects_dir}/_mask_registry/manifest.csv"
+    eml: false
 
 parameters:
   - name: "target_species"
@@ -103,17 +144,31 @@ cli:
 # ------------------------------------------------------------------------------
 # This module runs as a browser-based orchestrator on its own port; the
 # VICARIUS UI should NOT render the generic input_dir/output_dir form.
-# Instead it shows a launcher: a Launch Orchestrator button + a list of
-# existing in-process projects with step-status summaries + a New Project
-# flow.
+# Because this launcher declares `runs:` below, the VICARIUS UI does NOT show a
+# standalone "Launch Orchestrator" button — reality is you always either create
+# a new project or open an existing one, and each of those starts the
+# orchestrator (in its own window) with that project loaded.
 ui:
   style: launcher
   launch:
     script: "scripts/run_pipeline.sh"
     port: 5050
     url: "http://127.0.0.1:5050"
-    # When true, the UI spawns the launch_script via subprocess if the port
-    # isn't already bound, then opens the URL in a new tab.
+    # window: true -> the orchestrator (and, from inside it, every sub-tool UI)
+    # opens in a real new WINDOW, never a browser tab, so the main orchestrator
+    # window is always there to return to.
+    window: true
+  # Cross-project dashboards served by the orchestrator under its own URL
+  # prefixes (mounted natively as full pages). The VICARIUS launcher homepage
+  # renders one button per entry; clicking boots the orchestrator (idempotent)
+  # then opens <orch_url><path> in a new window.
+  dashboards:
+    - label: "Label Coverage Matrix"
+      path: "/matrix"
+      tooltip: "Cross-project grid of every image x every species label: what has been reviewed, and whether each was found by hand, found by AI, or reviewed and absent. Live from all projects; updates as projects are added or purged."
+    - label: "Label Manager"
+      path: "/labels"
+      tooltip: "View and edit the canonical species vocabulary (add labels, edit names/categories), compose remaps, and re-run the recode that new projects seed from. Backs up the canonical file and mirrors its duplicate on every write."
   runs:
     # Where live projects live. Relative to the module root (parent of github_repo/).
     dir: "inprocess"

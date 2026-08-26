@@ -1,0 +1,197 @@
+<?xml version='1.0' encoding='utf-8'?>
+<eml xmlns="https://eml.ecoinformatics.org/eml-2.2.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://eml.ecoinformatics.org/eml-2.2.0 https://eml.ecoinformatics.org/eml-2.2.0/eml.xsd" packageId="vicarius.reef_point_seg_all_points.0afffb56" system="vicarius" scope="system">
+  <dataset>
+    <alternateIdentifier>reef_point_seg_all_points</alternateIdentifier>
+    <shortName>reef_point_seg_all_points</shortName>
+    <title>Unified TCRMP CVR Point Dataset</title>
+    <creator>
+      <individualName>
+        <givenName>Lauren K</givenName>
+        <surName>Olinger</surName>
+      </individualName>
+      <electronicMailAddress>l.olinger12993@gmail.com</electronicMailAddress>
+    </creator>
+    <contact>
+      <individualName>
+        <givenName>Lauren K</givenName>
+        <surName>Olinger</surName>
+      </individualName>
+      <electronicMailAddress>l.olinger12993@gmail.com</electronicMailAddress>
+    </contact>
+    <pubDate>2026-04-22</pubDate>
+    <abstract>
+      <para>Point-level unified CVR dataset produced by reef_point_seg step 1
+(TCRMPcvr_makeAllPoints). One row per CPC point across every TCRMP
+year. Column list taken from scripts/TCRMPcvr_makeAllPoints/run.py
+(line 564). Approx 2.3M rows / 82 MB.</para>
+    </abstract>
+    <keywordSet>
+      <keyword>TCRMP</keyword>
+      <keyword>CVR</keyword>
+      <keyword>point-data</keyword>
+      <keyword>CPC</keyword>
+      <keyword>coral</keyword>
+      <keyword>benthic</keyword>
+    </keywordSet>
+    <licensed>
+      <licenseName>TBD</licenseName>
+    </licensed>
+    <intellectualRights>
+      <para>Released under TBD.</para>
+    </intellectualRights>
+    <methods>
+      <methodStep>
+        <description>
+          <para>TCRMP_CVR Excel raw files</para>
+        </description>
+        <protocol>
+          <title>TCRMP_CVR Excel raw files</title>
+          <creator>
+            <individualName>
+              <givenName>Lauren K</givenName>
+              <surName>Olinger</surName>
+            </individualName>
+          </creator>
+        </protocol>
+      </methodStep>
+    </methods>
+    <dataTable>
+      <entityName>reef_point_seg_all_points</entityName>
+      <entityDescription>Point-level unified CVR dataset produced by reef_point_seg step 1
+(TCRMPcvr_makeAllPoints). One row per CPC point across every TCRMP
+year. Column list taken from scripts/TCRMPcvr_makeAllPoints/run.py
+(line 564). Approx 2.3M rows / 82 MB.
+</entityDescription>
+      <physical>
+        <objectName>reef_point_seg_all_points.csv</objectName>
+        <dataFormat>
+          <textFormat>
+            <numHeaderLines>1</numHeaderLines>
+            <recordDelimiter>\n</recordDelimiter>
+            <simpleDelimited>
+              <fieldDelimiter>,</fieldDelimiter>
+            </simpleDelimited>
+          </textFormat>
+        </dataFormat>
+      </physical>
+      <attributeList>
+        <attribute>
+          <attributeName>date</attributeName>
+          <attributeDefinition>Survey date parsed from the source CVR workbook.</attributeDefinition>
+          <measurementScale>
+            <dateTime>
+              <formatString>YYYY-MM-DD</formatString>
+            </dateTime>
+          </measurementScale>
+        </attribute>
+        <attribute>
+          <attributeName>year</attributeName>
+          <attributeDefinition>Year component of date, convenience column for filtering.</attributeDefinition>
+          <measurementScale>
+            <ratio>
+              <unit>
+                <customUnit>dimensionless</customUnit>
+              </unit>
+              <numericDomain>
+                <numberType>integer</numberType>
+              </numericDomain>
+            </ratio>
+          </measurementScale>
+        </attribute>
+        <attribute>
+          <attributeName>site</attributeName>
+          <attributeDefinition>TCRMP site code (3-letter short code).</attributeDefinition>
+          <measurementScale>
+            <nominal>
+              <nonNumericDomain>
+                <textDomain>
+                  <definition>TCRMP site code (3-letter short code).</definition>
+                </textDomain>
+              </nonNumericDomain>
+            </nominal>
+          </measurementScale>
+        </attribute>
+        <attribute>
+          <attributeName>transect</attributeName>
+          <attributeDefinition>Transect number within the site (1-6).</attributeDefinition>
+          <measurementScale>
+            <ratio>
+              <unit>
+                <customUnit>dimensionless</customUnit>
+              </unit>
+              <numericDomain>
+                <numberType>integer</numberType>
+              </numericDomain>
+            </ratio>
+          </measurementScale>
+        </attribute>
+        <attribute>
+          <attributeName>frame</attributeName>
+          <attributeDefinition>Video frame index sampled for the point.</attributeDefinition>
+          <measurementScale>
+            <ratio>
+              <unit>
+                <customUnit>dimensionless</customUnit>
+              </unit>
+              <numericDomain>
+                <numberType>integer</numberType>
+              </numericDomain>
+            </ratio>
+          </measurementScale>
+        </attribute>
+        <attribute>
+          <attributeName>point_label</attributeName>
+          <attributeDefinition>CPC point label (per-frame annotation identifier).</attributeDefinition>
+          <measurementScale>
+            <nominal>
+              <nonNumericDomain>
+                <textDomain>
+                  <definition>CPC point label (per-frame annotation identifier).</definition>
+                </textDomain>
+              </nonNumericDomain>
+            </nominal>
+          </measurementScale>
+        </attribute>
+        <attribute>
+          <attributeName>species_code</attributeName>
+          <attributeDefinition>Raw species code from the CVR workbook (pre-remap).</attributeDefinition>
+          <measurementScale>
+            <nominal>
+              <nonNumericDomain>
+                <textDomain>
+                  <definition>Raw species code from the CVR workbook (pre-remap).</definition>
+                </textDomain>
+              </nonNumericDomain>
+            </nominal>
+          </measurementScale>
+        </attribute>
+        <attribute>
+          <attributeName>species_name</attributeName>
+          <attributeDefinition>Human-readable species name resolved from master_codes.</attributeDefinition>
+          <measurementScale>
+            <nominal>
+              <nonNumericDomain>
+                <textDomain>
+                  <definition>Human-readable species name resolved from master_codes.</definition>
+                </textDomain>
+              </nonNumericDomain>
+            </nominal>
+          </measurementScale>
+        </attribute>
+        <attribute>
+          <attributeName>category</attributeName>
+          <attributeDefinition>Top-level benthic category (Coral, Algae, etc.) from master_codes.</attributeDefinition>
+          <measurementScale>
+            <nominal>
+              <nonNumericDomain>
+                <textDomain>
+                  <definition>Top-level benthic category (Coral, Algae, etc.) from master_codes.</definition>
+                </textDomain>
+              </nonNumericDomain>
+            </nominal>
+          </measurementScale>
+        </attribute>
+      </attributeList>
+    </dataTable>
+  </dataset>
+</eml>

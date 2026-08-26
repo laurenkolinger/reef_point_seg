@@ -2,7 +2,7 @@
 
 *A non-specialist walkthrough of what this system is, why it exists, how it works, and where it's going.*
 
-Last updated: 2026-04-21
+Last updated: 2026-05-30
 
 ---
 
@@ -52,7 +52,7 @@ Each step runs as its own sub-tool with its own Python environment (conda / venv
 | 1 | **Make All Points** | Parse 839 CVR Excel files → one unified `all_points.csv` (~1.6–2.3M rows) and `master_codes.csv` | [TCRMPcvr_makeAllPoints/](TCRMPcvr_makeAllPoints/) |
 | 2 | **Recode Species** | Web UI to remap species codes (e.g. `MFAV → OFAV` after taxonomy revisions) and produce a consistent recoded dataset | [TCRMPcvr_recodeSpecies/](TCRMPcvr_recodeSpecies/) |
 | 3 | **Choose Images** | Balanced selection of ~4,500 frames across years, sites, transects, and target species (≥1,000 instances per target) | [TCRMPcvr_chooseImages/](TCRMPcvr_chooseImages/) |
-| 4 | **Route & Verify Points** | For each selected frame, load CPCe coords (pre-2020) OR run GPU OCR (2020+), then review/edit point coords in a browser UI | [TCRMPclip_routeChosenImages/](TCRMPclip_routeChosenImages/) |
+| 4 | **Route & Verify Points** | For each selected frame, load CPCe coords (pre-2020) OR run GPU OCR (2020+), then review/edit point coords in a browser UI | [TCRMPclip_placePoints/](TCRMPclip_placePoints/) |
 | 5 | **SAM3 Segmentation** | Turn every point-click into a per-organism mask using Meta's SAM3 model, review/refine each mask in a browser UI, export to YOLO format | [TCRMPclip_segmentImages/](TCRMPclip_segmentImages/) |
 | 6 | **Train Model** | Stratified train/val/test split + Ultralytics YOLO11 segmentation training on local GPUs | [TCRMPtrain_oceankindCV/](TCRMPtrain_oceankindCV/) |
 | 7 | **Evaluate Model** | Run the trained model on the held-out test split, dump metrics + a PDF report with example predictions | same dir |
@@ -101,6 +101,16 @@ Humans then review in a browser UI that mirrors step 4's ergonomics — quick-ad
 - **Accept / Reject / Space** auto-advance to the next mask or the next frame.
 
 Output is a **YOLO segmentation training set**: `all_images/` symlinks, `all_labels/*.txt` (class_id + polygon vertices), `data.yaml`, and a persistent `class_map.json`.
+
+#### Expert-review round-trip (REVIEW flag + Add Expert IDs)
+
+Masks the reviewer cannot confidently identify are flagged **REVIEW**. At each step-5 export, the `scripts/_reefreview/` helpers handle them:
+
+1. Each REVIEW mask gets a stable UID.
+2. If a past EXPERT mask in the cross-project library overlaps it on the same image, that expert ID is inherited in place and the mask is not re-queued.
+3. Otherwise a closeup plus full frame is rendered, added to a GitHub-Pages review repo (`review_dir` `/mnt/tear/REVIEW_reefpointseg`, pushed to `reefpointseg-review.git`), and recorded in the permanent `inprocess/_expert_id_library/` as awaiting an expert ID.
+
+An outside taxonomic expert reviews on the GitHub-Pages site and returns a CSV (`uid,code,confidence,reviewer,project_id`; as of 2026-07-09 the confidence column is always blank from the viewer, and the importer accepts legacy values). The **Expert Review I/O** panel (the `scripts/_expertids/` blueprint embedded in the orchestrator; its sidebar tile is temporarily disabled as of 2026-07-09) folds those IDs back in as rolling per-reviewer tentative reviews; the operator's ACCEPT in the consensus table is what stamps `expert_id`, relabels the mask, and removes the item from the queue. It also auto-relabels any remaining TO-REVIEW mask whose footprint is >50% covered by a now-EXPERT mask on the same image, then pushes the shrunken queue back to the repo. It is idempotent and never blocks steps 6-8.
 
 ### 3.6 Step 6 — Train Model
 A wrapper around [oceankind_CV](https://github.com/laurenkolinger/oceankind_CV) (Lauren's existing CVAT-to-YOLO training pipeline, already adapted for the Oceankind collaborator network — UVI, QUT, Berkeley, Point Blue).
@@ -182,11 +192,11 @@ Why the two GPUs matter: SAM3's concept-segmentation head and its tracking head 
 
 The orchestrator is a **Flask app** (~2000 LOC backend + a single-page HTML/CSS/JS frontend at [pipeline_orchestrator/static/](pipeline_orchestrator/static/) and [pipeline_orchestrator/templates/index.html](pipeline_orchestrator/templates/index.html)). Design goals:
 
-- **One URL, one window.** `./run_pipeline.sh` starts it on `http://localhost:5050` and opens a browser. The user never sees a terminal.
+- **One URL, one window.** Launching the module from VICARIUS (`vicarius restart reef_point_seg` or the UI launcher) starts the orchestrator on `http://localhost:5050` and opens a browser. The user never sees a terminal. Do not call `run_pipeline.sh` directly.
 - **Sidebar of steps.** Each step has its own panel with a config form, Start / Open UI / Reset buttons, and a live log.
 - **Sub-apps are "folded in".** Steps 4 and 5 launch their own Flask apps on separate ports (5065, 5070), but the user sees the orchestrator-styled loading veil, not the raw sub-app startup form. Sub-apps detect they are orchestrated (via env vars we pass) and auto-advance past their own forms.
 - **Live progress.** SAM3 status polled from the background driver thread; YOLO training logs streamed line-by-line.
-- **State is a file.** Each project is a directory under `projects/` with a `project.json` describing status, config, and output paths per step. Back-compat for older projects is built into [project_manager.py `load_project`](pipeline_orchestrator/project_manager.py#L85-L143) — pre-step-6 projects grow step 6/7/8 entries on open.
+- **State is a file.** Each live run is a directory named `run_*` under `inprocess/` (at the module root, beside `github_repo/`) with a `project.json` describing status, config, and output paths per step. Back-compat for older projects is built into [project_manager.py `load_project`](pipeline_orchestrator/project_manager.py#L85-L143) — pre-step-6 projects grow step 6/7/8 entries on open.
 - **Stale-process cleanup at launch.** `run_pipeline.sh` sweeps zombie orchestrators and sub-apps on startup to prevent session leaks between demo-day runs.
 
 Everything is kept intentionally **simple** — plain Flask, plain JavaScript, no React, no build step, no SPA framework. The surface area you'd need to teach a new researcher is one HTML file, one JS file, one CSS file.
@@ -207,7 +217,7 @@ One Python file that names, for each of the 8 steps:
 
 Changing a default **here** changes it for all new projects.
 
-### 7.2 Per-project config — `projects/<name>_<YYYYMMDD>_<uuid>/project.json`
+### 7.2 Per-project config — `inprocess/run_<name>_<YYYYMMDD>_<uuid>/project.json`
 On project creation, the defaults are **deep-copied** into `project.json`. After that, the file is the single source of truth for *this* project's configuration. Every UI form field binds to a field in `project.json`. Every step config change does an atomic `tmp → rename` write. This means:
 - Projects are **reproducible.** Zip the project dir, send it to a collaborator, they can re-open it and see exactly what parameters you used.
 - Projects are **resumable.** Close the orchestrator in the middle of step 5, come back tomorrow, click "Resume" — state is recovered from disk.
@@ -326,9 +336,9 @@ The goal is that this system outlives its builders. The discipline is:
 
 | Thing | Where |
 |---|---|
-| Start the orchestrator | `./run_pipeline.sh` (opens `http://localhost:5050`) |
+| Start the orchestrator | `vicarius restart reef_point_seg` or the UI launcher (opens `http://localhost:5050`) |
 | Pipeline defaults | [pipeline_orchestrator/orchestrator_config.py](pipeline_orchestrator/orchestrator_config.py) |
-| Per-project state | `projects/<name>_<date>_<uuid>/project.json` |
+| Per-project state | `inprocess/run_<name>_<date>_<uuid>/project.json` |
 | Step directory names | [pipeline_orchestrator/project_manager.py:15-24](pipeline_orchestrator/project_manager.py#L15-L24) |
 | Orchestrator backend | [pipeline_orchestrator/app.py](pipeline_orchestrator/app.py) |
 | Orchestrator frontend | [pipeline_orchestrator/templates/index.html](pipeline_orchestrator/templates/index.html), [static/orchestrator.js](pipeline_orchestrator/static/orchestrator.js) |

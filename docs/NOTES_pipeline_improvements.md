@@ -62,9 +62,9 @@ Split the existing canvas horizontally into two halves and load the **current + 
 - **[DONE]** `run_pipeline.sh` sweeps stale orchestrator + sub-app processes (by entry-point path) and frees default ports before starting. ([run_pipeline.sh](run_pipeline.sh))
 
 ### Still to do
-- **Session isolation per sub-app launch.** Rotate Flask `app.secret_key` on each launch (or set `SESSION_COOKIE_NAME` per project) so old browser cookies can't re-attach. Sub-apps: [routeChosenImages/src/app.py](TCRMPclip_routeChosenImages/src/app.py), [segmentImages/src/app.py](TCRMPclip_segmentImages/src/app.py).
+- **Session isolation per sub-app launch.** Rotate Flask `app.secret_key` on each launch (or set `SESSION_COOKIE_NAME` per project) so old browser cookies can't re-attach. Sub-apps: [placePoints/src/app.py](TCRMPclip_placePoints/src/app.py), [segmentImages/src/app.py](TCRMPclip_segmentImages/src/app.py).
 - **Make env-var overrides required, not fallback.** When orchestrator launches a sub-app, set `TCRMP_ORCHESTRATED=1`; sub-apps should *require* paths to be explicit and refuse to fall back to `output_11april26` when that flag is set.
-- **Delete the legacy `output_11april26` fallbacks** from [TCRMPclip_routeChosenImages/src/config.py](TCRMPclip_routeChosenImages/src/config.py) and [TCRMPclip_segmentImages/src/config.py](TCRMPclip_segmentImages/src/config.py). They only cause leaks now.
+- **Delete the legacy `output_11april26` fallbacks** from [TCRMPclip_placePoints/src/config.py](TCRMPclip_placePoints/src/config.py) and [TCRMPclip_segmentImages/src/config.py](TCRMPclip_segmentImages/src/config.py). They only cause leaks now.
 - **Assert empty step dirs on project create.** After `create_project`, assert step3–5 dirs are empty; if not, bail with a clear error.
 - **Browser-side test script** — automate the create/quit/resume flow so we don't repeat the demo bug.
 
@@ -125,8 +125,8 @@ When selecting frames in Step 3, also emit a secondary pool of ~5% *extra* candi
 - **[DONE]** Autocenter default is `false`. Help text updated.
 
 ### Done 2026-04-17 (Step 4)
-- **[DONE]** **Reference mode** (startup checkbox): existing OCR / CPC points render as read-only reference — **larger font (56 px letter, 22 px info)**, muted cyan, no circle, no letter-to-cross line. They don't appear in the Labels panel and `findPointAt` skips them, so drag/select never grabs them. User places their own fresh points via hold-number+click. Session flag `reference_mode` stored server-side; echoed in `/api/image/<fn>` so the client re-syncs on each frame load. ([app.py:545,694,849](TCRMPclip_routeChosenImages/src/app.py), [index.html render / panel / findPointAt](TCRMPclip_routeChosenImages/src/templates/index.html))
-- **[DONE]** Export filters: in reference mode, `do_export` keeps only user-added points (`pt.added is True`) — existing reference points stay on disk but don't flow into the YOLO / SAM3 training set. ([app.py do_export](TCRMPclip_routeChosenImages/src/app.py))
+- **[DONE]** **Reference mode** (startup checkbox): existing OCR / CPC points render as read-only reference — **larger font (56 px letter, 22 px info)**, muted cyan, no circle, no letter-to-cross line. They don't appear in the Labels panel and `findPointAt` skips them, so drag/select never grabs them. User places their own fresh points via hold-number+click. Session flag `reference_mode` stored server-side; echoed in `/api/image/<fn>` so the client re-syncs on each frame load. ([app.py:545,694,849](TCRMPclip_placePoints/src/app.py), [index.html render / panel / findPointAt](TCRMPclip_placePoints/src/templates/index.html))
+- **[DONE]** Export filters: in reference mode, `do_export` keeps only user-added points (`pt.added is True`) — existing reference points stay on disk but don't flow into the YOLO / SAM3 training set. ([app.py do_export](TCRMPclip_placePoints/src/app.py))
 - **[DONE]** **Review queue no longer wraps.** `_build_review_list()` used to append exported frames at the end (`unexported + exported`); now it emits only unexported, non-scrapped frames. When the user finishes, "All Done!" is sticky. Re-opening via Resume also respects this (done is done).
 
 ### Quick mental model (for anyone reading this cold)
@@ -139,7 +139,7 @@ So the step has two input flavors with very different data paths. The current UI
 ### Rename throughout: "Verify Points"
 - Sidebar label: "Route Images (OCR)" → **"Verify Points"**
 - Panel title, run button ("Launch OCR Service" → "Launch Point Verification" or just "Open Verify Points UI"), mark-done button, success messages.
-- Code sites: [index.html step 4 panel](pipeline_orchestrator/templates/index.html), [project_manager.py STEP_NAMES](pipeline_orchestrator/project_manager.py#L23-L29), [orchestrator.js](pipeline_orchestrator/static/orchestrator.js), sub-app [routeChosenImages index.html](TCRMPclip_routeChosenImages/src/templates/index.html) copy.
+- Code sites: [index.html step 4 panel](pipeline_orchestrator/templates/index.html), [project_manager.py STEP_NAMES](pipeline_orchestrator/project_manager.py#L23-L29), [orchestrator.js](pipeline_orchestrator/static/orchestrator.js), sub-app [placePoints index.html](TCRMPclip_placePoints/src/templates/index.html) copy.
 - Keep the directory name `step4_routeChosenImages` on disk to avoid breaking existing projects — it's an internal key, user never sees it.
 
 ### Drop the "Target species only" checkbox
@@ -159,7 +159,7 @@ So the field should be labeled something clearer, e.g.:
 
 Current state:
 - Orchestrator hardcodes `TCRMP_CPC_DIR = {REPO_DIR}/output/cpc_all` at [app.py:233](pipeline_orchestrator/app.py#L233).
-- Sub-app default is the same path via [config.py:29](TCRMPclip_routeChosenImages/src/config.py#L29).
+- Sub-app default is the same path via [config.py:29](TCRMPclip_placePoints/src/config.py#L29).
 - Contents today: `output/cpc_all/{2013..2019}/{ids, raw, test_pts, dataset_summary.txt, log.txt}`. **~7 years of extracted CPC coords with remapped species.**
 
 **Suggested changes:**
@@ -177,7 +177,7 @@ User flagged: sometimes the target is a coarse category (e.g. "Sponge"), not a s
 
 Scope of rename (do as one coordinated pass):
 - UI copy: all orchestrator step panels, sub-app templates.
-- Config vars: `TARGET_SPECIES` → `TARGET_LABELS` in [TCRMPcvr_chooseImages/src/config.py](TCRMPcvr_chooseImages/src/config.py), [TCRMPclip_routeChosenImages/src/config.py](TCRMPclip_routeChosenImages/src/config.py), [TCRMPclip_segmentImages/src/config.py](TCRMPclip_segmentImages/src/config.py).
+- Config vars: `TARGET_SPECIES` → `TARGET_LABELS` in [TCRMPcvr_chooseImages/src/config.py](TCRMPcvr_chooseImages/src/config.py), [TCRMPclip_placePoints/src/config.py](TCRMPclip_placePoints/src/config.py), [TCRMPclip_segmentImages/src/config.py](TCRMPclip_segmentImages/src/config.py).
 - Env vars: `TCRMP_TARGET_SPECIES` → `TCRMP_TARGET_LABELS` (keep old name as alias for one release to avoid breaking existing scripts).
 - Function/arg names: `target_species`, `species_list`, `species_filter` → `target_labels`, `label_list`, `label_filter`.
 - Project JSON key: `steps.3.config.target_species` → `target_labels` (add a migration path in `load_project` so old projects keep working).
@@ -207,7 +207,7 @@ The pipeline is coral-first throughout. Generalize so sponges (or anything in `m
 ### Done 2026-04-17 (auto-start SAM3 on each step 4 export)
 - **[DONE]** Checkbox **"Auto-start SAM3 segmentation on each batch export"** added to the step 4 panel (default ON). Persisted as `steps.4.config.auto_start_sam3`. ([index.html](pipeline_orchestrator/templates/index.html), [orchestrator.js populate/collect](pipeline_orchestrator/static/orchestrator.js))
 - **[DONE]** `_run_step4` passes `TCRMP_ORCHESTRATOR_URL` and `TCRMP_AUTO_START_SAM3` env vars to the step 4 sub-app. Orchestrator URL is computed from `request.host` at launch time.
-- **[DONE]** After a successful `do_export` in the step 4 sub-app, `_nudge_sam3_if_configured()` fires a background POST to `{ORCH_URL}/api/step/5/kick` (only if export produced ≥1 frame). Failures are logged but never block the export response. ([TCRMPclip_routeChosenImages/src/app.py _nudge_sam3_if_configured](TCRMPclip_routeChosenImages/src/app.py))
+- **[DONE]** After a successful `do_export` in the step 4 sub-app, `_nudge_sam3_if_configured()` fires a background POST to `{ORCH_URL}/api/step/5/kick` (only if export produced ≥1 frame). Failures are logged but never block the export response. ([TCRMPclip_placePoints/src/app.py _nudge_sam3_if_configured](TCRMPclip_placePoints/src/app.py))
 - **[DONE]** Orchestrator `POST /api/step/5/kick` is idempotent:
   - Sub-app not running → full launch (same path as Start button) + `_sam3_drive` thread.
   - Sub-app running, driver thread dead → spawn a fresh driver that re-configures and processes new frames.
@@ -237,7 +237,7 @@ The pipeline is coral-first throughout. Generalize so sponges (or anything in `m
 - **[DONE]** **Enter / Reject progression auto-advances frames.** Space still cycles *all* masks (manual review). Enter / X / assign-species-popup all call `advanceToNextOrFrame`, which picks the next pending mask or — if none left — moves to the next frame and fit-views it. ([templates/index.html selectNextMask + advanceToNextOrFrame](TCRMPclip_segmentImages/src/templates/index.html))
 - **[DONE]** **Draw mode (D) — TagLab-style freehand boolean edit.** Select a mask, press `D` (or click Draw button), click-drag over the image. Release closes the path. Backend `POST /api/image/<fn>/draw_edit` rasterizes the polygon and decides **add vs subtract by centroid-in-mask test**: centroid inside mask → subtract (carve chunk); centroid outside → union (add chunk). Add ops also respect the "don't eat neighbors" rule. Cyan border + badge in draw mode. ([app.py draw_edit](TCRMPclip_segmentImages/src/app.py) + [template render / gesture](TCRMPclip_segmentImages/src/templates/index.html))
 - **[DONE]** **Orchestrator folds sub-app launch UIs.** When either sub-app is launched by the orchestrator (detected via the env vars we already set: `TCRMP_ORCHESTRATOR_URL` for step 4, `TCRMP_INPUT_DIR` for step 5), the browser lands on an **orchestrator-styled loading veil** instead of the standalone setup form. Step 4 auto-calls `doStart` on `DOMContentLoaded`; step 5 polls `/api/status` every 2 s (up to 10 min for model loading) until `configured=true`, then advances to processing/review. The standalone form still works when a dev runs the sub-app directly.
-- **[DONE]** **Aux observations in step 4** (`added_points.csv`). Press `L` → aux mode (green border + badge). Click → prompt for species code + optional notes → appended to `{step4_export_dir}/added_points.csv`. Reloaded on `/api/configure` and `/api/resume`. Rendered as green diamonds with the code; they never flow into SAM3 or YOLO exports. `POST /add_aux` + `POST /delete_aux` endpoints. ([TCRMPclip_routeChosenImages/src/app.py](TCRMPclip_routeChosenImages/src/app.py), [templates/index.html](TCRMPclip_routeChosenImages/src/templates/index.html))
+- **[DONE]** **Aux observations in step 4** (`added_points.csv`). Press `L` → aux mode (green border + badge). Click → prompt for species code + optional notes → appended to `{step4_export_dir}/added_points.csv`. Reloaded on `/api/configure` and `/api/resume`. Rendered as green diamonds with the code; they never flow into SAM3 or YOLO exports. `POST /add_aux` + `POST /delete_aux` endpoints. ([TCRMPclip_placePoints/src/app.py](TCRMPclip_placePoints/src/app.py), [templates/index.html](TCRMPclip_placePoints/src/templates/index.html))
 
 ### Done 2026-04-17 (step 5 overhaul — mirrors step 4 feel)
 - **[DONE]** **Add-mode clean boundary fix.** `/api/image/<fn>/add` now subtracts the union of all existing masks (decoded from RLE) from the freshly-segmented binary before `build_mask_dict`. `clean_mask` still enforces single-connected-component and polygon simplification, so the new mask is smooth and can't "lump into" a neighbor. ([app.py add_mask](TCRMPclip_segmentImages/src/app.py))

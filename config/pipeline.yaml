@@ -10,13 +10,19 @@ paths:
   master_codes_csv: /mnt/rip/vicarius_drive/vicarius/_METADATA/library/definitions/tcrmp_species_codes.csv
   cpc_all_dir: /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/cpc_all
   tcrmp_cvr_dir: /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/TCRMP_CVR
-  tcrmp_clip_local_dir: ${supporting_data_dir}/TCRMP_clip
+  # Full year/period clip set lives under the repo's own supporting_data (this
+  # is the tree Step 3 and the 4.test routing both read). Dropbox is no longer
+  # used as an image source.
+  tcrmp_clip_local_dir: ${repo_root}/supporting_data/TCRMP_clip
   model_weights_dir: /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/model_weights
-  dropbox_clip_dir: /home/bizon/UVI Dropbox/SMITH LAB TEAM FOLDER/TCRMP/TCRMP_clip
   sam3_conda_env: /home/bizon/anaconda3/envs/sam3reef
   huggingface_cache: ~/.cache/huggingface
   vicarius_root: /mnt/rip/vicarius_drive/vicarius
   vicarius_logging_lib: /mnt/rip/vicarius_drive/vicarius/_logging/src
+  # Expert-review round-trip (REVIEW-flagged masks -> GitHub Pages -> expert CSV)
+  review_dir: /mnt/tear/REVIEW_reefpointseg
+  review_repo_url: https://github.com/laurenkolinger/reefpointseg-review.git
+  expert_library_dir: ${projects_dir}/_expert_id_library
 python_paths:
   1: ${unified_env_python}
   2: ${unified_env_python}
@@ -30,7 +36,7 @@ entry_points:
   1: ${scripts_dir}/TCRMPcvr_makeAllPoints/run.py
   2: ${scripts_dir}/TCRMPcvr_recodeSpecies/src/app.py
   3: ${scripts_dir}/TCRMPcvr_chooseImages/src/select_images.py
-  4: ${scripts_dir}/TCRMPclip_routeChosenImages/src/app.py
+  4: ${scripts_dir}/TCRMPclip_placePoints/src/app.py
   5: ${scripts_dir}/TCRMPclip_segmentImages/src/app.py
   6: ${scripts_dir}/TCRMPtrain_oceankindCV/run_step6.sh
   7: ${scripts_dir}/TCRMPtrain_oceankindCV/src/evaluate_run.py
@@ -39,7 +45,7 @@ working_dirs:
   1: ${scripts_dir}/TCRMPcvr_makeAllPoints
   2: ${scripts_dir}/TCRMPcvr_recodeSpecies
   3: ${scripts_dir}/TCRMPcvr_chooseImages
-  4: ${scripts_dir}/TCRMPclip_routeChosenImages
+  4: ${scripts_dir}/TCRMPclip_placePoints
   5: ${scripts_dir}/TCRMPclip_segmentImages
   6: ${scripts_dir}/TCRMPtrain_oceankindCV
   7: ${scripts_dir}/TCRMPtrain_oceankindCV
@@ -62,17 +68,20 @@ step_defaults:
     input_dir: ${tcrmp_cvr_dir}
   '2':
     port: 5055
-    remap_log_source: ''
+    # Default remap log shipped with the repo; populates the Step-2 "remap path"
+    # field on a fresh project. User can clear or pick a different one.
+    remap_log_source: ${repo_root}/scripts/TCRMPcvr_recodeSpecies/output/remap_log_20260625_205154.json
   '3':
-    target_species: OFRA, PA, OA, OFAV, AL, MC, AA
+    # Empty by default: the Step 3 picker opens with NOTHING selected; the user
+    # chooses target labels each project. (Was a hardcoded 7-species default.)
+    target_species: ""
     target_instances: 1000
     min_year: 2014
     max_year: 2025
-    category_filter: Coral
     skip_image_check: false
   '4':
     port: 5065
-    clip_dir: ${dropbox_clip_dir}
+    clip_dir: ${tcrmp_clip_local_dir}
     target_species_only: true
     auto_start_sam3: true
     reference_mode: false
@@ -90,6 +99,9 @@ step_defaults:
     polygon_simplify_epsilon: 0.001
     symlink_images: true
     review_batch_size: '10'
+    # Recipients told (on the review site) to receive the expert's results CSV.
+    # The operator should add their own + their student's, comma-separated.
+    review_contacts: lauren.olinger@uvi.edu
   '6':
     valid_ratio: 0.2
     test_ratio: 0.1

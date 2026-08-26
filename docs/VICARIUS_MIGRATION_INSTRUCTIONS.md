@@ -1,3 +1,9 @@
+> **SUPERSEDED (migration complete).** The module is already migrated and
+> lives at `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/` (with
+> `github_repo/`, `inprocess/`, and `misc/`). This document is retained as a
+> historical record of the migration playbook; do not run it again. For the
+> current state see `README.md` and `docs/VICARIUS_INTEGRATION.md`.
+
 # Migration Instructions for the VICARIUS Agent
 
 **Target audience**: the VICARIUS migration agent (or a human operator with file-system tools). This document prescribes, phase by phase, how to move `seg_AI_img_full_april2026/` into the VICARIUS platform at `/mnt/rip/vicarius_drive/vicarius/` as a first-class module.

@@ -2,8 +2,8 @@
 
 This document captures how the coral-segmentation pipeline plugs into the
 VICARIUS platform (`/mnt/rip/vicarius_drive/vicarius`). It covers the event
-stream, the UI aesthetic, the module contract, and the planned migration
-into `vicarius/modules/reef_point_seg/`.
+stream, the UI aesthetic, and the module contract. The module is already
+migrated and lives at `vicarius/modules/reef_point_seg/`.
 
 Read `/mnt/rip/vicarius_drive/vicarius/_DOCS/TEN_COMMANDMENTS.md` alongside
 this document — the commandments are the governing discipline.
@@ -43,6 +43,12 @@ absent (useful for collaborators without the platform installed).
 | step error | `process_end` (status=failed) | same | `notes` contains the last ~20 log lines |
 | `POST /api/project/quit` | `user_note` | `reef_point_seg` | `"[orch] project closed"` |
 | SAM3 driver kick | `user_note` | `reef_point_seg.step5_segmentImages` | `"[orch] SAM3 driver kicked for batch <n>"` |
+
+The expert-review round-trip writes outside the event stream: REVIEW-flagged
+masks go to the GitHub-Pages review repo (`/mnt/tear/REVIEW_reefpointseg`) and
+the cross-project `inprocess/_expert_id_library/` via `scripts/_reefreview/`.
+The re-runnable Add Expert IDs tile (`TCRMPclip_addExpertIDs`, port 5075) folds
+returned expert CSVs back in.
 
 ### 1.3 Query recipes
 
@@ -121,46 +127,38 @@ JavaScript logic changes.
 See `config/module.yaml` in this repo for the full spec. Highlights:
 
 - `type: pipeline` — multi-step; launches its own orchestrator UI.
+- `ui.style: launcher` — the VICARIUS UI renders a Launch button plus a list
+  of in-process runs (`inprocess/run_*`), not the generic input/output form.
 - Three external inputs declared: `tcrmp_cvr`, `tcrmp_clip`, `cpc_all`.
-- Six first-class outputs declared: everything a downstream study would
-  consume (trained model, eval report, inference manifest, etc.).
+- Thirteen outputs declared, each bound to a data-dictionary descriptor under
+  `_METADATA/dictionary/datasets/`: the step outputs (all_points, master
+  codes, recoded points, selected frames, click prompts, YOLO bundle, trained
+  model, eval report, eval metrics, inference manifest) plus the
+  expert-review bundle and expert-ID library. `all_points` emits EML.
 - Five user-facing parameters (target species, target instances, epochs,
   imgsz, base model) — the full hyperparameter surface still exists behind
   the UI but these five are the common customization points.
 
 ---
 
-## 4. Migration into `vicarius/modules/reef_point_seg/`
+## 4. Module layout under `vicarius/modules/reef_point_seg/`
 
-When ready to formally plug in:
+The module is migrated. Its layout:
 
-```bash
-cd /mnt/rip/vicarius_drive/vicarius/modules
-mkdir -p reef_point_seg/{github_repo,inprocess,misc}
+- `github_repo/` — the code, config, and docs (git-tracked).
+- `inprocess/` — live runs (`run_*`) plus the cross-project
+  `_expert_id_library/`. This is where projects live; it is the
+  `projects_dir` in `config/pipeline.yaml`.
+- `misc/` — module-root scratch per platform convention.
 
-# Copy the whole repo (code + config only; NOT supporting_data or projects)
-rsync -a --exclude='supporting_data' --exclude='projects' --exclude='env' \
-      /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/ \
-      reef_point_seg/github_repo/
+`config/pipeline.yaml` points `projects_dir` at
+`/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/inprocess` and the
+master-codes table at
+`_METADATA/library/definitions/tcrmp_species_codes.csv`.
 
-# Symlink the data + runs so they stay outside the module's git repo
-ln -s /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data \
-      reef_point_seg/github_repo/supporting_data
-ln -s /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/projects \
-      reef_point_seg/github_repo/projects
-
-# VICARIUS init_run.py / shelve_run.py are dropped into the module root
-# (not the github_repo subdir) per platform convention; copy from template:
-cp /mnt/rip/vicarius_drive/vicarius/modules/_template/github_repo/src/init_run.py \
-   reef_point_seg/github_repo/src/
-cp /mnt/rip/vicarius_drive/vicarius/modules/_template/github_repo/src/shelve_run.py \
-   reef_point_seg/github_repo/src/
-```
-
-Then re-run `bootstrap.sh` from the new location.
-
-Post-migration, `vicarius list` should show `reef_point_seg` in its
-module table (via `module.yaml`).
+`vicarius list` shows `reef_point_seg` via `module.yaml`. The migration
+playbook is preserved (superseded) in
+`docs/VICARIUS_MIGRATION_INSTRUCTIONS.md`.
 
 ---
 
@@ -204,11 +202,12 @@ Model cards go alongside with the same basename + `.md`.
       is the rolling changelog; this file updates alongside code changes.
 - [x] **VI. Prompt for purpose** — project creation UI asks for name +
       purpose; `process_start` events carry that purpose string.
-- [x] **VII. Test before production** — `projects/demo_*` and
-      `projects/test_*` are retained for smoke tests.
+- [x] **VII. Test before production** — `inprocess/run_demo_*` and
+      `inprocess/run_test_*` are retained for smoke tests.
 - [x] **VIII. Log everything** — VICARIUS event stream captures start,
       end, user notes; each step also writes a per-step log file.
 - [x] **IX. Version code, track data** — `.gitignore` excludes
-      `supporting_data/` + `projects/` + `env/`; NAS handles data backup.
+      `supporting_data/` + `env/`; live runs live outside `github_repo/`
+      under `inprocess/`; NAS handles data backup.
 - [x] **X. Keep it simple, then grow** — plain Flask, plain JS, single
       YAML config, one env. No React, no build step, no SPA framework.
