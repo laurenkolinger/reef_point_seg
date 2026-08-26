@@ -1,0 +1,189 @@
+/* Add-Expert-IDs UI fragment styles. Everything is scoped under .eid so it can
+   be embedded in any host page without bleeding into (or inheriting) the host's
+   styles. Colors map onto the host theme's CSS variables when present, with
+   standalone fallbacks. */
+.eid {
+  --bg: var(--input-bg, #15151f);
+  --panel: var(--surface, #11111a);
+  --line: var(--border, #2a2a38);
+  --ink: var(--text, #e7eef2);
+  --mut: var(--text-dim, #93a4ad);
+  --accent: var(--pink, #FFB3D9);
+  --good: var(--success, #36c275);
+  --warn: var(--warning, #e8a33d);
+  color: var(--ink);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+}
+.eid * { box-sizing: border-box; }
+.eid .muted { color: var(--mut); }
+.eid .small { font-size: 12px; }
+.eid code { color: var(--ink); }
+.eid h2 { color: var(--ink); }
+.eid h3 { color: var(--mut); }
+
+.eid .eid-intro { color: var(--mut); font-size: 13px; max-width: 90ch; margin: 0 0 18px; }
+
+.eid .tip { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px;
+  border-radius: 50%; background: var(--line); color: var(--ink); font-size: 10px; cursor: help; margin-left: 4px; }
+
+.eid .btn { background: var(--accent); color: #1a0010; border: none; border-radius: 8px; padding: 10px 18px;
+  font-weight: 700; cursor: pointer; font-size: 14px; margin-top: 12px; }
+.eid .btn:disabled { opacity: .6; cursor: default; }
+.eid .btn.ghost { background: transparent; border: 1px solid var(--line); color: var(--mut); }
+.eid .btn.sm2 { padding: 8px 13px; font-size: 13px; margin-top: 0; }
+.eid .btn.refresh-btn { margin: 0; padding: 7px 12px; }
+
+/* config / field inputs */
+.eid .cfg { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; margin-bottom: 0; }
+.eid .field { margin-bottom: 10px; }
+.eid .field label, .eid .cfg label { display: block; font-size: 12px; color: var(--mut); margin-bottom: 4px; }
+.eid .field input[type=text], .eid .cfg input { width: 100%; background: var(--bg); border: 1px solid var(--line);
+  color: var(--ink); border-radius: 7px; padding: 8px 10px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+
+/* drop zone */
+.eid #drop { border: 2px dashed var(--line); border-radius: 14px; padding: 46px 20px; text-align: center;
+  color: var(--mut); cursor: pointer; transition: .15s; background: var(--panel); }
+.eid #drop.over { border-color: var(--accent); color: var(--accent); }
+.eid #drop strong { color: var(--ink); }
+
+.eid .err { color: var(--warn); margin-top: 10px; }
+
+/* import result card */
+.eid .result { margin-top: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 14px 18px; display: none; }
+.eid .result.show { display: block; }
+.eid .result.ok { border-color: var(--good); }
+.eid .result .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 8px; }
+.eid .result .cell { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.eid .result .cell b { font-size: 18px; }
+
+.eid .hist { margin-top: 22px; }
+.eid .hist h3 { font-size: 13px; color: var(--mut); text-transform: uppercase; letter-spacing: .08em; }
+.eid .hist .row { font-size: 12px; color: var(--mut); font-family: ui-monospace, Menlo, monospace;
+  padding: 5px 0; border-bottom: 1px solid var(--line); }
+
+/* numbered workflow */
+.eid .stepper { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 20px; }
+.eid .stepper .s { flex: 1; min-width: 170px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px 12px; font-size: 12px; color: var(--mut); }
+.eid .stepper .s b { color: var(--ink); font-size: 13px; }
+.eid .num { display: inline-flex; width: 22px; height: 22px; border-radius: 50%; background: var(--accent);
+  color: #1a0010; font-weight: 700; align-items: center; justify-content: center; font-size: 12px; flex: 0 0 auto; }
+.eid .stepper .s .num { width: 18px; height: 18px; font-size: 11px; margin-right: 6px; }
+.eid .step { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin-bottom: 16px; }
+.eid .step > h2 { margin: 0 0 6px; font-size: 16px; display: flex; align-items: center; gap: 9px; }
+.eid .step .howto { color: var(--mut); font-size: 13px; margin: 0 0 14px; max-width: 82ch; }
+
+.eid .linkrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.eid .linkrow input { flex: 1; min-width: 240px; background: var(--bg); border: 1px solid var(--line);
+  color: var(--ink); border-radius: 7px; padding: 8px 10px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.eid .copy-note { font-size: 12px; color: var(--good); margin-top: 8px; display: none; }
+.eid .copy-note.show { display: block; }
+
+.eid details.adv { margin: 2px 0 18px; }
+.eid details.adv > summary { cursor: pointer; color: var(--mut); font-size: 12px; padding: 4px 0; }
+.eid details.adv .cfg { margin-top: 10px; }
+
+/* publish (push to GitHub) control */
+.eid .sync { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; }
+.eid .sync-btn { margin-top: 0; }
+.eid .sync-hint { display: block; color: var(--mut); font-size: 12px; margin-top: 8px; }
+.eid .sync-panel { display: none; margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
+.eid .sync-panel.show { display: block; }
+.eid .sync-panel .nums { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+.eid .sync-panel .nums .cell { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; min-width: 96px; }
+.eid .sync-panel .nums .cell b { font-size: 20px; display: block; line-height: 1.2; }
+.eid .sync-panel .nums .cell span { font-size: 11px; color: var(--mut); }
+.eid .sync-actions { display: flex; gap: 10px; align-items: center; }
+.eid .sync-note { font-size: 13px; color: var(--mut); margin-bottom: 10px; }
+.eid .sync-note.warn { color: var(--warn); }
+.eid .sync-note.good { color: var(--good); }
+
+/* mask catalog */
+.eid .catalog { margin-top: 30px; }
+.eid .catalog h2 { font-size: 17px; margin: 0 0 4px; }
+.eid .catalog .sub { color: var(--mut); font-size: 13px; max-width: 80ch; }
+.eid .cat-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 12px 0 4px; }
+.eid .cat-controls label { font-size: 11px; color: var(--mut); display: flex; align-items: center; gap: 5px; }
+.eid .cat-controls select, .eid .cat-controls input[type=text] { background: var(--bg); border: 1px solid var(--line);
+  color: var(--ink); border-radius: 7px; padding: 6px 9px; font-size: 12px; }
+.eid .cat-meta { font-size: 12px; color: var(--mut); margin: 4px 0 10px; }
+.eid .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+.eid .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.eid .tile .pic { position: relative; background: #000; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; }
+.eid .tile .pic img.base { max-width: 100%; max-height: 100%; display: block; }
+.eid .tile .pic img.ov { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.eid .tile .meta { padding: 7px 9px; font-size: 11px; color: var(--mut); }
+.eid .tile .meta .code { color: var(--ink); font-weight: 700; font-size: 13px; font-family: ui-monospace, Menlo, monospace; }
+.eid .tile .meta .mode { float: right; font-size: 9px; text-transform: uppercase; letter-spacing: .5px; padding: 1px 6px; border-radius: 20px; background: var(--line); }
+.eid .tile .meta .mode.EXPERT { background: #143; color: var(--good); }
+.eid .tile .meta .row2 { margin-top: 3px; }
+.eid .tile .op { display: flex; align-items: center; gap: 6px; padding: 0 9px 8px; }
+.eid .tile .op input[type=range] { flex: 1; accent-color: var(--accent); }
+.eid .tile .op span { font-size: 9px; color: var(--mut); }
+.eid .cat-empty { color: var(--mut); padding: 30px 0; text-align: center; }
+
+/* C2/C3 operator setup + email requests */
+.eid .setup { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+.eid .setup h3 { font-size: 13px; color: var(--mut); text-transform: uppercase; letter-spacing: .06em; margin: 0 0 6px; }
+.eid .op-note { font-size: 12px; margin-left: 10px; color: var(--mut); }
+.eid .op-note.good { color: var(--good); }
+.eid .op-note.warn { color: var(--warn); }
+.eid #email-requests .row { font-size: 12px; color: var(--mut); padding: 5px 0; }
+.eid .emreq { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+.eid .emreq-head { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px; }
+.eid .emreq-head .btn { margin: 0; }
+.eid .emreq-head .emreq-mailto { margin-left: auto; }
+.eid a.btn { display: inline-block; text-decoration: none; }
+.eid .emreq-text { width: 100%; background: var(--panel); border: 1px solid var(--line); color: var(--ink);
+  border-radius: 6px; padding: 6px 8px; font: 12px/1.45 ui-monospace, Menlo, monospace; resize: vertical; }
+.eid .emreq-text.copied { border-color: var(--good); }
+
+/* import result: unrouted callout */
+.eid .result .unrouted { margin-top: 10px; font-size: 12px; color: var(--mut); }
+.eid .result .unrouted .warn { color: var(--warn); }
+
+/* pending-by-project */
+.eid .pbp { margin-top: 18px; }
+.eid .pbp h3, .eid .consensus h3 { font-size: 13px; color: var(--mut); text-transform: uppercase; letter-spacing: .06em; }
+.eid .pbp .row { font-size: 12px; color: var(--mut); padding: 4px 0; border-bottom: 1px solid var(--line); }
+.eid .pbp .row b { color: var(--ink); }
+.eid .pbp .row.pbp-row { display: flex; align-items: center; gap: 8px; }
+.eid .pbp .pbp-check { accent-color: var(--accent); margin: 0; cursor: pointer; }
+.eid .pbp .pbp-name { flex: 1; min-width: 0; }
+.eid .pbp .pbp-del { margin: 0; padding: 4px 10px; font-size: 11px; }
+.eid .pbp-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.eid .pbp-actions .btn { margin: 0; }
+.eid .pbp-note { font-size: 12px; color: var(--mut); }
+.eid .pbp-note.good { color: var(--good); }
+.eid .pbp-note.warn { color: var(--warn); }
+
+/* C6 consensus builder */
+.eid .consensus .cons-controls { display: flex; align-items: center; gap: 12px; margin: 4px 0 12px; }
+.eid .consensus .cons-summary { font-size: 12px; color: var(--mut); }
+.eid .cons-err { color: var(--warn); font-size: 13px; margin-bottom: 8px; }
+.eid .cons-empty { color: var(--mut); padding: 20px 0; }
+.eid .cons-wrap { overflow-x: auto; }
+.eid .cons-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.eid .cons-table th { text-align: left; color: var(--mut); font-weight: 600; padding: 6px 8px;
+  border-bottom: 1px solid var(--line); white-space: nowrap; }
+.eid .cons-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.eid .cons-table td.empty { color: var(--mut); text-align: center; }
+.eid .cons-table tr.accepted { opacity: .5; }
+.eid .cons-id { display: flex; gap: 8px; align-items: flex-start; min-width: 200px; }
+.eid .cons-thumb { width: 54px; height: 54px; flex: 0 0 auto; background: #000; border-radius: 6px; overflow: hidden;
+  display: flex; align-items: center; justify-content: center; }
+.eid .cons-thumb img { max-width: 100%; max-height: 100%; }
+.eid .cons-meta { min-width: 0; }
+.eid .cons-ctx { color: var(--mut); margin-top: 3px; }
+.eid .cons-name { color: var(--ink); margin-top: 2px; }
+.eid .rv-code { color: var(--ink); font-weight: 700; font-family: ui-monospace, Menlo, monospace; }
+.eid .cons-accept { white-space: nowrap; }
+.eid .cons-accept select { background: var(--bg); border: 1px solid var(--line); color: var(--ink);
+  border-radius: 6px; padding: 4px 6px; font-size: 12px; margin-right: 6px; }
+.eid .cons-accept .btn { margin: 0; padding: 5px 12px; }
+.eid .chip { display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
+  padding: 2px 7px; border-radius: 20px; background: var(--line); color: var(--mut); }
+.eid .chip.consensus { background: #143; color: var(--good); }
+.eid .chip.conflict { background: #421; color: var(--warn); }
+.eid .chip.single { background: #234; color: #9cf; }

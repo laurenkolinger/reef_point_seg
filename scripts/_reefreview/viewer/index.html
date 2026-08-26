@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TCRMP Reef - Expert Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Inter:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="title">
+    <h1>TCRMP Reef - Expert Review</h1>
+    <p class="sub">Identify each segmented organism below. Your IDs train an automated
+       reef-monitoring model. Thank you.</p>
+  </div>
+  <div class="counts" id="counts" aria-live="polite"></div>
+</header>
+
+<!-- C2: the IDs do nothing for the model unless the CSV comes back by email -->
+<section class="alert" id="returnAlert">
+  <div class="alert-head">Email your CSV back</div>
+  <p>Your IDs live only in this browser until you click <strong>Export CSV</strong> and
+     <strong>email the downloaded file back</strong>. Send it to:</p>
+  <p class="alert-emails"><span id="emailTargets">lauren.olinger@uvi.edu</span></p>
+</section>
+
+<div class="whobar">
+  <span class="whoami" id="whoami" title="The reviewer name recorded with your IDs."></span>
+  <a href="#" class="changeName" id="changeName" title="Change the reviewer name recorded with your IDs.">change name</a>
+</div>
+
+<section class="instructions" id="instructions">
+  <details>
+    <summary title="Expand the short how-to.">How to review</summary>
+    <ul>
+      <li>Enter your name.</li>
+      <li>Pick your assigned project in the <strong>Project</strong> menu.</li>
+      <li>Click the code for each mask. <strong>I don't know</strong> is fine.</li>
+      <li>Click <strong>Export CSV</strong> to download your IDs.</li>
+      <li>Email the CSV back.</li>
+    </ul>
+  </details>
+</section>
+
+<div class="filterbar" id="filterbar"></div>
+
+<main id="cards" class="cards"></main>
+
+<footer class="actionbar">
+  <div class="progress" id="progress"></div>
+  <button id="exportBtn" class="primary" title="Download your IDs as a CSV file to email back.">Export CSV</button>
+</footer>
+
+<!-- C1: reviewer NAME gate. Required before any labeling; persisted in
+     localStorage and written as the `reviewer` column on every CSV row. -->
+<div class="modal" id="nameGate" hidden>
+  <div class="modal-card">
+    <h2>Before you start, your name</h2>
+    <p>Please enter your name. It is recorded with <strong>every identification you submit</strong> so the
+       operator can credit your work and reconcile it against other reviewers. Stored only in this browser.</p>
+    <input type="text" id="reviewerName" class="nameinput" placeholder="e.g. Jane Doe"
+           autocomplete="name" title="Your name, written into every exported CSV row.">
+    <p class="nameErr" id="nameErr" aria-live="polite"></p>
+    <div class="modal-actions">
+      <button id="nameOk" class="primary" title="Save your name and start reviewing.">Start reviewing</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="exportModal" hidden>
+  <div class="modal-card">
+    <h2>Email your results</h2>
+    <p>Your CSV (<code id="csvName">expert_ids.csv</code>) has downloaded. Please <strong>attach it to an
+       email</strong> and send it to:</p>
+    <ul id="contactList" class="contacts"></ul>
+    <p class="hint">A blank email to these recipients has been opened for you. Just attach the
+       downloaded CSV. (Browsers cannot attach the file automatically.)</p>
+    <div class="modal-actions">
+      <a id="mailtoLink" class="primary" href="#" title="Open a blank email to the recipients, then attach the downloaded CSV.">Open email</a>
+      <button id="closeModal" title="Close this window.">Close</button>
+    </div>
+  </div>
+</div>
+
+<script src="viewer.js"></script>
+</body>
+</html>

@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Label Manager - Reef Point Seg</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap">
+  <link rel="stylesheet" href="{{ base }}/static/labels.css">
+</head>
+<body>
+  <main class="lb" aria-labelledby="lb-title">
+
+    <header class="lb-head">
+      <h1 id="lb-title" class="lb-title">Label Manager</h1>
+      <p class="lb-sub">The species-code vocabulary every project seeds from.
+         Add new codes, edit a name or category, compose remaps, and re-run the
+         recode by hand. Codes are referenced everywhere downstream, so they are
+         minted once and never changed.</p>
+    </header>
+
+    <!-- ============================================================== -->
+    <!-- Section 1: Vocabulary                                          -->
+    <!-- ============================================================== -->
+    <section class="lb-sec" id="sec-vocab" aria-labelledby="vocab-h">
+      <div class="lb-sec-head">
+        <h2 id="vocab-h" class="lb-sec-title">Vocabulary</h2>
+        <p class="lb-sec-note">The species codes. Add a new label, or edit the
+           name and category of an existing one. A code itself is locked once it
+           exists.</p>
+      </div>
+
+      <div class="lb-toolbar">
+        <div class="lb-field lb-field-search">
+          <label for="vocab-search">Find a label</label>
+          <input type="search" id="vocab-search" autocomplete="off"
+                 placeholder="code, name, or category..."
+                 title="Show only rows whose code, name, or category contains this text">
+        </div>
+        <div class="lb-field lb-field-cat">
+          <label for="vocab-cat">Category</label>
+          <select id="vocab-cat"
+                  title="Show only rows in one category">
+            <option value="">All categories</option>
+          </select>
+        </div>
+        <div class="lb-toolbar-actions">
+          <button type="button" id="vocab-add" class="lb-btn lb-btn-accent"
+                  title="Add a brand new species code to the vocabulary">
+            Add label
+          </button>
+        </div>
+      </div>
+
+      <div class="lb-paths" id="vocab-paths" aria-live="polite"></div>
+
+      <!-- Add row form (hidden until Add label is pressed) -->
+      <form class="lb-addrow" id="vocab-addform" hidden
+            aria-label="Add a new label">
+        <div class="lb-addrow-grid">
+          <div class="lb-field">
+            <label for="add-code">Code</label>
+            <input type="text" id="add-code" autocomplete="off"
+                   placeholder="UPPERCASE" inputmode="text"
+                   title="The immutable code. Uppercase, non-empty, unique. It cannot be changed later.">
+          </div>
+          <div class="lb-field">
+            <label for="add-category">Category</label>
+            <input type="text" id="add-category" autocomplete="off"
+                   list="cat-list" placeholder="e.g. CORAL"
+                   title="A non-empty category. Reuse an existing one or type a new one.">
+            <datalist id="cat-list"></datalist>
+          </div>
+          <div class="lb-field">
+            <label for="add-name">Name</label>
+            <input type="text" id="add-name" autocomplete="off"
+                   placeholder="full label name"
+                   title="A non-empty display name for this code.">
+          </div>
+        </div>
+        <div class="lb-addrow-foot">
+          <p class="lb-confirm-note">
+            Saving backs up the canonical file and mirrors the duplicate so the
+            two stay byte-identical.
+          </p>
+          <div class="lb-addrow-buttons">
+            <button type="button" id="add-cancel" class="lb-btn"
+                    title="Discard this new label without saving">Cancel</button>
+            <button type="submit" id="add-save" class="lb-btn lb-btn-accent"
+                    title="Validate, back up, write, and mirror">Save new label</button>
+          </div>
+        </div>
+        <p class="lb-inline-error" id="add-error" role="alert" hidden></p>
+      </form>
+
+      <div class="lb-table-wrap">
+        <p class="lb-empty" id="vocab-empty" hidden>
+          No labels yet. Use Add label to mint the first species code.
+        </p>
+        <table class="lb-table" id="vocab-table" hidden>
+          <thead>
+            <tr>
+              <th class="col-code" scope="col">Code</th>
+              <th class="col-category" scope="col">Category</th>
+              <th class="col-name" scope="col">Name</th>
+              <th class="col-edit" scope="col">Edit</th>
+            </tr>
+          </thead>
+          <tbody id="vocab-tbody"></tbody>
+        </table>
+      </div>
+      <p class="lb-count" id="vocab-count" aria-live="polite"></p>
+    </section>
+
+    <!-- ============================================================== -->
+    <!-- Section 2: Remaps                                              -->
+    <!-- ============================================================== -->
+    <section class="lb-sec" id="sec-remaps" aria-labelledby="remaps-h">
+      <div class="lb-sec-head">
+        <h2 id="remaps-h" class="lb-sec-title">Remaps</h2>
+        <p class="lb-sec-note">A remap collapses one code into another (old to
+           new) before the recode runs. The active remap log is shown below.
+           Composing a new one writes a new timestamped file; nothing is ever
+           overwritten.</p>
+      </div>
+
+      <div class="lb-remaps-cols">
+        <!-- Active remap log -->
+        <div class="lb-card" id="remap-active-card">
+          <h3 class="lb-card-title">Active remap log</h3>
+          <div class="lb-card-meta" id="remap-active-meta"></div>
+          <p class="lb-empty" id="remap-active-empty" hidden>
+            No remap logs yet. Compose one to seed the recode.
+          </p>
+          <table class="lb-table lb-table-sm" id="remap-active-table" hidden>
+            <thead>
+              <tr>
+                <th scope="col">Old code</th>
+                <th scope="col" aria-hidden="true"></th>
+                <th scope="col">New code</th>
+              </tr>
+            </thead>
+            <tbody id="remap-active-tbody"></tbody>
+          </table>
+          <div class="lb-excludes" id="remap-active-excludes" hidden>
+            <h4 class="lb-excludes-h">Excluded codes</h4>
+            <div class="lb-chips" id="remap-active-exchips"></div>
+          </div>
+          <details class="lb-history">
+            <summary title="All remap logs, newest first">All remap logs</summary>
+            <ul class="lb-history-list" id="remap-history"></ul>
+          </details>
+        </div>
+
+        <!-- Compose a new remap log -->
+        <div class="lb-card" id="remap-compose-card">
+          <h3 class="lb-card-title">Compose a new remap log</h3>
+          <p class="lb-card-note">Each row collapses an old code into a new one.
+             Use exclude to drop a code from the recode entirely.</p>
+          <div class="lb-compose-rows" id="compose-rows"></div>
+          <div class="lb-compose-actions">
+            <button type="button" id="compose-add-remap" class="lb-btn"
+                    title="Add another old to new remap row">Add remap</button>
+            <button type="button" id="compose-add-exclude" class="lb-btn"
+                    title="Add a code to exclude from the recode">Add exclude</button>
+          </div>
+          <div class="lb-field">
+            <label for="compose-note">Note (optional)</label>
+            <input type="text" id="compose-note" autocomplete="off"
+                   placeholder="why this remap..."
+                   title="A short note stored in the new remap log header">
+          </div>
+          <div class="lb-compose-foot">
+            <p class="lb-confirm-note">
+              This writes a new timestamped remap log. It never overwrites an
+              existing one, and it does not run the recode.
+            </p>
+            <button type="button" id="compose-save" class="lb-btn lb-btn-accent"
+                    title="Write a new timestamped remap log">Save new remap log</button>
+          </div>
+          <p class="lb-inline-error" id="compose-error" role="alert" hidden></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================== -->
+    <!-- Section 3: Locations + Recode                                  -->
+    <!-- ============================================================== -->
+    <section class="lb-sec" id="sec-locations" aria-labelledby="loc-h">
+      <div class="lb-sec-head">
+        <h2 id="loc-h" class="lb-sec-title">Locations and recode</h2>
+        <p class="lb-sec-note">The canonical paths this manager reads and writes,
+           shown read-only. The recode regenerates the recoded master codes that
+           new projects seed from. It is manual, and it backs up the prior
+           outputs first.</p>
+      </div>
+
+      <dl class="lb-locations" id="loc-list" aria-live="polite"></dl>
+
+      <div class="lb-recode">
+        <div class="lb-recode-text">
+          <h3 class="lb-card-title">Re-run recode</h3>
+          <p class="lb-card-note" id="recode-note">
+            Regenerates the recoded master codes from the canonical inputs and
+            the latest remap log. The prior recode outputs are backed up first.
+          </p>
+        </div>
+        <button type="button" id="recode-run" class="lb-btn lb-btn-accent"
+                title="Back up prior outputs, then regenerate the recoded master codes">
+          Re-run recode
+        </button>
+      </div>
+      <p class="lb-inline-error" id="recode-error" role="alert" hidden></p>
+      <pre class="lb-recode-result" id="recode-result" hidden></pre>
+    </section>
+
+    <footer class="lb-foot">
+      <span id="lb-generated"></span>
+      <span class="lb-attr">Reef Point Seg - built by Lauren Olinger</span>
+    </footer>
+  </main>
+
+  <!-- Confirm dialog (recode) -->
+  <div class="lb-modal" id="lb-modal" hidden role="dialog" aria-modal="true"
+       aria-labelledby="modal-title">
+    <div class="lb-modal-card">
+      <h3 class="lb-modal-title" id="modal-title">Confirm recode</h3>
+      <p class="lb-modal-body" id="modal-body"></p>
+      <div class="lb-modal-actions">
+        <button type="button" id="modal-cancel" class="lb-btn"
+                title="Close without running">Cancel</button>
+        <button type="button" id="modal-confirm" class="lb-btn lb-btn-accent"
+                title="Run the recode now">Yes, re-run recode</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast region -->
+  <div class="lb-toasts" id="lb-toasts" aria-live="polite" aria-atomic="false"></div>
+
+  <script>window.LABELS_BASE = {{ base|tojson }};</script>
+  <script src="{{ base }}/static/labels.js"></script>
+</body>
+</html>

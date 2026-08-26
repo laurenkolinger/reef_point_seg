@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Coverage Matrix - Reef Point Seg</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap">
+  <link rel="stylesheet" href="{{ base }}/static/matrix.css">
+</head>
+<body>
+  <main class="mx" aria-labelledby="mx-title">
+
+    <header class="mx-head">
+      <h1 id="mx-title" class="mx-title">Coverage Matrix</h1>
+      <p class="mx-sub">Every image against every label across all reviewed projects.
+         Where they intersect tells you what has been looked at, and what has not.</p>
+    </header>
+
+    <!-- Top summary bar: headline counts + percent found + legend -->
+    <section class="mx-summary">
+      <div class="mx-summary-top">
+        <div class="mx-summary-line" id="mx-headline" aria-live="polite">Loading the coverage matrix...</div>
+        <button type="button" id="mx-rescan" class="mx-rescan"
+                title="Rescan every project and rebuild the grid now. Use this after archiving or annotating a project so the matrix reflects the change (it also refreshes automatically when you return to this tab).">
+          Rescan
+        </button>
+      </div>
+      <ul class="mx-legend" id="mx-legend" aria-label="What each cell color means">
+        <li class="lg" data-outcome="not_reviewed">
+          <span class="chip chip-not-reviewed" aria-hidden="true"></span>
+          <span class="lg-text"><b>Not reviewed</b> - no project has looked at this pair yet</span>
+        </li>
+        <li class="lg" data-outcome="not_found">
+          <span class="chip chip-not-found" aria-hidden="true"></span>
+          <span class="lg-text"><b>Reviewed, not found</b> - looked for this label, it was not present</span>
+        </li>
+        <li class="lg" data-outcome="pending_expert"
+            title="A mask on this image is still flagged for expert review. The label is the tentative expert guess, or REVIEW when no guess exists yet. Counts as not found until an expert accepts an ID.">
+          <span class="chip chip-pending-expert" aria-hidden="true"></span>
+          <span class="lg-text"><b>Awaiting expert review</b> - flagged for an expert, no accepted ID yet</span>
+        </li>
+        <li class="lg" data-outcome="found_manual">
+          <span class="chip chip-found-manual" aria-hidden="true"></span>
+          <span class="lg-text"><b>Found by hand</b> - a person drew this label on the image</span>
+        </li>
+        <li class="lg" data-outcome="found_ai">
+          <span class="chip chip-found-ai" aria-hidden="true"></span>
+          <span class="lg-text"><b>Found, AI assisted</b> - accepted from an AI suggestion</span>
+        </li>
+        <li class="lg" data-outcome="found_model">
+          <span class="chip chip-found-model" aria-hidden="true"></span>
+          <span class="lg-text"><b>Found by model</b> - predicted by a trained model</span>
+        </li>
+        <li class="lg" data-outcome="found_expert"
+            title="An expert reviewed this mask and accepted a final ID for it. The strongest outcome; it wins over every other outcome when projects disagree.">
+          <span class="chip chip-found-expert" aria-hidden="true"></span>
+          <span class="lg-text"><b>Expert verified</b> - carries an accepted expert ID</span>
+        </li>
+      </ul>
+      <div class="mx-project-note" id="mx-project-note" aria-live="polite" hidden></div>
+    </section>
+
+    <!-- Controls: search rows, show/hide columns, filter outcomes -->
+    <section class="mx-controls" aria-label="Filters">
+      <div class="ctrl ctrl-search">
+        <label for="mx-search">Find image rows</label>
+        <input type="search" id="mx-search" autocomplete="off"
+               placeholder="type part of an image name..."
+               title="Show only image rows whose basename contains this text">
+      </div>
+
+      <div class="ctrl ctrl-outcome">
+        <label for="mx-outcome">Show outcomes</label>
+        <select id="mx-outcome"
+                title="Limit the grid to cells with a particular outcome">
+          <option value="all">All outcomes</option>
+          <option value="found_expert"
+                  title="Only cells whose mask carries an accepted expert ID">Expert verified only</option>
+          <option value="found_manual">Found by hand only</option>
+          <option value="found_ai">Found, AI assisted only</option>
+          <option value="found_model">Found by model only</option>
+          <option value="pending_expert"
+                  title="Only cells with a mask still flagged for expert review">Awaiting expert review only</option>
+          <option value="not_found">Reviewed, not found only</option>
+        </select>
+      </div>
+
+      <div class="ctrl ctrl-project">
+        <label for="mx-project">Isolate a project</label>
+        <select id="mx-project"
+                title="Pick a project to see only the cells it contributes. Cells ringed in accent are unique to that project (they leave the matrix if you archive it); dimmed cells are shared with another active project (they stay). The count next to each name is how many cells it touches.">
+          <option value="all">All projects</option>
+        </select>
+      </div>
+
+      <div class="ctrl ctrl-labels">
+        <div class="ctrl-labels-head">
+          <label id="mx-labels-label">Show label columns</label>
+          <span class="ctrl-labels-actions">
+            <button type="button" id="mx-labels-all"
+                    title="Show every label column">all</button>
+            <button type="button" id="mx-labels-none"
+                    title="Hide every label column">none</button>
+          </span>
+        </div>
+        <div class="mx-labels-box" id="mx-labels"
+             role="group" aria-labelledby="mx-labels-label"
+             title="Tick a label to show its column, untick to hide it"></div>
+      </div>
+    </section>
+
+    <!-- The grid itself (the hero). Scrolls horizontally on small screens. -->
+    <section class="mx-grid-wrap" id="mx-grid-wrap" aria-label="Coverage grid">
+      <div class="mx-empty" id="mx-empty" hidden>
+        No reviewed projects yet. Annotate a project in Step 5 or the 4.test
+        combined annotator and its coverage appears here.
+      </div>
+      <table class="mx-grid" id="mx-grid" hidden>
+        <thead id="mx-thead"></thead>
+        <tbody id="mx-tbody"></tbody>
+      </table>
+    </section>
+
+    <footer class="mx-foot">
+      <span id="mx-generated"></span>
+      <span class="mx-attr">Reef Point Seg - built by Lauren Olinger</span>
+    </footer>
+  </main>
+
+  <!-- Provenance popover, positioned next to the hovered cell -->
+  <div class="mx-pop" id="mx-pop" role="tooltip" hidden></div>
+
+  <script>window.MATRIX_BASE = {{ base|tojson }};</script>
+  <script src="{{ base }}/static/matrix.js"></script>
+</body>
+</html>

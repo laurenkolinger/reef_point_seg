@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Add Expert IDs — TCRMP reef review</title>
+  <link rel="stylesheet" href="{{ base }}/static/expertids.css">
+  <style>
+    body { margin: 0; background: #0c0c14; padding: 24px; }
+    .wrap { max-width: 1100px; margin: 0 auto; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    {% include 'expertids/panel.html' %}
+  </div>
+  <script>window.EXPERTIDS_BASE = {{ base|tojson }};</script>
+  <script src="{{ base }}/static/expertids.js"></script>
+  <script>
+    if (window.ExpertIDs && window.ExpertIDs.onShow) window.ExpertIDs.onShow();
+  </script>
+</body>
+</html>

@@ -1,0 +1,181 @@
+{# Add-Expert-IDs UI fragment. Self-contained: no Jinja vars (expertids.js fills
+   the path fields + counts from /expertids/api/status), all styling scoped under
+   .eid. Include it inside any host page that also loads expertids.css/.js. #}
+<div class="eid" id="eid-root">
+  <p class="eid-intro">Send reef masks you flagged <code>REVIEW</code> to an outside taxonomic expert, then fold
+     their answers back in. Three steps, in order: <b>1)</b> publish the flagged masks to the public review site,
+     <b>2)</b> send the expert that link, <b>3)</b> import the CSV they email back. Re-runnable any time more IDs
+     arrive; it never blocks training.</p>
+
+  <div class="stepper">
+    <div class="s"><b><span class="num">1</span>Publish</b><div>Push the flagged masks to the public review site.</div></div>
+    <div class="s"><b><span class="num">2</span>Send link</b><div>Email the expert that review-site URL.</div></div>
+    <div class="s"><b><span class="num">3</span>Import CSV</b><div>Fold the expert's answers back into the project.</div></div>
+  </div>
+
+  <!-- ── Step 1: publish flagged masks ─────────────────────────────── -->
+  <section class="step">
+    <h2><span class="num">1</span> Publish flagged masks to the expert site</h2>
+    <p class="howto">When you flag a point <code>REVIEW</code> (Step 4) it is segmented (Step 5) and published to a
+       public GitHub-Pages site the expert browses. Exports publish automatically, but if a push failed (lab
+       network / no token) the live site can fall behind. This reconciles and pushes it: you see exactly what
+       will change (new masks added, completed IDs removed) before anything goes to GitHub.
+       <b><span id="s-pending">-</span></b> item(s) currently pending review.</p>
+    <div class="field">
+      <label>Review folder (local clone of the GitHub-Pages repo)
+        <span class="tip" title="Local working tree of the review repo. New masks are added here and resolved UIDs removed, then pushed so the expert's queue stays current.">?</span>
+      </label>
+      <input type="text" id="cfg-review" value="">
+    </div>
+    <div class="sync">
+      <button class="btn sync-btn" id="sync-btn" onclick="ExpertIDs.previewSite()"
+        title="Check the live review site against this machine, then push any new masks (additions) or completed IDs (removals) to GitHub. You see exactly what will change before anything is pushed.">
+        Check &amp; update review site
+      </button>
+      <span class="sync-hint" id="sync-hint">Reconciles the live site with the current queue, then publishes to GitHub.</span>
+      <div class="sync-panel" id="sync-panel">
+        <div id="sync-summary"></div>
+        <div class="sync-actions" id="sync-actions"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Step 2: send the link ─────────────────────────────────────── -->
+  <section class="step">
+    <h2><span class="num">2</span> Send the link to your taxonomic expert</h2>
+    <p class="howto">Email this URL to the expert. They label each mask in the browser and export a CSV
+       (<code>uid,code,confidence,reviewer,project_id</code>; the confidence column may be blank and is
+       ignored on import) to email back. The site reflects whatever you last published in Step 1.</p>
+    <div class="linkrow">
+      <input type="text" id="review-site-url" readonly value=""
+        title="Public expert-review GitHub-Pages site. This is the link you email to reviewers.">
+      <button class="btn sm2" onclick="ExpertIDs.copyReviewLink()" title="Copy the review-site URL to the clipboard.">Copy link</button>
+      <button class="btn ghost sm2" onclick="ExpertIDs.openReviewSite()" title="Open the review site in a new tab to preview what the expert sees.">Open site</button>
+    </div>
+    <div id="copy-note" class="copy-note">Link copied.</div>
+
+    <!-- C2/C3: operator setup - contact email + extra candidate "potential IDs" -->
+    <div class="setup">
+      <h3>Reviewer setup <span class="muted">(optional)</span></h3>
+      <p class="howto">Record the contact email answers should return to and any extra candidate codes you want
+         surfaced on the viewer (the "potential IDs" the expert is most likely choosing between). Both are saved
+         to the review site; the email also appears in each request below as the return address.</p>
+      <div class="field">
+        <label>Return contact email
+          <span class="tip" title="The address the expert emails the finished CSV back to. Recorded on the review manifest (contacts) and included in each per-project email request below. Blank falls back to lauren.olinger@uvi.edu.">?</span>
+        </label>
+        <input type="text" id="cfg-op-email" placeholder="e.g. lauren.olinger@uvi.edu">
+      </div>
+      <div class="field">
+        <label>Extra candidate "potential IDs" (comma list)
+          <span class="tip" title="Codes the expert is most likely choosing between, e.g. OFAV,OFRA. Added to codes.json candidate_codes so the viewer surfaces them as quick picks. Existing master-flagged candidates are kept.">?</span>
+        </label>
+        <input type="text" id="cfg-op-codes" placeholder="e.g. OFAV, OFRA">
+      </div>
+      <button class="btn sm2" id="op-save-btn" onclick="ExpertIDs.saveOperatorSetup()"
+        title="Save the contact email + candidate codes to the review site.">Save setup</button>
+      <span class="op-note" id="op-note"></span>
+
+      <h3 style="margin-top:18px;">Per-project email requests</h3>
+      <p class="howto">One ready-to-send request per project with masks awaiting review. The text carries the
+         subject line, the review-site link, step-by-step instructions, and the return address; copy it, or open a
+         pre-filled draft with the Email draft button.</p>
+      <div id="email-requests"></div>
+    </div>
+  </section>
+
+  <!-- ── Step 3: import the returned CSV (ROLLING) ─────────────────── -->
+  <section class="step">
+    <h2><span class="num">3</span> Import the expert's returned CSV</h2>
+    <p class="howto">Drop the CSV the expert emailed back. Each row is folded in as a <b>tentative</b> review,
+       keyed by the reviewer, so multiple experts and projects accumulate, nothing is overwritten or pruned.
+       Rows route to their own project (by the <code>project_id</code> column) so identical frame names across
+       projects never cross-contaminate. Tentative IDs show on the site immediately; the final code is chosen
+       later in the Consensus builder. So far: <b><span id="s-expert">-</span></b> accepted (expert),
+       <b><span id="s-lib">-</span></b> in the library. Re-drop any time more arrive.</p>
+    <div class="field">
+      <label>Reviewer name <span class="muted">(fallback if the CSV omits the reviewer column)</span>
+        <span class="tip" title="The reviewer for rows whose CSV has no reviewer column. The CSV's own reviewer column (CONTRACTS §4) takes precedence; rows with no reviewer at all are reported, not silently dropped.">?</span>
+      </label>
+      <input type="text" id="cfg-reviewer" placeholder="e.g. Dr. Jane Doe">
+    </div>
+    <div id="drop">
+      <p><strong>Drag the expert's CSV here</strong>, or click to choose a file.</p>
+      <p class="small">Expected columns: <code>uid,code,confidence,reviewer,project_id</code> (the confidence
+         column may be blank and is ignored; extra columns are ignored too).</p>
+      <input type="file" id="file" accept=".csv,text/csv" hidden>
+    </div>
+    <div class="err" id="err"></div>
+    <div class="result" id="result">
+      <div id="result-head"></div>
+      <div class="grid" id="result-grid"></div>
+      <div class="unrouted" id="result-unrouted"></div>
+    </div>
+    <div class="pbp">
+      <h3>Pending by project
+        <span class="tip" title="Every project with masks still awaiting review. Check projects and delete them from the public review site if they were published by mistake or are no longer needed; accepted IDs and the expert-ID library are unaffected.">?</span>
+      </h3>
+      <div id="pbp"></div>
+      <div class="pbp-actions" id="pbp-actions" style="display:none">
+        <button class="btn ghost sm2" onclick="ExpertIDs.deleteSelectedProjects()"
+          title="Remove every checked project's pending masks from the public review site. Accepted IDs and the expert-ID library are unaffected.">Delete selected</button>
+        <span class="pbp-note" id="pbp-note"></span>
+      </div>
+    </div>
+    <div class="hist">
+      <h3>This session</h3>
+      <div id="hist"></div>
+    </div>
+  </section>
+
+  <!-- ── C6: consensus builder ─────────────────────────────────────── -->
+  <section class="step consensus">
+    <h2><span class="num">4</span> Build consensus &amp; accept final IDs</h2>
+    <p class="howto">Each pending mask, its tentative reviews (one column per reviewer), and a computed status.
+       Pick the final code (defaults to the consensus where reviewers agree) and accept it; only then is the
+       <b>EXPERT</b> id stamped onto the mask, the item removed from the review site, and pushed. Conflicts are
+       never auto-accepted; you choose.</p>
+    <div class="cons-controls">
+      <button class="btn sm2" onclick="ExpertIDs.loadConsensus()" title="Reload the pending masks and their tentative reviews.">Refresh</button>
+      <span class="cons-summary" id="cons-summary"></span>
+    </div>
+    <div class="cons-err" id="cons-err"></div>
+    <div class="cons-wrap" id="cons-wrap"></div>
+  </section>
+
+  <!-- Rarely-changed paths, tucked away so the flow stays clean -->
+  <details class="adv">
+    <summary>Advanced paths (export dir, library)</summary>
+    <div class="cfg">
+      <div class="field">
+        <label>Project export dir (step-5 segmentations)
+          <span class="tip" title="The active project's step5_segmentImages folder. Masks here are relabeled in place when their UID appears in the CSV.">?</span>
+        </label>
+        <input type="text" id="cfg-export" value="">
+      </div>
+      <div class="field">
+        <label>Expert-ID library
+          <span class="tip" title="Permanent, cross-project store (gitignored, in the module). Keeps the image+mask+polygon+label for every reviewed UID so labelsets combine and future projects inherit IDs.">?</span>
+        </label>
+        <input type="text" id="cfg-library" value="">
+      </div>
+    </div>
+  </details>
+
+  <section class="catalog">
+    <h2>Reviewed mask library</h2>
+    <p class="sub">Every reviewed mask across projects. Drag a tile's slider to fade the mask overlay over its
+       close-up; the caption shows the code, who labeled it (USER vs EXPERT), the mask area, and the image's
+       site / transect / year.</p>
+    <div class="cat-controls">
+      <label>Code <select id="f-code"><option value="">all</option></select></label>
+      <label>Mode <select id="f-mode"><option value="">all</option></select></label>
+      <label>Site <select id="f-site"><option value="">all</option></select></label>
+      <label>Year <select id="f-year"><option value="">all</option></select></label>
+      <input type="text" id="f-q" placeholder="search uid / image…" title="Substring match on the mask UID or its source image filename">
+      <button class="btn refresh-btn" onclick="ExpertIDs.loadCatalog()">Refresh</button>
+    </div>
+    <div class="cat-meta" id="cat-meta"></div>
+    <div class="tiles" id="tiles"></div>
+  </section>
+</div>

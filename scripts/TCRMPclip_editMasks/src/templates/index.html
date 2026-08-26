@@ -1,0 +1,4183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TCRMP Segment Images</title>
+<!-- VICARIUS-aligned typography: Inter body, Space Mono code,
+     Syne headings, Silkscreen reserved for small pixel kickers only.
+     Step 5 preserves the HSL per-mask palette (see maskColor in JS) —
+     only the surrounding UI chrome is themed. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Syne:wght@500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --magenta:       #E20074;
+  --magenta-dark:  #B8005C;
+  --magenta-light: #FFB3D9;
+  --pink:          #FFB3D9;
+  --pink-soft:     #FFE6F2;
+  --cyan:          #00D4FF;
+  --bg:            #0a0a0f;
+  --bg-deep:       #050508;
+  --surface:       #11111a;
+  --surface-light: #191926;
+  --input-bg:      #15151f;
+  --text:          #F5EDF0;
+  --text-dim:      #b0a7ab;
+  --success:       #00FFB3;
+  --warning:       #FFB800;
+  --error:         #FF4D6D;
+  --border:        #2a2a38;
+  --border-dim:    #1d1d26;
+  --radius:        2px;
+  --radius-lg:     3px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { background: var(--bg); }
+body {
+  font-family: 'Inter', ui-sans-serif, -apple-system, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  letter-spacing: 0.01em;
+  color: var(--text);
+  background: var(--bg);
+  overflow: hidden;
+  height: 100vh;
+  cursor: crosshair;
+}
+
+/* Pixel grid + scanlines (match orchestrator) ------------------------- */
+body::before {
+  content: ""; position: fixed; inset: 0;
+  background-image:
+    linear-gradient(to right,  rgba(255,179,217,0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,179,217,0.05) 1px, transparent 1px);
+  background-size: 20px 20px;
+  pointer-events: none; z-index: 0; opacity: 0.4;
+}
+body::after {
+  content: ""; position: fixed; inset: 0;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0px, transparent 2px,
+    rgba(255,255,255,0.012) 2px, rgba(255,255,255,0.012) 3px
+  );
+  pointer-events: none; z-index: 1; opacity: 0.22;
+}
+
+/* ── Screens ── */
+.screen { display: none; width: 100%; height: 100%; position: relative; z-index: 2; }
+.screen.active { display: flex; }
+
+#orch-loading { background: var(--bg-deep); align-items: center; justify-content: center; }
+#orch-loading .orch-veil { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; max-width: 520px; padding: 40px 24px; width: 100%; }
+#orch-loading .orch-veil-title {
+  color: var(--pink); font-size: 20px; font-weight: 700;
+  font-family: 'Syne', sans-serif; text-transform: uppercase; letter-spacing: 0.04em;
+  align-self: center;
+}
+#orch-loading .orch-veil-msg { color: var(--text); font-size: 14px; line-height: 1.6; width: 100%; }
+#orch-loading .orch-veil-hint { color: var(--text-dim); font-size: 12px; margin-top: 12px; font-family: 'Space Mono', monospace; align-self: center; text-align: center; }
+
+/* ── orch status bars ── */
+.orch-step { display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; font-size: 13px; color: var(--text-dim); font-family: 'Space Mono', monospace;
+  text-transform: uppercase; letter-spacing: 0.06em; padding: 6px 0; width: 100%;
+  transition: color 0.3s; }
+.orch-step.active { color: var(--pink); }
+.orch-step.done { color: var(--text-dim); }
+.orch-bar { display: inline-block; flex: 1; height: 3px; background: var(--border);
+  border-radius: 2px; overflow: hidden; position: relative; min-width: 80px; }
+.orch-bar i { display: block; height: 100%; width: 0%; background: var(--pink);
+  border-radius: 2px; transition: width 0.4s ease; }
+.orch-step.active .orch-bar i { width: 60%; animation: orchPulse 1.4s ease-in-out infinite; }
+.orch-step.done .orch-bar i { width: 100%; background: var(--magenta); animation: none; }
+.orch-step.error .orch-bar i { width: 100%; background: #e05555; animation: none; }
+@keyframes orchPulse {
+  0%,100% { opacity: 1; } 50% { opacity: 0.5; }
+}
+#orch-retry-btn { margin-top: 8px; align-self: center; cursor: pointer;
+  background: transparent; border: 1px solid var(--pink); color: var(--pink);
+  padding: 7px 22px; font-size: 13px; font-family: 'Space Mono', monospace;
+  text-transform: uppercase; letter-spacing: 0.06em; border-radius: 3px; }
+#orch-retry-btn:hover { background: var(--pink); color: var(--bg-deep); }
+#orch-error-msg { color: #e05555; font-size: 12px; font-family: 'Space Mono', monospace; align-self: center; text-align: center; display: none; }
+
+/* ── STARTUP SCREEN ── */
+#startup { align-items: center; justify-content: center; }
+.setup-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: 32px 40px; width: 620px; max-height: 90vh; overflow-y: auto;
+}
+.setup-card h1 {
+  font-size: 22px; margin-bottom: 22px; color: var(--pink);
+  font-family: 'Syne', sans-serif; text-transform: uppercase; letter-spacing: 0.04em;
+  font-weight: 700;
+}
+.setup-card h2 {
+  font-size: 15px; margin: 16px 0 10px; color: var(--text);
+  font-family: 'Syne', sans-serif; text-transform: uppercase; letter-spacing: 0.03em;
+  font-weight: 600;
+}
+.field { margin-bottom: 16px; }
+.field label {
+  display: block; font-size: 11px; color: var(--text-dim);
+  margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.08em;
+  font-family: 'Space Mono', monospace;
+}
+.field input[type=text] {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--input-bg); color: var(--text);
+  font-size: 13px; font-family: 'Space Mono', 'Consolas', monospace;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.field input[type=text]:focus {
+  border-color: var(--magenta); outline: none;
+  box-shadow: 0 0 0 1px rgba(226,0,116,0.35);
+}
+.field-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.field-row label {
+  font-size: 14px; color: var(--text); cursor: crosshair;
+  display: flex; align-items: center; gap: 6px;
+  font-family: 'Inter', sans-serif; text-transform: none; letter-spacing: 0;
+}
+.field-row input[type=checkbox], .field-row input[type=radio] { accent-color: var(--magenta); }
+.mode-buttons { display: flex; gap: 12px; margin-bottom: 16px; }
+.mode-btn {
+  flex: 1; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--input-bg); color: var(--text); cursor: crosshair; text-align: center;
+  font-size: 13px; transition: all 0.15s;
+}
+.mode-btn:hover { border-color: var(--pink); color: var(--pink); }
+.mode-btn.active {
+  border-color: var(--magenta); background: rgba(226,0,116,0.08);
+  color: var(--pink); font-weight: 600;
+}
+.mode-btn .mode-title {
+  font-size: 14px; font-weight: 600; margin-bottom: 4px;
+  font-family: 'Syne', sans-serif; letter-spacing: 0.02em;
+}
+.mode-btn .mode-desc { font-size: 12px; color: var(--text-dim); font-family: 'Space Mono', monospace; }
+.mode-btn.active .mode-desc { color: var(--text); }
+.setup-card .btn-action {
+  width: 100%; padding: 12px; border: 1px solid var(--magenta); border-radius: var(--radius);
+  background: var(--magenta); color: #fff; font-size: 13px; font-weight: 400;
+  cursor: crosshair; margin-top: 8px;
+  font-family: 'Space Mono', monospace; letter-spacing: 0.06em; text-transform: uppercase;
+  transition: all 0.15s;
+}
+.setup-card .btn-action:hover { background: var(--pink); border-color: var(--pink); color: var(--bg); }
+.setup-card .btn-action:disabled {
+  background: transparent; border-color: var(--border);
+  color: var(--text-dim); opacity: 0.5; cursor: not-allowed;
+}
+.setup-error { color: var(--error); font-size: 12px; margin-top: 8px; font-family: 'Space Mono', monospace; }
+.setup-info {
+  color: var(--success); font-size: 13px; margin-top: 8px;
+  background: rgba(0,255,179,0.08); border: 1px solid rgba(0,255,179,0.3);
+  padding: 8px 10px; border-radius: var(--radius); display: none;
+  font-family: 'Space Mono', monospace;
+}
+.setup-info.visible { display: block; }
+.setup-info .num { font-weight: 700; color: var(--success); }
+.cat-grid { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.cat-grid label {
+  font-size: 14px; color: var(--text); cursor: crosshair;
+  display: flex; align-items: center; gap: 6px; min-width: 96px;
+  font-family: 'Inter', sans-serif;
+}
+.cat-grid .select-all {
+  font-size: 12px; color: var(--pink); cursor: crosshair;
+  margin-left: 8px; text-decoration: underline;
+  font-family: 'Space Mono', monospace; text-transform: uppercase; letter-spacing: 0.06em;
+}
+.hidden { display: none !important; }
+
+/* ── PROCESSING SCREEN ── */
+#processing { align-items: center; justify-content: center; flex-direction: column; gap: 16px; }
+.progress-wrap { width: 560px; }
+.progress-wrap h2 {
+  font-size: 18px; margin-bottom: 14px;
+  font-family: 'Syne', sans-serif; color: var(--pink);
+  text-transform: uppercase; letter-spacing: 0.03em; font-weight: 600;
+}
+.progress-bar-outer {
+  width: 100%; height: 8px; background: var(--input-bg);
+  border: 1px solid var(--border-dim); border-radius: 1px; overflow: hidden;
+}
+.progress-bar-inner {
+  height: 100%; background: linear-gradient(90deg, var(--magenta), var(--pink));
+  transition: width 0.2s;
+}
+.progress-text { font-size: 13px; color: var(--text-dim); margin-top: 8px; font-family: 'Space Mono', monospace; }
+.progress-current { font-size: 12px; color: var(--text-dim); margin-top: 4px; font-family: 'Space Mono', monospace; }
+.progress-eta { font-size: 12px; color: var(--success); margin-top: 4px; font-family: 'Space Mono', monospace; }
+
+/* ── REVIEW SCREEN ── */
+#review { flex-direction: column; }
+
+.review-topbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 14px; background: var(--bg-deep); border-bottom: 1px solid var(--border);
+  height: 40px; user-select: none; flex-shrink: 0;
+}
+.review-topbar h1 {
+  font-size: 14px; font-family: 'Syne', sans-serif;
+  color: var(--pink); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;
+}
+.btn {
+  padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: transparent; color: var(--text); cursor: crosshair;
+  font-size: 12px; white-space: nowrap;
+  font-family: 'Space Mono', monospace; letter-spacing: 0.04em;
+  transition: all 0.15s;
+}
+.btn:hover { border-color: var(--pink); color: var(--pink); }
+.btn.primary { background: var(--magenta); border-color: var(--magenta); color: #fff; }
+.btn.primary:hover { background: var(--pink); border-color: var(--pink); color: var(--bg); }
+.btn.active { background: var(--surface-light); border-color: var(--success); color: var(--success); }
+.spacer { flex: 1; }
+.img-counter {
+  font-size: 14px; font-weight: 700; color: var(--pink);
+  min-width: 80px; text-align: center;
+  font-family: 'Space Mono', monospace;
+}
+.batch-info { font-size: 12px; color: var(--text-dim); font-family: 'Space Mono', monospace; }
+.status { font-size: 12px; color: var(--text-dim); font-family: 'Space Mono', monospace; }
+.status.flash { color: var(--success); }
+.loop-banner-chip {
+  font-size: 11px; color: var(--cyan); background: var(--surface-light);
+  border: 1px solid var(--cyan); border-radius: var(--radius);
+  padding: 4px 10px; margin-left: 12px; font-family: 'Space Mono', monospace;
+  letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 480px; cursor: help;
+}
+
+/* Toolbar row */
+.toolbar-bar {
+  display: flex; align-items: center; gap: 10px; padding: 5px 14px;
+  background: var(--bg-deep); border-bottom: 1px solid var(--border); flex-shrink: 0;
+  font-size: 12px;
+}
+.toolbar-bar label {
+  color: var(--text); cursor: crosshair;
+  display: flex; align-items: center; gap: 6px;
+  font-family: 'Inter', sans-serif;
+}
+.toolbar-bar label:hover { color: var(--pink); }
+.toolbar-bar input[type=checkbox] { accent-color: var(--magenta); }
+.toolbar-bar input[type=range] { width: 90px; accent-color: var(--magenta); }
+.toolbar-bar .tool-label {
+  color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em;
+  font-size: 10px; margin-right: 4px;
+  font-family: 'Silkscreen', 'Space Mono', monospace; font-weight: 700;
+}
+.toolbar-bar .tool-val { color: var(--success); font-size: 11px; min-width: 36px; font-family: 'Space Mono', monospace; }
+.toolbar-bar .sep { width: 1px; height: 16px; background: var(--border); margin: 0 6px; }
+
+.review-body { display: flex; flex: 1; overflow: hidden; }
+
+/* Canvas */
+.canvas-wrap { flex: 1; position: relative; overflow: hidden; background: var(--bg-deep); }
+#canvas { position: absolute; top: 0; left: 0; cursor: crosshair; }
+#canvas.add-mode { cursor: cell; }
+#canvas.refine-mode { cursor: crosshair; }
+
+/* ADD-mode visual: magenta border + badge. */
+.canvas-wrap.add-active {
+  box-shadow: inset 0 0 0 4px var(--magenta), inset 0 0 24px rgba(226, 0, 116, 0.25);
+}
+.canvas-wrap.add-active::after {
+  content: 'ADD MODE — hold 1-N + click to place';
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  background: var(--magenta); color: #fff; padding: 5px 14px;
+  font-weight: 700; font-size: 11px; letter-spacing: 0.08em;
+  border-radius: var(--radius); pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+  z-index: 50; font-family: 'Space Mono', monospace; text-transform: uppercase;
+}
+
+/* DRAW-mode visual: cyan border + badge. TagLab-style freehand mask edit. */
+.canvas-wrap.draw-active {
+  box-shadow: inset 0 0 0 4px var(--cyan), inset 0 0 24px rgba(0, 212, 255, 0.25);
+}
+.canvas-wrap.draw-active::after {
+  content: 'DRAW MODE — drag across the mask to carve (inside) or add (outside)';
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  background: var(--cyan); color: var(--bg); padding: 5px 14px;
+  font-weight: 700; font-size: 11px; letter-spacing: 0.08em;
+  border-radius: var(--radius); pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+  z-index: 50; font-family: 'Space Mono', monospace; text-transform: uppercase;
+}
+#canvas.draw-mode { cursor: crosshair; }
+
+/* Target-label button bar (same layout as step 4) */
+.quickadd-bar {
+  display: flex; align-items: center; gap: 6px; padding: 7px 14px;
+  background: var(--bg-deep); border-bottom: 1px solid var(--border); flex-shrink: 0;
+  font-size: 12px; flex-wrap: wrap;
+}
+.quickadd-bar .qa-label {
+  color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em;
+  font-size: 10px; margin-right: 6px;
+  font-family: 'Silkscreen', 'Space Mono', monospace; font-weight: 700;
+}
+.quickadd-bar .qa-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--input-bg); border: 1px solid var(--border);
+  color: var(--text); padding: 5px 10px; border-radius: var(--radius);
+  cursor: crosshair; font-family: 'Space Mono', monospace; font-size: 12px;
+  transition: all 0.15s;
+}
+.quickadd-bar .qa-btn:hover { background: var(--surface-light); color: var(--pink); border-color: var(--pink); }
+.quickadd-bar .qa-btn.active {
+  background: var(--magenta); border-color: var(--magenta); color: #fff;
+  box-shadow: 0 0 8px rgba(226, 0, 116, 0.5);
+}
+.quickadd-bar .qa-btn.qa-review { border-color: hsl(40,92%,50%); color: hsl(40,92%,68%); }
+.quickadd-bar .qa-btn.qa-review .qa-key { color: hsl(40,92%,70%); }
+.quickadd-bar .qa-btn.qa-review.active {
+  background: hsl(40,92%,52%); border-color: hsl(40,92%,58%); color: #1a1205;
+  box-shadow: 0 0 8px hsla(40,92%,55%,0.6);
+}
+.quickadd-bar .qa-btn .qa-key {
+  background: rgba(0,0,0,0.35); color: var(--success);
+  padding: 1px 5px; border-radius: 1px; font-size: 10px; font-weight: 700;
+}
+.quickadd-bar .qa-btn .qa-name { color: var(--text-dim); font-style: italic; font-size: 11px; }
+
+/* Loupe (magnifier) */
+#loupe {
+  position: fixed; width: 180px; height: 180px;
+  border: 2px solid var(--magenta); border-radius: 50%;
+  pointer-events: none; display: none;
+  background: #000; overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.7);
+  z-index: 250;
+}
+#loupe.visible { display: block; }
+
+/* Right panel */
+.panel {
+  width: 300px; min-width: 300px; background: var(--surface);
+  border-left: 1px solid var(--border); display: flex; flex-direction: column;
+  flex-shrink: 0;
+}
+.panel-header {
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+}
+.panel-header h3 {
+  font-size: 11px; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: 0.1em;
+  font-family: 'Silkscreen', 'Space Mono', monospace; font-weight: 700;
+}
+.panel-header .summary { font-size: 11px; color: var(--text-dim); margin-left: auto; font-family: 'Space Mono', monospace; }
+
+/* Scan-candidates panel (Task 12): a second, EPHEMERAL label panel that stacks
+   beneath the main mask list inside the same column. Neutralize the column
+   chrome `.panel` would otherwise re-apply (full width, left border) so it reads
+   as a sub-panel rather than a second sidebar; cap its list height so the main
+   list keeps the room. */
+#scan-panel {
+  width: auto; min-width: 0; border-left: 0;
+  border-top: 1px solid var(--border); flex-shrink: 1; max-height: 40%;
+}
+#scan-panel .mask-list { flex: 0 1 auto; max-height: 220px; }
+.scan-status {
+  font-size: 11px; color: var(--text-dim); padding: 4px 12px;
+  font-family: 'Space Mono', monospace; min-height: 16px;
+  white-space: pre-wrap; word-break: break-word;
+}
+
+.mask-list { list-style: none; flex: 1; overflow-y: auto; padding: 4px 6px; }
+.mask-list li {
+  padding: 6px 8px; margin-bottom: 2px; border-radius: var(--radius);
+  font-size: 13px; cursor: crosshair; display: flex; align-items: center; gap: 8px;
+  transition: background 0.1s; border: 1px solid transparent;
+  font-family: 'Inter', sans-serif;
+}
+.mask-list li:hover { background: var(--surface-light); }
+.mask-list li.active {
+  background: linear-gradient(90deg, rgba(226,0,116,0.28) 0%, rgba(226,0,116,0.12) 60%, rgba(226,0,116,0.05) 100%);
+  border-color: var(--magenta);
+  box-shadow: inset 3px 0 0 0 var(--magenta), 0 0 8px rgba(226,0,116,0.35);
+  color: var(--text);
+}
+.mask-list li.active .m-label { color: var(--pink); }
+.mask-list li.active .m-species { color: #fff; font-weight: 700; }
+.mask-list li .m-status { width: 16px; font-size: 13px; text-align: center; font-family: 'Space Mono', monospace; }
+.mask-list li .m-check { width: 16px; accent-color: var(--magenta); cursor: crosshair; }
+.mask-list li .m-swatch {
+  width: 14px; height: 14px; border-radius: var(--radius); border: 1px solid rgba(255,255,255,0.2);
+  display: inline-block; flex-shrink: 0;
+}
+.mask-list li .m-label {
+  font-weight: 700; width: 26px; color: var(--success);
+  font-size: 12px; font-family: 'Space Mono', monospace;
+}
+.mask-list li .m-species { flex: 1; color: var(--text); font-size: 13px; }
+/* expert/pending review tags in the mask list + the header legend */
+.mask-list li .m-rev { font-size: 9px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 9px; flex-shrink: 0; }
+.m-rev.expert, .rev-chip.expert { background: hsla(152,62%,45%,0.22); color: hsl(152,62%,62%); }
+.m-rev.pending, .rev-chip.pending { background: hsla(40,92%,55%,0.20); color: hsl(40,92%,68%); }
+.rev-legend { display: inline-flex; gap: 6px; align-items: center; margin-left: 12px; }
+.rev-chip { font-size: 9px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 9px; }
+.mask-list li .m-area { color: var(--text-dim); font-size: 11px; width: 50px; text-align: right; font-family: 'Space Mono', monospace; }
+.mask-list li .m-score { color: var(--text-dim); font-size: 11px; width: 38px; text-align: right; font-family: 'Space Mono', monospace; }
+
+.mask-list li.accepted .m-status { color: var(--success); }
+.mask-list li.rejected .m-status { color: var(--error); }
+.mask-list li.pending .m-status { color: var(--warning); }
+.mask-list li.exemplar .m-label { color: var(--pink); }
+/* Expert-locked: out with (or returned from) outside taxonomic review, so it
+   is read-only here. Dimmed + a lock chip; the server refuses the edit
+   regardless of this styling. */
+.mask-list li.expert-locked { opacity: 0.55; cursor: not-allowed; }
+.mask-list li.expert-locked .m-check { cursor: not-allowed; }
+
+.panel-actions { padding: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+
+.help-hint {
+  padding: 8px 10px; font-size: 11px; color: var(--text-dim);
+  border-top: 1px solid var(--border); flex-shrink: 0; text-align: center;
+  font-family: 'Space Mono', monospace; letter-spacing: 0.04em;
+}
+
+/* Always-visible refine discoverability hint above the panel actions. */
+.refine-hint {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 8px 10px; border-top: 1px solid var(--border);
+  flex-shrink: 0; font-size: 10.5px; color: var(--text-dim);
+  font-family: 'Space Mono', monospace; line-height: 1.5;
+}
+.refine-hint .rh-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.refine-hint .rh-pan { color: var(--cyan); }
+.refine-hint kbd {
+  background: var(--input-bg); padding: 1px 5px; border: 1px solid var(--border);
+  border-radius: 1px; color: var(--pink); font-family: 'Space Mono', monospace;
+  font-size: 10px;
+}
+.help-hint kbd {
+  background: var(--input-bg); padding: 2px 6px; border: 1px solid var(--border);
+  border-radius: 1px; color: var(--pink); font-family: 'Space Mono', monospace;
+}
+
+/* ── Keyboard cheat sheet (K toggles — sticky) ── */
+#kbd-help {
+  position: fixed; inset: 0; z-index: 400; display: none;
+  align-items: center; justify-content: center;
+  background: rgba(5, 5, 8, 0.82); backdrop-filter: blur(2px);
+}
+#kbd-help.visible { display: flex; }
+#kbd-help .kh-card {
+  background: var(--surface); border: 1px solid var(--magenta); border-radius: var(--radius-lg);
+  padding: 22px 26px; width: min(880px, 92vw); max-height: 88vh; overflow-y: auto;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.8);
+}
+#kbd-help .kh-head {
+  display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px;
+  border-bottom: 1px solid var(--border); padding-bottom: 10px;
+}
+#kbd-help .kh-head h2 {
+  font-family: 'Syne', sans-serif; color: var(--pink); font-size: 18px;
+  text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;
+}
+#kbd-help .kh-head .kh-sub { font-size: 11px; color: var(--text-dim); font-family: 'Space Mono', monospace; }
+#kbd-help .kh-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 28px; }
+#kbd-help .kh-group { break-inside: avoid; }
+#kbd-help .kh-group h3 {
+  font-family: 'Silkscreen', 'Space Mono', monospace; font-weight: 700;
+  font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--magenta-light); margin: 4px 0 8px;
+}
+#kbd-help .kh-group.primary h3 { color: var(--pink); }
+#kbd-help .kh-group.primary {
+  border: 1px solid rgba(226,0,116,0.4); border-radius: var(--radius);
+  padding: 8px 12px 10px; background: rgba(226,0,116,0.06);
+}
+#kbd-help .kh-row {
+  display: flex; align-items: baseline; gap: 10px; padding: 3px 0;
+  font-size: 12px; font-family: 'Inter', sans-serif;
+}
+#kbd-help .kh-row .kh-keys { flex: 0 0 132px; text-align: right; }
+#kbd-help .kh-row .kh-desc { color: var(--text-dim); }
+#kbd-help kbd {
+  background: var(--input-bg); padding: 2px 6px; border: 1px solid var(--border);
+  border-radius: 1px; font-size: 11px; color: var(--pink);
+  font-family: 'Space Mono', monospace; white-space: nowrap;
+}
+#kbd-help .kh-foot { margin-top: 14px; font-size: 11px; color: var(--text-dim); font-family: 'Space Mono', monospace; text-align: center; }
+
+/* ── Overlays ── */
+.overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.78); display: none;
+  align-items: center; justify-content: center; z-index: 200;
+}
+.overlay.visible { display: flex; }
+.overlay-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: 28px 36px; max-width: 520px; text-align: center;
+}
+.overlay-card h2 {
+  color: var(--pink); margin-bottom: 14px;
+  font-family: 'Syne', sans-serif; text-transform: uppercase; letter-spacing: 0.03em;
+  font-size: 18px; font-weight: 600;
+}
+.overlay-card p { font-size: 14px; color: var(--text); margin-bottom: 8px; }
+.overlay-card .btn { margin-top: 12px; }
+
+/* Category popup */
+#cat-popup {
+  position: fixed; z-index: 250; display: none;
+  background: var(--surface); border: 1px solid var(--magenta); border-radius: var(--radius-lg);
+  padding: 8px 6px; font-size: 12px; pointer-events: auto;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.8);
+}
+#cat-popup.visible { display: flex; gap: 3px; flex-wrap: wrap; width: 300px; }
+#cat-popup .cat-btn {
+  padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--input-bg); color: var(--text); cursor: crosshair;
+  font-size: 12px; flex: 1; min-width: 64px; text-align: center; white-space: nowrap;
+  font-family: 'Space Mono', monospace; transition: all 0.1s;
+}
+#cat-popup .cat-btn:hover { background: var(--surface-light); border-color: var(--pink); color: var(--pink); }
+#cat-popup .cat-btn kbd { color: var(--magenta); font-weight: 700; margin-right: 3px; font-family: 'Space Mono', monospace; }
+
+/* Mode indicator */
+#mode-indicator {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  font-size: 48px; font-weight: 900; color: rgba(255, 179, 217, 0.65);
+  pointer-events: none; z-index: 300; opacity: 0; transition: opacity 0.15s;
+  text-shadow: 0 0 40px rgba(0,0,0,0.8);
+  font-family: 'Space Mono', monospace;
+}
+#mode-indicator.show { opacity: 1; }
+
+/* Box drawing overlay */
+#box-overlay {
+  position: absolute; border: 2px dashed var(--cyan); background: rgba(0, 212, 255, 0.12);
+  display: none; pointer-events: none; z-index: 10;
+}
+
+/* Lock-in hint — prominent canvas overlay, shown when a pending mask is selected. */
+#lockin-hint {
+  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+  background: rgba(10, 10, 15, 0.88); border: 1px solid var(--warning);
+  color: var(--warning); padding: 7px 18px; border-radius: var(--radius);
+  font-family: 'Space Mono', monospace; font-size: 12px; font-weight: 700;
+  letter-spacing: 0.06em; pointer-events: none; z-index: 30;
+  white-space: nowrap; box-shadow: 0 2px 12px rgba(0,0,0,0.7);
+  text-transform: uppercase;
+}
+#lockin-hint kbd {
+  background: var(--input-bg); padding: 1px 6px; border: 1px solid var(--warning);
+  border-radius: 1px; color: var(--warning); font-family: 'Space Mono', monospace;
+  font-size: 11px;
+}
+
+/* Scrollbars --------------------------------------------------------- */
+::-webkit-scrollbar       { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg-deep); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 1px; }
+::-webkit-scrollbar-thumb:hover { background: var(--magenta); }
+</style>
+</head>
+<body>
+
+<!-- ════════════ STARTUP ════════════ -->
+{% if orchestrated %}
+<div class="screen active" id="orch-loading">
+  <div class="orch-veil">
+    <div class="orch-veil-title">TCRMP &mdash; preparing segmentation</div>
+    <div id="orch-steps" class="orch-veil-msg">
+      <div class="orch-step active" data-step="configure">Loading project<span class="orch-bar"><i></i></span></div>
+      <div class="orch-step" data-step="queue">Building review queue<span class="orch-bar"><i></i></span></div>
+    </div>
+    <div id="orch-error-msg"></div>
+    <button id="orch-retry-btn" style="display:none">Retry</button>
+    <div class="orch-veil-hint">
+      Orchestrator-driven view &mdash; the segmentation screen opens automatically.
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="screen{% if not orchestrated %} active{% endif %}" id="startup">
+  <div class="setup-card">
+    <h1>TCRMP Segment Images (SAM3)</h1>
+
+    <div class="mode-buttons">
+      <div class="mode-btn active" id="mode-new" onclick="setMode('new')">
+        <div class="mode-title">Load from Place Points</div>
+        <div class="mode-desc">Import sam_click_prompts + raw images</div>
+      </div>
+      <div class="mode-btn" id="mode-resume" onclick="setMode('resume')">
+        <div class="mode-title">Continue Existing</div>
+        <div class="mode-desc">Resume from export directory</div>
+      </div>
+    </div>
+
+    <div id="new-fields">
+      <div class="field">
+        <label>Input Directory (Place Points output)</label>
+        <input type="text" id="inp-input" value="{{ default_input }}">
+      </div>
+      <div class="field">
+        <label>Export Directory (YOLO output)</label>
+        <input type="text" id="inp-export" value="{{ default_export }}">
+      </div>
+      <div class="field">
+        <label>Categories to Segment (uncheck to skip)</label>
+        <div class="cat-grid" id="cat-grid">
+          {% for cat in all_categories %}
+          <label><input type="checkbox" class="cat-chk" value="{{ cat }}"
+            {{ 'checked' if cat in default_categories else '' }}> {{ cat }}</label>
+          {% endfor %}
+          <span class="select-all" onclick="toggleAllCats()">toggle all</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="resume-fields" class="hidden">
+      <div class="field">
+        <label>Export Directory (with existing segmentation data)</label>
+        <input type="text" id="inp-resume-export" placeholder="/path/to/existing/export">
+      </div>
+    </div>
+
+    <div class="field">
+      <label title="Keep only target-species masks and points; drop all other categories. This is the combined Step-4+5 default and matches the orchestrator panel. On by default.">
+        <input type="checkbox" id="chk-target-only" {{ 'checked' if target_species_only else '' }}>
+        Target labels only
+      </label>
+    </div>
+    <div class="field">
+      <label title="Show the step-4 OCR/CPC points as read-only cyan reference markers (G). They guide placement but are never segmented, selected, or exported (they live in reference_points, never in masks). On by default.">
+        <input type="checkbox" id="chk-reference-default" {{ 'checked' if reference_default else '' }}>
+        Show existing points read-only (do not register as labels)
+      </label>
+    </div>
+
+    <details class="field" id="adv-sam3-details">
+      <summary title="SAM3 segmentation parameters. Defaults match the inherited Step-5 / orchestrator values; override here for a standalone launch.">Advanced - SAM3 (defaults from config; override here)</summary>
+      <div class="field">
+        <label title="Point-prompt segmentation confidence threshold (0-1). Lower keeps more low-score masks.">Confidence threshold</label>
+        <input type="number" id="inp-confidence" step="0.05" min="0" max="1" value="{{ default_confidence }}">
+      </div>
+      <div class="field">
+        <label title="Discard masks smaller than this many pixels.">Min mask area (px)</label>
+        <input type="number" id="inp-min-area" step="50" min="0" value="{{ default_min_area }}">
+      </div>
+      <div class="field">
+        <label title="Merge same-species masks whose centroids fall within this many pixels.">Merge distance (px)</label>
+        <input type="number" id="inp-merge-dist" step="5" min="0" value="{{ default_merge_dist }}">
+      </div>
+      <div class="field">
+        <label title="How to resolve overlapping masks of different species.">Overlap strategy</label>
+        <select id="inp-overlap">
+          <option value="larger_wins" {{ 'selected' if default_overlap == 'larger_wins' else '' }}>larger_wins</option>
+          <option value="higher_score" {{ 'selected' if default_overlap == 'higher_score' else '' }}>higher_score</option>
+          <option value="first_wins" {{ 'selected' if default_overlap == 'first_wins' else '' }}>first_wins</option>
+        </select>
+      </div>
+      <div class="field">
+        <label title="SAM3 mask granularity. Smaller settings halve VRAM use.">Mask size</label>
+        <select id="inp-mask-size">
+          <option value="tight" {{ 'selected' if default_mask_size == 'tight' else '' }}>tight</option>
+          <option value="medium" {{ 'selected' if default_mask_size == 'medium' else '' }}>medium</option>
+          <option value="generous" {{ 'selected' if default_mask_size == 'generous' else '' }}>generous</option>
+        </select>
+      </div>
+      <div class="field">
+        <label title="Discard sliver masks whose area/bbox-area ratio is below this.">Thin mask ratio</label>
+        <input type="number" id="inp-thin-ratio" step="0.01" min="0" max="1" value="{{ default_thin_ratio }}">
+      </div>
+      <div class="field">
+        <label title="approxPolyDP epsilon as a fraction of polygon perimeter; higher = simpler polygons.">Polygon simplify epsilon</label>
+        <input type="number" id="inp-simplify" step="0.001" min="0" value="{{ default_simplify }}">
+      </div>
+      <div class="field">
+        <label title="Threshold for the SAM3 exemplar/visual scan (0-1).">Exemplar threshold</label>
+        <input type="number" id="inp-exemplar" step="0.05" min="0" max="1" value="{{ default_exemplar }}">
+      </div>
+      <div class="field">
+        <label title="GPU device for the SAM3 tracker model (point/box prompts), e.g. cuda:1.">Tracker device</label>
+        <input type="text" id="inp-dev-tracker" value="{{ default_dev_tracker }}">
+      </div>
+      <div class="field">
+        <label title="GPU device for the SAM3 exemplar model (visual scan), e.g. cuda:0.">Exemplar device</label>
+        <input type="text" id="inp-dev-exemplar" value="{{ default_dev_exemplar }}">
+      </div>
+    </details>
+
+    <div class="field">
+      <label>Review Batch Size</label>
+      <div class="field-row">
+        <label><input type="radio" name="rbatch" value="5"> 5</label>
+        <label><input type="radio" name="rbatch" value="10" checked> 10</label>
+        <label><input type="radio" name="rbatch" value="20"> 20</label>
+        <label><input type="radio" name="rbatch" value="all"> All (no batching)</label>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>
+        <input type="checkbox" id="chk-shuffle">
+        Shuffle frames (randomize review order)
+      </label>
+      <div style="color:var(--text-dim); font-size:13px; line-height:1.6; margin-top:6px; margin-left:24px;">
+        Random per-session — which frames have been reviewed / exported is
+        still tracked on disk, so you can come back later and pick up the
+        unprocessed ones.
+      </div>
+    </div>
+
+    <div class="field">
+      <label title="Local working tree of the standalone public review repo (a git clone of laurenkolinger/reefpointseg-review with GitHub Pages on). REVIEW-flagged masks are exported here and auto-pushed so an expert can review them at the Pages URL. Default /mnt/tear/REVIEW_reefpointseg.">
+        Expert-review folder (pushed to GitHub Pages)
+      </label>
+      <input type="text" id="inp-review-dir" value="{{ default_review_dir }}">
+    </div>
+    <div class="field">
+      <label title="Comma-separated emails the expert reviewer is told to send their results CSV to. Add YOUR address and your student's; lauren.olinger@uvi.edu is included by default.">
+        Review result recipients (comma-separated emails)
+      </label>
+      <input type="text" id="inp-contacts" value="{{ default_contacts }}"
+             placeholder="you@uni.edu, student@uni.edu, lauren.olinger@uvi.edu">
+    </div>
+
+    <div class="setup-info" id="setup-info"></div>
+    <button class="btn-action" id="btn-start" onclick="doStart()">Load & Start</button>
+    <div class="setup-error" id="setup-error"></div>
+  </div>
+</div>
+
+<!-- ════════════ PROCESSING ════════════ -->
+<div class="screen" id="processing">
+  <div class="progress-wrap">
+    <h2>Running SAM3 segmentation...</h2>
+    <p style="font-size:13px; color:var(--text-dim); margin-bottom:14px; line-height:1.6;">Processing runs server-side. You can close the browser and come back — progress is saved.</p>
+    <div class="progress-bar-outer">
+      <div class="progress-bar-inner" id="progress-bar" style="width: 0%"></div>
+    </div>
+    <div class="progress-text" id="progress-text">0 / 0</div>
+    <div class="progress-current" id="progress-current"></div>
+    <div class="progress-eta" id="progress-eta"></div>
+    <button class="btn-action hidden" id="btn-start-review" onclick="startReviewWhileProcessing()" title="Begin reviewing the frames already segmented while SAM3 keeps processing the rest in the background." style="margin-top:18px; width:100%; padding:12px; background:var(--success); border:1px solid var(--success); border-radius:var(--radius); color:var(--bg); font-size:13px; font-weight:400; cursor:crosshair; font-family:'Space Mono',monospace; letter-spacing:0.06em; text-transform:uppercase;">Start Review</button>
+  </div>
+</div>
+
+<!-- ════════════ REVIEW ════════════ -->
+<div class="screen" id="review">
+  <div class="review-topbar">
+    <h1>Segment Images</h1>
+    <span class="loop-banner-chip" id="loop-banner-chip" style="display:none"
+          title="This is an active-learning refine round: the model proposed masks for frames it had not seen labels for yet. Review each one like a normal mask: Enter to accept, x to reject, refine/draw to fix the boundary, and use a number key + click to add any coral the model missed entirely. Nothing here is final until you accept or reject it.">
+    </span>
+    <button class="btn" onclick="prevImage()" title="Previous (B)">&#9664; Prev</button>
+    <span class="img-counter" id="img-counter">0 / 0</span>
+    <button class="btn" onclick="advanceToNextFrame()" title="Go to the next frame (N). On the last frame of the batch, a dialog appears so you can export and finish.">Next (or finish) &#9654;</button>
+    <span class="batch-info" id="batch-info"></span>
+    <label style="font-size:12px; color:var(--text-dim); font-family:'Space Mono',monospace; display:flex; align-items:center; gap:4px; margin-left:10px;"
+           title="Filter frame navigation (Prev/Next/counter) to only frames that still have an unlabeled mask (species not yet assigned, accepted or pending). Untick to navigate every frame again.">
+      <input type="checkbox" id="chk-unlabeled-only" onchange="toggleUnlabeledOnly(this.checked)"> Unlabeled only
+    </label>
+    <button class="btn" onclick="jumpNextUnlabeled()"
+            title="Jump to the next frame in this batch that has an unlabeled mask (species not yet assigned). Useful for finding masks accepted before the species guard, or a hand-added mask still missing a label.">
+      Next unlabeled <span id="unlabeled-count" style="color:var(--text-dim)"></span>
+    </button>
+    <span id="image-filename" style="color:var(--success); font-family:'Space Mono',monospace; font-size:13px; margin-left:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:500px;"></span>
+    <span id="bg-processing-badge" style="font-size:10px; color:var(--bg); background:var(--success); padding:3px 8px; border-radius:var(--radius); display:none; font-family:'Space Mono',monospace; letter-spacing:0.08em; text-transform:uppercase; font-weight:700;">Processing...</span>
+    <span class="spacer"></span>
+    <span id="frame-timer"
+          style="font-family:'Space Mono',monospace; font-size:12px; color:var(--text-dim); margin-right:8px"
+          title="This frame — target 15.0s. Average is the rolling mean for this session.">—</span>
+    <button class="btn" id="frame-timer-pause"
+            onclick="_timerTogglePause()" title="Pause / resume the timer (P)"
+            style="padding:4px 10px;font-size:11px;margin-right:8px">Pause</button>
+    <span class="status" id="status-text"></span>
+  </div>
+  <div class="toolbar-bar">
+    <span class="tool-label">Opacity:</span>
+    <input type="range" id="opacity-slider" min="0" max="100" value="50"
+           title="Mask fill opacity. Drag, or press O to cycle 30/60/90 percent. Keyboard shortcuts keep working while this slider is focused."
+           oninput="setOpacity(this.value)" onchange="this.blur()">
+    <span class="tool-val" id="opacity-val">50%</span>
+    <div class="sep"></div>
+    <label title="Show only the target-species masks and their cyan reference points; hide non-target masks and non-target reference points. On by default. Untick to show everything (T)."><input type="checkbox" id="chk-target-only" checked onchange="toggleTargetOnly(this.checked)"> Target points only</label>
+    <div class="sep"></div>
+    <span class="tool-label">Edit:</span>
+    <button class="btn" id="btn-mode-refine" onclick="setInteractionMode('refine')"
+            title="Refine mode: pick a mask, then left-click on the image to grow it; right-click to remove a region. Refine auto-engages when you click a mask.">Refine</button>
+    <button class="btn" id="btn-mode-merge" onclick="mergeAction()"
+            title="Merge: check 2+ masks then click (or press M) to merge them; with none checked, toggles click-A-then-B merge mode.">Merge (M)</button>
+    <button class="btn" id="btn-mode-add" onclick="setInteractionMode('add')"
+            title="Add mode (A): click on the image to drop a new mask, then choose its species/category.">Add (A)</button>
+    <button class="btn" id="btn-mode-draw" onclick="setInteractionMode('draw')"
+            title="Draw mode (D): freehand-edit the selected mask — drag inside to carve, outside to extend. Pick a mask first.">Draw (D)</button>
+  </div>
+  <div class="quickadd-bar" id="quickadd-bar">
+    <span class="qa-label">Tap a number to arm (sticky):</span>
+    {% for lbl in target_labels %}
+    <button class="qa-btn" data-code="{{ lbl.code }}" data-idx="{{ loop.index0 }}"
+            onclick="toggleQuickLabel({{ loop.index0 }})"
+            title="Tap {{ loop.index }} to arm {{ lbl.code }}{% if lbl.name %} ({{ lbl.name }}){% endif %} — then click to place + segment">
+      <span class="qa-key">{{ loop.index }}</span>
+      <span class="qa-code">{{ lbl.code }}</span>
+      <span class="qa-name">{{ lbl.name }}</span>
+    </button>
+    {% endfor %}
+    <!-- editMasks fixes an EXISTING export and must never spawn a NEW expert-
+         review round-trip, so the REVIEW-arming control (present in
+         combinedAnnotate) is removed here, not just hidden. -->
+  </div>
+  <div class="review-body">
+    <div class="canvas-wrap" id="canvas-wrap">
+      <canvas id="canvas"></canvas>
+      <div id="box-overlay"></div>
+      <div id="loupe"><canvas id="loupe-canvas" width="180" height="180"></canvas></div>
+      <div id="lockin-hint" class="lockin-hint" style="display:none"
+           title="Commit the new mask: double-click it or press Enter.">
+        Double-click or press <kbd>Enter</kbd> to lock in this mask
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h3>Masks</h3>
+        <span class="summary" id="panel-summary"></span>
+        <label class="hide-rej" title="Hide rejected masks from this list (they stay rejected and excluded from export).">
+          <input type="checkbox" id="chk-hide-rejected" checked onchange="hideRejected = this.checked; renderMaskList();"> hide rejected
+        </label>
+      </div>
+      <ul class="mask-list" id="mask-list"></ul>
+      <!-- Always-visible refine cheatsheet: the negative-refine (right-click)
+           behavior is easy to miss, so we surface it near the panel. Behavior
+           itself is unchanged — this is purely discoverability. -->
+      <div class="refine-hint" title="These work on the selected mask. Right-click removes a region (negative refine); Refine + left-click adds one.">
+        <span class="rh-line"><kbd>Right-click</kbd> remove / shrink region</span>
+        <span class="rh-line"><kbd>Refine</kbd>+<kbd>left-click</kbd> add region</span>
+        <span class="rh-line"><kbd>U</kbd> undo · <kbd>Enter</kbd> or <kbd>double-click</kbd> accept</span>
+        <span class="rh-line"><kbd>Shift</kbd>+<kbd>drag</kbd> redraw mask from a box</span>
+        <span class="rh-line rh-pan"><kbd>Click-hold + drag</kbd> pan anywhere</span>
+      </div>
+      <div class="panel-actions">
+        <button class="btn" onclick="undoRefine()"
+                title="Undo the last refine edit (add/remove region) on the selected mask.">Undo (U)</button>
+        <button class="btn" style="border-color:var(--error);color:var(--error)"
+                onclick="scrapFrame()" title="Exclude this frame from review and export — reversible via /unscrap">
+          Scrap Frame
+        </button>
+        <div style="display:flex; gap:4px;">
+          <button class="btn" onclick="doExemplarScan('this')" style="flex:1"
+                  title="Find masks on this frame that resemble the selected mask (its species) above the threshold, and add them as candidates. Pick a mask first.">Scan This</button>
+          <button class="btn" onclick="doExemplarScan('all')" style="flex:1"
+                  title="Scan this frame for masks resembling any accepted exemplar across all target species, and add them as candidates.">Scan All</button>
+        </div>
+        <div style="display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-dim); font-family:'Space Mono',monospace;"
+             title="Similarity cutoff for the Scan buttons: higher = stricter (fewer, closer matches), lower = looser (more candidates).">
+          <span>Threshold:</span>
+          <input type="range" id="scan-threshold" min="10" max="90" value="50" style="flex:1; accent-color:var(--magenta);"
+                 title="Similarity cutoff for the Scan buttons: higher = stricter (fewer, closer matches), lower = looser (more candidates).">
+          <span id="scan-threshold-val" style="color:var(--success); min-width:32px;">0.5</span>
+        </div>
+        <button class="btn" onclick="fitImage(); render();"
+                title="Fit the whole frame in the view (F).">Fit View (F)</button>
+        <button class="btn" id="btn-done-return" onclick="doneAndReturn()"
+                title="Save this frame and return to the main menu (closes the tab or returns to the orchestrator).">
+          Done — close &amp; return to main menu
+        </button>
+      </div>
+      <div class="help-hint">Press <kbd>K</kbd> for keyboard shortcuts</div>
+      <!-- Second label panel: EPHEMERAL exemplar-scan candidates (Task 12).
+           These live only on the client (scanCandidates[]) — they are NOT in
+           currentData.masks and are never persisted until accepted (Task 13). -->
+      <div class="panel" id="scan-panel" style="margin-top:8px"
+           title="Candidates from the last Scan (S). These are not saved — review and keep the ones you want.">
+        <div class="panel-header">
+          <h3>Scan candidates</h3>
+          <span class="summary" id="scan-summary"></span>
+        </div>
+        <div id="scan-status-box" class="scan-status" title="Live status/log for the Scan tool (S)."></div>
+        <ul class="mask-list" id="scan-candidate-list" title="Ephemeral scan candidates. Click a row to inspect; none are saved until you keep them."></ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Species popup for new masks -->
+<div id="cat-popup">
+  <div style="width:100%; font-size:10px; color:var(--text-dim); padding:3px 4px; text-transform:uppercase; letter-spacing:0.1em; font-family:'Silkscreen','Space Mono',monospace; font-weight:700;">Target Species</div>
+  {% for sp in target_species %}
+  <div class="cat-btn" onclick="assignNewMaskSpecies('{{ sp }}')"><kbd>{{ loop.index }}</kbd>{{ sp }}</div>
+  {% endfor %}
+  <div style="width:100%; border-top:1px solid var(--border); margin:4px 0;"></div>
+  <div style="width:100%; font-size:10px; color:var(--text-dim); padding:3px 4px; text-transform:uppercase; letter-spacing:0.1em; font-family:'Silkscreen','Space Mono',monospace; font-weight:700;">Category</div>
+  <div class="cat-btn" onclick="assignNewMaskCategory('Sponge')"><kbd>s</kbd>Sponge</div>
+  <div class="cat-btn" onclick="assignNewMaskCategory('Macroalgae')"><kbd>m</kbd>Macro</div>
+  <div class="cat-btn" onclick="assignNewMaskCategory('Gorgonian')"><kbd>g</kbd>Gorg</div>
+  <div class="cat-btn" onclick="assignNewMaskCategory('Turf')"><kbd>t</kbd>Turf</div>
+  <div class="cat-btn" onclick="assignNewMaskCategory('')"><kbd>0</kbd>Unlabel</div>
+  <!-- No REVIEW option here: editMasks fixes an EXISTING export and must
+       never spawn a NEW expert-review round-trip (see combinedAnnotate for
+       the original REVIEW-arming flow, kept there on purpose). -->
+</div>
+<div id="mode-indicator"></div>
+
+<!-- ════════════ KEYBOARD CHEAT SHEET (K toggles — sticky) ════════════ -->
+<div id="kbd-help">
+  <div class="kh-card">
+    <div class="kh-head">
+      <h2>Keyboard</h2>
+      <span class="kh-sub"><kbd>K</kbd> toggles this panel · <kbd>K</kbd> or <kbd>Esc</kbd> to close</span>
+    </div>
+    <div class="kh-cols">
+
+      <div class="kh-group primary">
+        <h3>Masks — the main flow</h3>
+        <div class="kh-row"><span class="kh-keys"><kbd>A</kbd></span><span class="kh-desc">un-armed sticky Add — click to place a new mask, refine, accept; stays in Add</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>1</kbd>…<kbd>9</kbd></span><span class="kh-desc">tap to arm that species (sticky) + enter Add; tap same number to disarm</span></div>
+        <div class="kh-row"><span class="kh-keys">cyan mask</span><span class="kh-desc">cyan = model proposal, pending your accept/reject</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>T</kbd></span><span class="kh-desc">show target points only (toggle)</span></div>
+        <div class="kh-row"><span class="kh-keys">click / right-click</span><span class="kh-desc">in Refine: add region / remove region</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>D</kbd></span><span class="kh-desc">Draw mode (manual mask)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>M</kbd></span><span class="kh-desc">merge mode (or merge 2+ selected masks)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Ctrl</kbd>+click row</span><span class="kh-desc">multi-select masks in the list (Shift+click = range)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Enter</kbd> · <kbd>dbl-click</kbd></span><span class="kh-desc">lock in current mask (unlabeled is fine — no popup)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>C</kbd></span><span class="kh-desc">label the selected mask (species, category, or unlabel)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>X</kbd> / <kbd>Del</kbd></span><span class="kh-desc">reject current mask · delete the whole multi-selected set</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>U</kbd></span><span class="kh-desc">undo last refine edit</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Tab</kbd></span><span class="kh-desc">select next mask</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Esc</kbd></span><span class="kh-desc">deselect → select mode</span></div>
+      </div>
+
+      <div class="kh-group">
+        <h3>Move through frames</h3>
+        <div class="kh-row"><span class="kh-keys"><kbd>N</kbd></span><span class="kh-desc">next frame (last frame opens the export dialog)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>B</kbd></span><span class="kh-desc">previous frame</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Space</kbd></span><span class="kh-desc">next image (last frame opens the Export dialog)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>P</kbd></span><span class="kh-desc">pause / resume the frame timer</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Ctrl</kbd>+<kbd>S</kbd></span><span class="kh-desc">save this frame now</span></div>
+      </div>
+
+      <div class="kh-group">
+        <h3>View</h3>
+        <div class="kh-row"><span class="kh-keys">scroll</span><span class="kh-desc">zoom</span></div>
+        <div class="kh-row"><span class="kh-keys">click-hold + drag</span><span class="kh-desc">pan anywhere (quick tap = normal action)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Alt</kbd>+drag · middle-drag</span><span class="kh-desc">pan (alternatives)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>F</kbd></span><span class="kh-desc">fit frame to view</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Z</kbd></span><span class="kh-desc">auto-center on selected mask</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>O</kbd></span><span class="kh-desc">cycle mask opacity</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>G</kbd></span><span class="kh-desc">toggle read-only reference points (step 4 guide)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>H</kbd></span><span class="kh-desc">toggle magnifier loupe</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Shift</kbd>+drag</span><span class="kh-desc">box redraw</span></div>
+      </div>
+
+    </div>
+    <div class="kh-foot">Most of your time is in <b>Add</b> + <b>Refine</b> — place a mask, clean it up, accept.</div>
+  </div>
+</div>
+
+<!-- End-of-batch confirm overlay (asked before any export) -->
+<div class="overlay" id="export-confirm-overlay">
+  <div class="overlay-card">
+    <h2>End of batch</h2>
+    <p>You're on the last frame of this batch. Export now?</p>
+    <div style="display:flex; gap:8px; justify-content:center;">
+      <button class="btn primary" onclick="confirmExportYes()" title="Export this batch to YOLO now (Y).">Yes — export (Y)</button>
+      <button class="btn" onclick="confirmExportNo()" title="Stay on this frame, don't export yet (N).">No (N)</button>
+    </div>
+  </div>
+</div>
+
+<!-- Export overlay -->
+<div class="overlay" id="export-overlay">
+  <div class="overlay-card">
+    <h2 id="export-title">Batch Exported</h2>
+    <p id="export-summary"></p>
+    <div id="export-remaining" style="margin:14px 0; font-size:14px; color:var(--pink); font-weight:600; font-family:'Space Mono',monospace;"></div>
+    <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+      <button class="btn primary" id="btn-next-review" onclick="nextReviewBatch()" title="Export saved. Load the next batch to keep annotating.">Open next batch</button>
+      <button class="btn" id="btn-save-close" onclick="doneAndReturn()" title="Export saved. Save this session and close / return to the orchestrator.">Save and close</button>
+      <button class="btn" onclick="openExportFolder()" title="Open the exported YOLO folder (all_images / all_labels / export_manifest.csv) in the host file manager.">Open export folder</button>
+      <button class="btn" onclick="openExportManifest()" title="Open export_manifest.csv (one row per frame: batch, image path, per-species mask tallies) in the host's default app.">Open manifest</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const wrap = document.getElementById('canvas-wrap');
+
+let currentMode = 'new';
+let scanResult = null;
+
+// EPHEMERAL exemplar-scan candidates (Task 12). These live ONLY here — they are
+// never pushed into currentData.masks and never persisted to the backend until
+// the operator keeps them (the Enter/Delete review loop is Task 13). scanReviewIdx
+// is reserved for that loop (-1 = not reviewing).
+let scanCandidates = [];
+let scanReviewIdx = -1;
+// Guard: true while a /commit_mask POST is in-flight; blocks double-Enter.
+let _committingCandidate = false;
+
+let images = [];        // [{filename, year, n_masks, ...}]
+let currentIdx = -1;
+let currentData = null; // {masks, image_width, image_height, ...}
+// Ids the operator deleted (rejected) on the CURRENT frame. Held independently
+// of currentData.masks so a just-deleted mask is still reported to /add via
+// rejectedMaskIds() even after a wholesale `currentData.masks = data.masks`
+// reload (reloadSegmentations / mergeSameId) — or a full `currentData` reload
+// (selectImage) — transiently restores its pre-reject 'pending' status before
+// the reject PUT has landed. Cleared on frame change so it never frees a region
+// on a later frame. See rejectMask/deleteCheckedMasks/rejectedMaskIds/selectImage.
+let recentlyDeletedIds = new Set();
+let img = null;
+
+let scale = 1, offsetX = 0, offsetY = 0;
+let selectedMask = -1;  // index into currentData.masks
+let isPanning = false, panStartX = 0, panStartY = 0;
+let autoCenter = false;
+
+// Mask opacity (0-1)
+let maskOpacity = 0.5;
+
+// Interaction modes: 'select' | 'refine' | 'merge' | 'add' | 'draw'
+// (box redraw is not a mode — it is the Shift+drag gesture on a selected mask)
+let interactionMode = 'select';
+let mergeFirstId = -1;
+
+// Box drawing state
+let isDrawingBox = false;
+let boxStartX = 0, boxStartY = 0, boxEndX = 0, boxEndY = 0;
+
+// Add mask state
+let aKeyDown = false;
+let pendingAddMaskIdx = -1;  // index of newly added mask awaiting category
+
+// ETA tracking
+let processStartTime = 0;
+let processTimes = [];
+
+// Refine in-flight guard
+let refineInFlight = false;
+
+// ── Category colors ──
+const CATEGORY_COLORS = {
+  'Coral':         {h: 0,   s: 80, l: 55},
+  'Sponge':        {h: 270, s: 70, l: 55},
+  'Macroalgae':    {h: 120, s: 60, l: 45},
+  'Gorgonian':     {h: 30,  s: 80, l: 50},
+  'Dca':           {h: 200, s: 50, l: 50},
+  'Turf':          {h: 80,  s: 50, l: 40},
+  'Non-living':    {h: 0,   s: 0,  l: 50},
+  'Cyanobacteria': {h: 180, s: 60, l: 45},
+  'Calcareous':    {h: 50,  s: 40, l: 60},
+};
+
+// Review state of a mask for semantic coloring:
+//   'model'   = model-proposed, still pending the operator's accept/reject
+//   'expert'  = an outside expert returned its ID (expert_id.mode === 'EXPERT')
+//   'pending' = flagged REVIEW, awaiting an expert ID
+//   null      = an ordinary target mask (per-id hue palette)
+function maskReviewState(mask) {
+  if (!mask) return null;
+  // Model-proposed masks stay ghosted cyan until the operator rules on them
+  // (accept/reject). Once status leaves 'pending' this no longer matches, so
+  // the mask falls through to its normal per-id color or REVIEW amber.
+  if (mask.source_type === 'model' && mask.status === 'pending') return 'model';
+  // One-way station: a mask is either flagged REVIEW (ships out to the expert
+  // portal on export) or it is not. There is no returned-expert state here.
+  if (mask.review === true || mask.species === 'REVIEW') return 'review';
+  return null;
+}
+
+// REVIEW masks get a fixed amber so the operator can see at a glance what is
+// going out for expert review this session. Model-proposed masks get a fixed
+// cyan so the operator can see at a glance what the model proposed and has
+// not yet been accepted/rejected.
+const REVIEW_COLORS = {
+  review: {h: 40, s: 92, l: 55},   // flagged REVIEW = amber
+  model: {h: 195, s: 85, l: 55},   // model-proposed, pending accept/reject = cyan
+};
+
+// Per-mask distinct color. mask.id is stable across saves, so each mask
+// keeps its color identity through refinement, undo, etc. 47 is a coprime
+// with 360 so successive ids step across the hue wheel without collisions.
+// Review/expert masks override the per-id hue with a fixed semantic color so
+// the operator can see at a glance which masks are pending vs expert-confirmed.
+function maskColor(mask, alpha) {
+  const st = maskReviewState(mask);
+  if (st) {
+    const c = REVIEW_COLORS[st];
+    return `hsla(${c.h}, ${c.s}%, ${c.l}%, ${alpha})`;
+  }
+  const id = Number(mask && mask.id) || 0;
+  const hue = (id * 47) % 360;
+  // Slight saturation/lightness jitter so nearby ids don't look identical.
+  const sat = 70 + ((id * 13) % 20);
+  const light = 50 + ((id * 7) % 15);
+  return `hsla(${hue}, ${sat}%, ${light}%, ${alpha})`;
+}
+
+function maskStrokeColor(mask) {
+  return maskColor(mask, 0.9);
+}
+
+// ── Target-only view ──────────────────────────────────────────────────────
+// When on (default each session), the canvas + mask list show only target-
+// species masks and their cyan reference points; non-target masks and non-
+// target reference points are hidden to cut visual clutter. REVIEW-flagged
+// masks ALWAYS show — they are the operator's active outbound work.
+let showOnlyTarget = true;
+let hideRejected = true;  // main list hides rejected masks by default; toggled by #chk-hide-rejected
+function isReviewMask(m) { return !!(m && (m.review === true || m.species === 'REVIEW')); }
+
+// Mirrors the server's _is_expert_locked (app.py): a mask that is out with
+// (or has been through) outside taxonomic expert review is read-only in
+// editMasks. Client-side check is best-effort UI only; the server is the
+// source of truth and refuses the actual mutation regardless of this.
+function isExpertLocked(m) {
+  if (!m) return false;
+  if (m.review === true) return true;
+  if (m.species === 'REVIEW') return true;
+  if (m.expert_id && typeof m.expert_id === 'object') return true;
+  if (m.review_uid) return true;
+  if (Array.isArray(m.reviews) && m.reviews.length > 0) return true;
+  return false;
+}
+function isTargetMask(m) {
+  if (!m) return false;
+  if (m.is_target === true) return true;            // backend flag (mask_ops.py)
+  return TARGET_SPECIES.indexOf(m.species) !== -1;  // fallback by species code
+}
+function isTargetRefPoint(p) {
+  return !!(p && TARGET_SPECIES.indexOf(p.species_code) !== -1);
+}
+// A mask has no real species classification yet ('' before the label popup,
+// or the 'UNK'/'?' placeholders). The target-species filter cannot validly
+// call such a mask non-target, so it must not hide it.
+function isUnclassifiedSpecies(sp) {
+  return !sp || sp === 'UNK' || sp === '?';
+}
+function shouldDrawMask(m) {
+  if (!showOnlyTarget) return true;
+  if (isReviewMask(m)) return true;
+  // Unlabeled masks (no species assigned) ALWAYS show — pending OR locked-in.
+  // The target-species filter can't call an unlabeled mask non-target, and
+  // hiding a good unlabeled mask makes it vanish while it still blocks new
+  // placement. A mask that carries a real species is classified and still
+  // obeys the filter below (so genuinely non-target masks stay decluttered).
+  if (m && isUnclassifiedSpecies(m.species)) return true;
+  return isTargetMask(m);
+}
+function toggleTargetOnly(on) {
+  showOnlyTarget = !!on;
+  const chk = document.getElementById('chk-target-only');
+  if (chk) chk.checked = showOnlyTarget;
+  renderMaskList(); render();
+  setStatus(showOnlyTarget ? 'Target points only' : 'Showing all points');
+}
+
+function getReviewBatchSize() {
+  const v = document.querySelector('input[name=rbatch]:checked').value;
+  return v === 'all' ? 999999 : parseInt(v);
+}
+
+function getShuffleFlag() {
+  const el = document.getElementById('chk-shuffle');
+  return !!(el && el.checked);
+}
+
+function getReviewDir() {
+  const el = document.getElementById('inp-review-dir');
+  return el ? el.value.trim() : '';
+}
+
+function getContacts() {
+  const el = document.getElementById('inp-contacts');
+  return el ? el.value.trim() : '';
+}
+
+// ══════════════════════════════════════════════
+// SCREEN SWITCHING
+// ══════════════════════════════════════════════
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+// ══════════════════════════════════════════════
+// STARTUP
+// ══════════════════════════════════════════════
+function setMode(mode) {
+  currentMode = mode;
+  document.getElementById('mode-new').classList.toggle('active', mode === 'new');
+  document.getElementById('mode-resume').classList.toggle('active', mode === 'resume');
+  document.getElementById('new-fields').classList.toggle('hidden', mode !== 'new');
+  document.getElementById('resume-fields').classList.toggle('hidden', mode !== 'resume');
+  document.getElementById('btn-start').textContent = mode === 'new' ? 'Load & Start' : 'Continue';
+  document.getElementById('setup-info').classList.remove('visible');
+  document.getElementById('setup-error').textContent = '';
+  scanResult = null;
+}
+
+function toggleAllCats() {
+  const chks = document.querySelectorAll('.cat-chk');
+  const allChecked = Array.from(chks).every(c => c.checked);
+  chks.forEach(c => c.checked = !allChecked);
+}
+
+async function doStart() {
+  const errEl = document.getElementById('setup-error');
+  const infoEl = document.getElementById('setup-info');
+
+  if (currentMode === 'new') {
+    const inputDir = document.getElementById('inp-input').value.trim();
+    const exportDir = document.getElementById('inp-export').value.trim();
+    if (!inputDir) { errEl.textContent = 'Input directory required'; return; }
+    if (!exportDir) { errEl.textContent = 'Export directory required'; return; }
+
+    const catChks = document.querySelectorAll('.cat-chk:checked');
+    const categories = Array.from(catChks).map(c => c.value);
+    if (!categories.length) { errEl.textContent = 'Select at least one category'; return; }
+
+    // Standalone "Target labels only" + "Show existing points read-only" toggles.
+    const targetOnlyEl = document.getElementById('chk-target-only');
+    const targetOnly = targetOnlyEl ? targetOnlyEl.checked : true;
+    const refDefEl = document.getElementById('chk-reference-default');
+    if (refDefEl) {
+      showReference = refDefEl.checked;
+      const topChk = document.getElementById('chk-show-reference');
+      if (topChk) topChk.checked = showReference;
+      if (typeof savePrefs === 'function') savePrefs();
+    }
+
+    errEl.textContent = '';
+    infoEl.innerHTML = 'Loading prompts...';
+    infoEl.classList.add('visible');
+
+    try {
+      const res = await fetch('/api/configure', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          input_dir: inputDir, export_dir: exportDir,
+          categories: categories, target_species_only: targetOnly,
+          review_batch_size: getReviewBatchSize(),
+          shuffle: getShuffleFlag(),
+          review_dir: getReviewDir(), contacts: getContacts(),
+        }),
+      });
+      scanResult = await res.json();
+      if (scanResult.error) { errEl.textContent = scanResult.error; infoEl.classList.remove('visible'); return; }
+
+      let html = `<span class="num">${scanResult.years.length}</span> year(s) found.`;
+      html += ` <span class="num">${scanResult.to_process}</span> images to segment.`;
+      if (scanResult.already_processed > 0) {
+        html += `<br>Already processed: <span class="num">${scanResult.already_processed}</span>`;
+      }
+      html += `<br>Categories: ${scanResult.categories.join(', ')}`;
+
+      if (scanResult.phase === 'review') {
+        html += `<br><br>All processed! <span class="num">${scanResult.review_count}</span> images for review.`;
+      }
+
+      infoEl.innerHTML = html;
+      infoEl.classList.add('visible');
+    } catch (e) { errEl.textContent = 'Error: ' + e.message; return; }
+
+  } else {
+    // Resume mode
+    const exportDir = document.getElementById('inp-resume-export').value.trim();
+    if (!exportDir) { errEl.textContent = 'Export directory required'; return; }
+
+    try {
+      const res = await fetch('/api/resume', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          export_dir: exportDir, review_batch_size: getReviewBatchSize(),
+          shuffle: getShuffleFlag(),
+          review_dir: getReviewDir(), contacts: getContacts(),
+        }),
+      });
+      scanResult = await res.json();
+      if (scanResult.error) { errEl.textContent = scanResult.error; return; }
+
+      let html = `Loaded: <span class="num">${scanResult.total_processed}</span> images across ${scanResult.years.length} year(s).`;
+      html += `<br><span class="num">${scanResult.review_count}</span> images for review.`;
+      infoEl.innerHTML = html;
+      infoEl.classList.add('visible');
+    } catch (e) { errEl.textContent = 'Error: ' + e.message; return; }
+  }
+
+  if (!scanResult) return;
+
+  if (scanResult.phase === 'review') {
+    await loadReviewBatch();
+    showScreen('review');
+    if (images.length > 0) selectImage(0);
+    return;
+  }
+
+  const total = scanResult.to_process || 0;
+  if (total === 0) { errEl.textContent = 'Nothing to process'; return; }
+
+  showScreen('processing');
+  processStartTime = performance.now();
+  processTimes = [];
+  await runProcessing(total);
+}
+
+// ══════════════════════════════════════════════
+// PROCESSING (background — server-side)
+// ══════════════════════════════════════════════
+let processingPollTimer = null;
+
+async function runProcessing(total) {
+  const bar = document.getElementById('progress-bar');
+  const text = document.getElementById('progress-text');
+  const current = document.getElementById('progress-current');
+  const eta = document.getElementById('progress-eta');
+  const reviewBtn = document.getElementById('btn-start-review');
+
+  // Kick off background processing
+  await fetch('/api/process', { method: 'POST' });
+  processStartTime = performance.now();
+  let lastProcessed = 0;
+
+  // Poll for progress
+  async function poll() {
+    try {
+      const res = await fetch('/api/process_status');
+      const data = await res.json();
+
+      const pct = data.total > 0 ? Math.round((data.processed / data.total) * 100) : 0;
+      bar.style.width = pct + '%';
+      text.textContent = `${data.processed} / ${data.total}`;
+
+      if (data.processed > lastProcessed) {
+        current.textContent = `Processing... ${data.processed} images segmented`;
+        lastProcessed = data.processed;
+      }
+
+      // ETA based on elapsed time
+      if (data.processed > 0 && !data.done) {
+        const elapsed = (performance.now() - processStartTime) / 1000;
+        const perImage = elapsed / data.processed;
+        const remaining = perImage * (data.total - data.processed);
+        const remainMin = Math.ceil(remaining / 60);
+        eta.textContent = remainMin > 60
+          ? `ETA: ~${Math.floor(remainMin / 60)}h ${remainMin % 60}m`
+          : `ETA: ~${remainMin} min`;
+      }
+
+      // Show "Start Review" button once some images are ready
+      if (data.processed >= 1) {
+        reviewBtn.classList.remove('hidden');
+        reviewBtn.textContent = `Start Review (${data.processed} ready)`;
+      }
+
+      if (data.done) {
+        eta.textContent = 'Segmentation complete!';
+        reviewBtn.textContent = `Start Review (all ${data.total} ready)`;
+        reviewBtn.classList.remove('hidden');
+        clearInterval(processingPollTimer);
+        return;
+      }
+    } catch (e) {
+      current.textContent = 'Polling error: ' + e.message;
+    }
+  }
+
+  await poll();
+  processingPollTimer = setInterval(poll, 2000);
+}
+
+let bgPollTimer = null;
+
+async function startReviewWhileProcessing() {
+  if (processingPollTimer) clearInterval(processingPollTimer);
+  await loadReviewBatch();
+  showScreen('review');
+  if (images.length > 0) selectImage(0);
+
+  // Keep polling in review mode to update badge
+  bgPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch('/api/process_status');
+      const data = await res.json();
+      const badge = document.getElementById('bg-processing-badge');
+      if (data.running) {
+        badge.style.display = 'inline';
+        badge.textContent = `Processing ${data.processed}/${data.total}...`;
+      } else {
+        badge.style.display = 'none';
+        clearInterval(bgPollTimer);
+      }
+    } catch (e) {}
+  }, 5000);
+}
+
+// ══════════════════════════════════════════════
+// REVIEW — BATCH LOADING
+// ══════════════════════════════════════════════
+async function loadReviewBatch() {
+  const res = await fetch('/api/review_batch');
+  const data = await res.json();
+  images = data.images || [];
+  currentIdx = -1;
+
+  const infoEl = document.getElementById('batch-info');
+  if (data.total_batches > 0) {
+    const start = data.offset + 1;
+    const end = Math.min(data.offset + data.batch_size, data.total_images);
+    infoEl.textContent = `Batch ${data.batch_number}/${data.total_batches} (${start}-${end} of ${data.total_images})`;
+  } else {
+    infoEl.textContent = 'No images to review';
+  }
+  updateCounter();
+  _updateLoopBanner(data.total_images || 0);
+  refreshUnlabeledSet();
+}
+
+// ══════════════════════════════════════════════
+// REVIEW - UNLABELED FILTER + JUMP
+// ══════════════════════════════════════════════
+// Set of frame basenames (from GET /api/unlabeled) that still carry a mask
+// with species=='', the same predicate as the server's accept guard
+// (_needs_species in app.py). Refreshed whenever the review batch loads and
+// whenever the operator asks to filter/jump, so a just-fixed frame drops out
+// without a full page reload.
+let unlabeledOnly = false;
+let unlabeledSet = new Set();
+
+async function refreshUnlabeledSet() {
+  try {
+    const res = await fetch('/api/unlabeled');
+    const data = await res.json();
+    unlabeledSet = new Set(data.frames || []);
+  } catch (e) {
+    unlabeledSet = new Set();
+  }
+  _updateUnlabeledCountBadge();
+  if (unlabeledOnly) updateCounter();
+}
+
+function _updateUnlabeledCountBadge() {
+  const el = document.getElementById('unlabeled-count');
+  if (el) el.textContent = unlabeledSet.size > 0 ? `(${unlabeledSet.size})` : '';
+}
+
+// "Unlabeled only" restricts Prev/Next/counter to the subset of the current
+// batch's `images` that are in unlabeledSet, without reinventing the frame
+// loop: selectImage/prevImage/nextImage still walk the same `images` array
+// and `currentIdx`, this just skips indices that are not unlabeled.
+function toggleUnlabeledOnly(on) {
+  unlabeledOnly = !!on;
+  const chk = document.getElementById('chk-unlabeled-only');
+  if (chk) chk.checked = unlabeledOnly;
+  if (unlabeledOnly) {
+    refreshUnlabeledSet().then(() => {
+      if (images.length === 0) return;
+      const cur = images[currentIdx];
+      if (!cur || !unlabeledSet.has(cur.filename)) {
+        jumpNextUnlabeled();
+      }
+    });
+    setStatus('Unlabeled only');
+  } else {
+    setStatus('Showing all frames');
+  }
+}
+
+// Jump to the next frame (in the currently loaded batch's `images` array)
+// that has an unlabeled mask, wrapping around from the end. Reuses
+// selectImage for the actual navigation/save, same as prevImage/nextImage.
+function jumpNextUnlabeled() {
+  if (!images.length) { setStatus('No frames loaded'); return; }
+  if (unlabeledSet.size === 0) { setStatus('No unlabeled masks in this batch'); return; }
+  const n = images.length;
+  for (let step = 1; step <= n; step++) {
+    const idx = (currentIdx + step) % n;
+    if (unlabeledSet.has(images[idx].filename)) {
+      selectImage(idx);
+      setStatus(`Unlabeled frame ${idx + 1}/${n}`);
+      return;
+    }
+  }
+  setStatus('No unlabeled frames left in this batch');
+}
+
+// Active-learning refine-round banner: only shown when this session booted in
+// resume mode (SESSION_MODE === 'resume', set by the loop's TCRMP_SESSION_MODE
+// env var). N is the review queue size; every frame here is a newly-seeded,
+// non-exported frame carrying pending model-proposed masks (rendered cyan).
+function _updateLoopBanner(n) {
+  const chip = document.getElementById('loop-banner-chip');
+  if (!chip) return;
+  if (SESSION_MODE !== 'resume') { chip.style.display = 'none'; return; }
+  chip.textContent = `Refine round: reviewing ${n} model-proposed frame${n === 1 ? '' : 's'}. `
+    + `Accept (Enter) / reject (x) every cyan mask, and ADD any coral the model missed (number key + click).`;
+  chip.style.display = '';
+}
+
+// ══════════════════════════════════════════════
+// REVIEW — IMAGE SELECTION
+// ══════════════════════════════════════════════
+async function selectImage(idx) {
+  if (idx < 0 || idx >= images.length) return;
+
+  // Close out the previous frame's timer BEFORE saving/switching so paused
+  // time is correctly excluded from the rolling average.
+  _timerRecordPrev();
+
+  // Save current image masks before switching
+  if (currentData && currentIdx >= 0) await saveCurrentMasks();
+
+  currentIdx = idx;
+  const filename = images[idx].filename;
+
+  const res = await fetch(`/api/image/${encodeURIComponent(filename)}`);
+  currentData = await res.json();
+
+  img = new Image();
+  img.onload = () => {
+    // Always start each new frame in full view. Enter zooms to the first
+    // pending mask so the user can review each in turn.
+    fitImage();
+    render();
+  };
+  img.src = `/images/${encodeURIComponent(filename)}`;
+
+  // Genuinely per-frame: selection, checkbox set, and merge anchor reset so
+  // they never follow across frames.
+  selectedMask = -1;
+  checkedMaskIds = new Set();
+  mergeFirstId = -1;
+  // Deletions are per-frame: the freed-region set must not carry to the next
+  // image (its ids would wrongly free regions on a different frame). currentData
+  // above is freshly fetched, so its 'rejected' statuses are authoritative here.
+  recentlyDeletedIds.clear();
+  // Sticky Add / armed-label / armed-REVIEW PERSIST across frames so the
+  // add -> refine -> Enter -> Space rhythm carries to the next image. Set the
+  // mode directly (NOT via setInteractionMode('select'), which hard-disarms);
+  // 'add' is the exempt mode that keeps the arm alive.
+  if (stickyAddMode || numKeyDown !== null || armedReview) {
+    interactionMode = 'add';
+  } else {
+    interactionMode = 'select';
+  }
+  updateModeButtons();
+  renderMaskList();
+  updateCounter();
+  // Re-reflect the carried-over arm on the new frame: Add badge + lit quick-add
+  // button track the persisted state.
+  _updateStickyAddIndicator();
+  highlightQuickBtn(numKeyDown ?? -1);
+  document.getElementById('image-filename').textContent = filename;
+
+  // Kick the per-frame timer for the new frame.
+  _timerStart();
+}
+
+function prevImage() { if (currentIdx > 0) selectImage(currentIdx - 1); }
+function nextImage() { if (currentIdx < images.length - 1) selectImage(currentIdx + 1); }
+
+async function saveCurrentMasks() {
+  if (!currentData || currentIdx < 0) return;
+  const filename = images[currentIdx].filename;
+  const updates = {};
+  for (const m of currentData.masks) {
+    updates[String(m.id)] = m.status;
+  }
+  await fetch(`/api/image/${encodeURIComponent(filename)}/masks`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ updates }),
+  });
+  // A label fix on this frame may have just cleared (or a hand-added mask
+  // may have just added) an unlabeled entry. Keep the filter/jump current.
+  refreshUnlabeledSet();
+}
+
+// Persist JUST the status for a single mask, right now. Used by
+// accept/reject so that the backend's view of which masks are rejected
+// stays in sync — otherwise Add/Refine would still clip against a
+// just-rejected mask because the backend hadn't seen the status change
+// yet (saveCurrentMasks only runs on frame change).
+async function persistMaskStatus(maskId, status) {
+  if (currentIdx < 0 || !images[currentIdx]) return;
+  const filename = images[currentIdx].filename;
+  try {
+    await fetch(`/api/image/${encodeURIComponent(filename)}/masks`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ updates: { [String(maskId)]: status } }),
+    });
+  } catch (e) {
+    // Non-fatal: next frame-change save will catch up.
+    console.warn('persistMaskStatus failed', e);
+  }
+}
+
+// The REVIEW-persist helper is REMOVED in editMasks: this app must never flag
+// a mask for expert REVIEW (see the armedReview note above). combinedAnnotate
+// keeps the equivalent helper on purpose.
+
+// ══════════════════════════════════════════════
+// OPACITY
+// ══════════════════════════════════════════════
+function setOpacity(val) {
+  maskOpacity = val / 100;
+  document.getElementById('opacity-val').textContent = val + '%';
+  localStorage.setItem('seg_opacity', val); // legacy key — kept for back-compat
+  if (typeof savePrefs === 'function') savePrefs();
+  render();
+}
+
+function cycleOpacity() {
+  const levels = [30, 60, 90];
+  const current = Math.round(maskOpacity * 100);
+  let next = levels[0];
+  for (let i = 0; i < levels.length; i++) {
+    if (current < levels[i]) { next = levels[i]; break; }
+    if (i === levels.length - 1) next = levels[0];
+  }
+  document.getElementById('opacity-slider').value = next;
+  setOpacity(next);
+}
+
+// Restore saved opacity
+(function() {
+  const saved = localStorage.getItem('seg_opacity');
+  if (saved) {
+    document.getElementById('opacity-slider').value = saved;
+    maskOpacity = parseInt(saved) / 100;
+    document.getElementById('opacity-val').textContent = saved + '%';
+  }
+})();
+
+// ══════════════════════════════════════════════
+// INTERACTION MODES
+// ══════════════════════════════════════════════
+function setInteractionMode(mode) {
+  interactionMode = mode;
+  mergeFirstId = -1;
+  if (pendingAddMaskIdx < 0) hideCatPopup();
+  updateModeButtons();
+  const labels = {refine:'REFINE', merge:'MERGE', add:'ADD', draw:'DRAW'};
+  if (labels[mode]) flashMode(labels[mode]);
+  // Update cursor class
+  canvas.classList.remove('add-mode', 'refine-mode', 'draw-mode');
+  if (mode === 'add') canvas.classList.add('add-mode');
+  else if (mode === 'refine') canvas.classList.add('refine-mode');
+  else if (mode === 'draw') canvas.classList.add('draw-mode');
+  // Mode-specific full-canvas highlighting (pink for add, cyan for draw).
+  const wrapEl = document.getElementById('canvas-wrap');
+  if (wrapEl) {
+    wrapEl.classList.toggle('add-active', mode === 'add');
+    wrapEl.classList.toggle('draw-active', mode === 'draw');
+  }
+  // The armed sticky label stays live across the add -> refine -> accept -> add
+  // loop (transient refine transitions must NOT disarm it). Only a hard reset to
+  // 'select' clears it; disarming is otherwise explicit (tap same number, R, Esc).
+  if (mode === 'select') {
+    numKeyDown = null;
+    armedReview = false;
+    highlightQuickBtn(-1);
+  }
+  // Entering draw mode without a mask selected is pointless — bounce back.
+  if (mode === 'draw' && selectedMask < 0) {
+    setStatus('Pick a mask first (click or Space), then press D to draw-edit.');
+    interactionMode = 'select';
+    if (wrapEl) wrapEl.classList.remove('draw-active');
+    canvas.classList.remove('draw-mode');
+    updateModeButtons();
+  }
+}
+
+function updateModeButtons() {
+  document.getElementById('btn-mode-refine').classList.toggle('active', interactionMode === 'refine');
+  document.getElementById('btn-mode-merge').classList.toggle('active', interactionMode === 'merge');
+  document.getElementById('btn-mode-add').classList.toggle('active', interactionMode === 'add');
+  const drawBtn = document.getElementById('btn-mode-draw');
+  if (drawBtn) drawBtn.classList.toggle('active', interactionMode === 'draw');
+}
+
+let modeFlashTimer = null;
+function flashMode(text) {
+  const el = document.getElementById('mode-indicator');
+  el.textContent = text;
+  // Color: green for accept, red for reject, yellow for everything else
+  if (text.startsWith('\u2713')) el.style.color = 'rgba(80,255,120,0.8)';
+  else if (text.startsWith('\u2717')) el.style.color = 'rgba(255,80,80,0.8)';
+  else el.style.color = 'rgba(255,255,0,0.6)';
+  el.classList.add('show');
+  clearTimeout(modeFlashTimer);
+  modeFlashTimer = setTimeout(() => el.classList.remove('show'), 400);
+}
+
+// ══════════════════════════════════════════════
+// RENDERING
+// ══════════════════════════════════════════════
+function fitImage() {
+  if (!img) return;
+  const ww = wrap.clientWidth, wh = wrap.clientHeight;
+  canvas.width = ww; canvas.height = wh;
+  scale = Math.min(ww / img.width, wh / img.height) * 0.95;
+  offsetX = (ww - img.width * scale) / 2;
+  offsetY = (wh - img.height * scale) / 2;
+}
+
+function screenToImage(sx, sy) {
+  return { x: (sx - offsetX) / scale, y: (sy - offsetY) / scale };
+}
+
+// Read-only reference points ported from placePoints (muted cyan, larger,
+// minimal cue, never selectable). They live in a separate currentData.reference_points
+// array — no hit-test iterates them, so selection-skip is structural. Drawn inside
+// render() AFTER the image transform so they use image-space coords (pt.x/pt.y).
+function drawReferencePoints(ctx) {
+  if (!showReference || !currentData || !currentData.reference_points) return;
+  for (const pt of currentData.reference_points) {
+    // Target-only view hides non-target reference points; target cyan points
+    // stay as an eye guide.
+    if (showOnlyTarget && !isTargetRefPoint(pt)) continue;
+    const crossLen = 26;
+    ctx.beginPath();
+    ctx.moveTo(pt.x - crossLen, pt.y); ctx.lineTo(pt.x + crossLen, pt.y);
+    ctx.moveTo(pt.x, pt.y - crossLen); ctx.lineTo(pt.x, pt.y + crossLen);
+    ctx.strokeStyle = '#7fdfff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    const lbl = pt.label || '';
+    if (lbl) {
+      ctx.font = 'bold 56px sans-serif';
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.strokeText(lbl, pt.x - 16, pt.y - 60);
+      ctx.fillStyle = '#7fdfff';
+      ctx.fillText(lbl, pt.x - 16, pt.y - 60);
+    }
+    const spp = pt.species_code || '';
+    if (spp) {
+      ctx.font = 'bold 22px monospace';
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.strokeText(spp, pt.x + 22, pt.y + 38);
+      ctx.fillStyle = '#aee3f5';
+      ctx.fillText(spp, pt.x + 22, pt.y + 38);
+    }
+  }
+}
+
+// Toolbar checkbox + G key both route here. Persisted via prefs.
+function toggleShowReference(on) {
+  showReference = !!on;
+  const chk = document.getElementById('chk-show-reference');
+  if (chk) chk.checked = showReference;
+  savePrefs();
+  render();
+  setStatus(showReference ? 'Reference points ON' : 'Reference points OFF');
+}
+
+function render() {
+  if (!img || !currentData) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.translate(offsetX, offsetY);
+  ctx.scale(scale, scale);
+
+  // Draw image
+  ctx.drawImage(img, 0, 0);
+
+  // Read-only reference points (step 4 guide) under the user's work.
+  drawReferencePoints(ctx);
+
+  const masks = currentData.masks || [];
+
+  // Draw masks
+  for (let i = 0; i < masks.length; i++) {
+    const m = masks[i];
+    if (m.status === 'rejected') continue;
+    if (!shouldDrawMask(m)) continue;
+
+    const isSel = i === selectedMask;
+    const polygons = m.polygon_px || [];
+
+    // Fill
+    ctx.globalAlpha = maskOpacity;
+    ctx.fillStyle = maskColor(m, 1.0);
+    for (const poly of polygons) {
+      if (poly.length < 6) continue;
+      ctx.beginPath();
+      ctx.moveTo(poly[0], poly[1]);
+      for (let j = 2; j < poly.length; j += 2) {
+        ctx.lineTo(poly[j], poly[j + 1]);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Stroke
+    ctx.globalAlpha = 1.0;
+    ctx.strokeStyle = isSel ? '#ffff00' : maskStrokeColor(m);
+    ctx.lineWidth = isSel ? 3 / scale : 1.5 / scale;
+    for (const poly of polygons) {
+      if (poly.length < 6) continue;
+      ctx.beginPath();
+      ctx.moveTo(poly[0], poly[1]);
+      for (let j = 2; j < poly.length; j += 2) {
+        ctx.lineTo(poly[j], poly[j + 1]);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    }
+
+    // Label at centroid
+    if (polygons.length > 0 && polygons[0].length >= 2) {
+      const poly = polygons[0];
+      let cx = 0, cy = 0, n = 0;
+      for (let j = 0; j < poly.length; j += 2) { cx += poly[j]; cy += poly[j + 1]; n++; }
+      cx /= n; cy /= n;
+
+      const labelText = `${m.label} ${m.species || ''}`;
+      const fs = Math.max(10, Math.min(16, 14 / scale));
+      ctx.font = `bold ${fs}px monospace`;
+      ctx.globalAlpha = 1.0;
+      ctx.lineWidth = 3 / scale;
+      ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+      ctx.strokeText(labelText, cx, cy);
+      ctx.fillStyle = isSel ? '#ffff00' : '#fff';
+      ctx.fillText(labelText, cx, cy);
+    }
+  }
+
+  // Scan-candidate overlay (Task 13b): draw ephemeral candidates as dashed
+  // polygons so the operator can see the mask they are judging. The focused
+  // candidate (scanReviewIdx) gets a bright thick stroke; others get a faint
+  // dashed outline. Same coordinate system as the mask loop above (no extra
+  // transform needed — we are still inside ctx.save/translate/scale). Never
+  // persisted; draw-only.
+  if (scanCandidates.length) {
+    for (let si = 0; si < scanCandidates.length; si++) {
+      const sc = scanCandidates[si];
+      const polygons = sc.polygon_px || [];
+      const isFocused = si === scanReviewIdx;
+      ctx.globalAlpha = isFocused ? 0.95 : 0.45;
+      ctx.lineWidth = isFocused ? 3 / scale : 1.5 / scale;
+      ctx.strokeStyle = isFocused ? '#ffe600' : 'rgba(255,230,0,0.55)';
+      ctx.setLineDash(isFocused ? [8 / scale, 4 / scale] : [4 / scale, 4 / scale]);
+      for (const poly of polygons) {
+        if (poly.length < 6) continue;
+        ctx.beginPath();
+        ctx.moveTo(poly[0], poly[1]);
+        for (let j = 2; j < poly.length; j += 2) {
+          ctx.lineTo(poly[j], poly[j + 1]);
+        }
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1.0;
+  }
+
+  // In-progress draw path (cyan trail, drawn in image space so it zooms with the view)
+  if (isDrawing && drawPath.length > 0) {
+    ctx.beginPath();
+    ctx.moveTo(drawPath[0].x, drawPath[0].y);
+    for (let i = 1; i < drawPath.length; i++) {
+      ctx.lineTo(drawPath[i].x, drawPath[i].y);
+    }
+    ctx.strokeStyle = '#00d4ff';
+    ctx.lineWidth = 3 / scale;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+  }
+
+  ctx.globalAlpha = 1.0;
+  ctx.restore();
+  updateLockinHint();
+}
+
+// ══════════════════════════════════════════════
+// LOCK-IN HINT (Task 16)
+// ══════════════════════════════════════════════
+// Show the canvas-overlay hint when a pending mask is selected; hide otherwise.
+function updateLockinHint() {
+  const el = document.getElementById('lockin-hint');
+  if (!el) return;
+  const show = selectedMask >= 0 && currentData &&
+               currentData.masks[selectedMask] &&
+               currentData.masks[selectedMask].status === 'pending';
+  el.style.display = show ? 'block' : 'none';
+}
+
+// ══════════════════════════════════════════════
+// MASK LIST PANEL
+// ══════════════════════════════════════════════
+// Which masks are checked for multi-select merge. Keyed by mask.id (stable
+// across renders) so sorting / re-indexing doesn't break the selection.
+let checkedMaskIds = new Set();
+
+function renderMaskList() {
+  const el = document.getElementById('mask-list');
+  const sumEl = document.getElementById('panel-summary');
+  if (!currentData) { el.innerHTML = ''; sumEl.textContent = ''; return; }
+
+  const masks = currentData.masks || [];
+  // Target-only view filters the list too so it matches the canvas.
+  const visible = masks.filter(m => shouldDrawMask(m) && !(hideRejected && m.status === 'rejected'));
+  const nAcc = visible.filter(m => m.status === 'accepted').length;
+  const nPend = visible.filter(m => m.status === 'pending').length;
+  const nChecked = visible.filter(m => checkedMaskIds.has(m.id)).length;
+  const checkedLabel = nChecked >= 2
+    ? ` — ${nChecked} selected (M=merge, Del=delete)`
+    : nChecked === 1 ? ` — 1 selected` : '';
+  sumEl.textContent = `${nAcc}/${visible.length} accepted, ${nPend} pending${checkedLabel}`;
+
+  // Render order = stable alphabetical by label (spreadsheet order: A, B, …,
+  // Z, AA, …). Falls back to id then storage index so ties never jitter.
+  // `order` holds true indices into currentData.masks; selectedMask /
+  // data-idx keep pointing at those true indices, so click handling and
+  // keyboard cycling (which walk currentData.masks) are unaffected.
+  const order = masks.map((m, i) => i).sort((a, b) => {
+    const la = labelToNum(masks[a].label), lb = labelToNum(masks[b].label);
+    if (la !== lb) return la - lb;
+    const sa = String(masks[a].label || ''), sb = String(masks[b].label || '');
+    if (sa !== sb) return sa < sb ? -1 : 1;
+    const ida = Number(masks[a].id) || 0, idb = Number(masks[b].id) || 0;
+    if (ida !== idb) return ida - idb;
+    return a - b;
+  });
+
+  el.innerHTML = order.map((i) => {
+    const m = masks[i];
+    if (!shouldDrawMask(m) || (hideRejected && m.status === 'rejected')) return '';
+    const isSel = i === selectedMask;
+    const locked = isExpertLocked(m);
+    const statusIcon = m.status === 'accepted' ? '&#10003;'
+                     : m.status === 'rejected' ? '&#10007;' : '&#9679;';
+    const cls = [
+      m.status,
+      isSel ? 'active' : '',
+      m.source_type === 'exemplar' ? 'exemplar' : '',
+      locked ? 'expert-locked' : '',
+    ].filter(Boolean).join(' ');
+    const area = m.area > 1000 ? `${(m.area / 1000).toFixed(1)}k` : m.area;
+    const checked = checkedMaskIds.has(m.id) ? 'checked' : '';
+    const swatchStyle = `background:${maskColor(m, 0.9)}`;
+    // Locked masks are read-only: the checkbox (multi-select for merge/
+    // delete) is disabled so it can't be swept into a bulk edit. The lock
+    // chip is a visual cue only; the server refuses the mutation regardless.
+    const lockChip = locked
+      ? `<span class="m-rev pending" title="In expert review, read-only here">&#128274;</span>`
+      : '';
+    return `<li class="${cls}" data-idx="${i}" onclick="selectMaskFromList(${i}, event)">
+      <input type="checkbox" class="m-check" ${checked} ${locked ? 'disabled' : ''}
+             data-mask-id="${m.id}"
+             onclick="event.stopPropagation(); toggleMaskChecked(${m.id})">
+      <span class="m-swatch" style="${swatchStyle}"></span>
+      <span class="m-status">${statusIcon}</span>
+      <span class="m-label">${m.label}</span>
+      <span class="m-species">${m.species || '?'}</span>
+      ${lockChip}
+      <span class="m-area">${area}px</span>
+      <span class="m-score">${(m.score * 100).toFixed(0)}%</span>
+    </li>`;
+  }).join('');
+
+  if (selectedMask >= 0) {
+    const item = el.querySelector(`li[data-idx="${selectedMask}"]`);
+    if (item) item.scrollIntoView({block: 'nearest'});
+  }
+  updateLockinHint();
+}
+
+// Render the EPHEMERAL scan-candidate list (Task 12). Mirrors renderMaskList but
+// reads scanCandidates[] (never currentData.masks) and writes the second panel.
+// Candidates carry the same shape as masks (label/species/area/score/status), so
+// the same swatch/columns apply. The active row tracks scanReviewIdx (the
+// Enter/Delete review loop that drives it is Task 13). No checkbox column — these
+// are not part of the persisted multi-select set.
+function renderScanCandidates() {
+  const el = document.getElementById('scan-candidate-list');
+  const sumEl = document.getElementById('scan-summary');
+  if (!el) return;
+  const cands = scanCandidates || [];
+  if (sumEl) {
+    sumEl.textContent = cands.length
+      ? `${cands.length} candidate${cands.length === 1 ? '' : 's'}`
+      : '';
+  }
+  if (!cands.length) { el.innerHTML = ''; return; }
+
+  // Stable label order, same comparator as the main list so the two read alike.
+  const order = cands.map((m, i) => i).sort((a, b) => {
+    const la = labelToNum(cands[a].label), lb = labelToNum(cands[b].label);
+    if (la !== lb) return la - lb;
+    const sa = String(cands[a].label || ''), sb = String(cands[b].label || '');
+    if (sa !== sb) return sa < sb ? -1 : 1;
+    const ida = Number(cands[a].id) || 0, idb = Number(cands[b].id) || 0;
+    if (ida !== idb) return ida - idb;
+    return a - b;
+  });
+
+  el.innerHTML = order.map((i) => {
+    const m = cands[i];
+    const isSel = i === scanReviewIdx;
+    const statusIcon = m.status === 'accepted' ? '&#10003;'
+                     : m.status === 'rejected' ? '&#10007;' : '&#9679;';
+    const cls = [
+      m.status,
+      isSel ? 'active' : '',
+      m.source_type === 'exemplar' ? 'exemplar' : '',
+    ].filter(Boolean).join(' ');
+    const area = m.area > 1000 ? `${(m.area / 1000).toFixed(1)}k` : m.area;
+    const swatchStyle = `background:${maskColor(m, 0.9)}`;
+    return `<li class="${cls}" data-idx="${i}" onclick="selectScanCandidate(${i})"
+                title="Scan candidate ${m.label || ''} (${m.species || '?'}). Not saved yet.">
+      <span class="m-swatch" style="${swatchStyle}"></span>
+      <span class="m-status">${statusIcon}</span>
+      <span class="m-label">${m.label}</span>
+      <span class="m-species">${m.species || '?'}</span>
+      <span class="m-area">${area}px</span>
+      <span class="m-score">${(m.score * 100).toFixed(0)}%</span>
+    </li>`;
+  }).join('');
+
+  if (scanReviewIdx >= 0) {
+    const item = el.querySelector(`li[data-idx="${scanReviewIdx}"]`);
+    if (item) item.scrollIntoView({block: 'nearest'});
+  }
+}
+
+// Highlight a candidate row, and (Task 13) jump the review loop to it: clicking a
+// row sets scanReviewIdx so the SAME Enter=keep / Del=drop keys act on it.
+function selectScanCandidate(i) {
+  if (scanReviewIdx === i) {            // click the active row again -> leave review
+    scanReviewIdx = -1;
+    renderScanCandidates();
+    return;
+  }
+  scanReviewIdx = i;
+  focusScanCandidate();
+}
+
+// ── Scan-candidate review loop (Task 13) ──────────────────────────────
+// After a scan, walk the ephemeral candidates one at a time: zoom to each and
+// wait for Enter (keep -> commit + promote into the main list) or Del/x (drop ->
+// gone forever, never persisted). Built on Task 12's scanCandidates[] +
+// scanReviewIdx + renderScanCandidates().
+
+// Enter the loop at the first candidate (topmost in list order).
+function startScanReview() {
+  if (!scanCandidates.length) { setScanStatus('No candidates'); return; }
+  scanReviewIdx = 0;
+  focusScanCandidate();
+}
+
+// Show the candidate at scanReviewIdx: zoom the canvas to its bbox, highlight its
+// row, and arm the status box. When the index runs off the end (last one kept or
+// dropped), reset to -1 and report done — this is the natural loop terminator.
+function focusScanCandidate() {
+  const c = scanCandidates[scanReviewIdx];
+  if (!c) {
+    scanReviewIdx = -1;
+    setScanStatus('Scan review done');
+    renderScanCandidates();
+    return;
+  }
+  centerOnBBox(c.bbox);
+  renderScanCandidates();
+  render();
+  setScanStatus(`Candidate ${scanReviewIdx + 1}/${scanCandidates.length}: Enter=keep, Del=drop`);
+}
+
+// Keep the current candidate: POST it to /commit_mask (which appends it to
+// seg['masks'] as an accepted mask with a fresh id), push the returned mask into
+// the main list, drop the candidate from the ephemeral set, and advance.
+async function scanReviewAccept() {
+  if (_committingCandidate) return;          // guard: drop double-Enter while in-flight
+  const c = scanCandidates[scanReviewIdx];
+  if (!c) return;
+  _committingCandidate = true;
+  const fn = images[currentIdx].filename;
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(fn)}/commit_mask`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({mask: c}),
+    });
+    const data = await res.json();
+    if (data.ok && data.mask) {
+      currentData.masks.push(data.mask);
+      renderMaskList();
+      setScanStatus(`Kept ${data.mask.label || data.mask.species || ''}`);
+    } else {
+      setScanStatus('Keep failed: ' + (data.error || ''));
+    }
+  } catch (e) {
+    setScanStatus('Keep error: ' + e.message);
+  } finally {
+    _committingCandidate = false;            // always clear, even on error
+    scanCandidates.splice(scanReviewIdx, 1); // remove from the ephemeral set
+    focusScanCandidate();                    // same index now points at the next
+  }
+}
+
+// Drop the current candidate. Pure client-side: it is spliced out of
+// scanCandidates[] and never sent to the backend, so it is gone forever.
+function scanReviewReject() {
+  if (scanReviewIdx < 0) return;
+  scanCandidates.splice(scanReviewIdx, 1);   // gone forever, never persisted
+  focusScanCandidate();
+}
+
+function toggleMaskChecked(maskId) {
+  if (checkedMaskIds.has(maskId)) checkedMaskIds.delete(maskId);
+  else checkedMaskIds.add(maskId);
+  renderMaskList();
+}
+
+function clearMaskChecks() {
+  if (checkedMaskIds.size === 0) return;
+  checkedMaskIds.clear();
+  renderMaskList();
+}
+
+// Anchor index for Shift+click range selection in the mask list (true index
+// into currentData.masks of the last plainly-clicked row).
+let lastListClickIdx = -1;
+
+function selectMaskFromList(i, event) {
+  // Ctrl/Cmd+click → toggle this row's multi-select checkbox (same set the
+  // merge checkboxes use) instead of single-selecting. Lets the operator build
+  // up a set to merge OR delete together. Shift+click extends the set across a
+  // range from the last plain click.
+  if (event && (event.ctrlKey || event.metaKey)) {
+    const m = currentData.masks[i];
+    if (m) toggleMaskChecked(m.id);
+    lastListClickIdx = i;
+    return;
+  }
+  if (event && event.shiftKey && lastListClickIdx >= 0 && currentData) {
+    const lo = Math.min(lastListClickIdx, i), hi = Math.max(lastListClickIdx, i);
+    for (let k = lo; k <= hi; k++) {
+      const m = currentData.masks[k];
+      if (m) checkedMaskIds.add(m.id);
+    }
+    renderMaskList();
+    return;
+  }
+
+  if (interactionMode === 'merge' && selectedMask >= 0 && i !== selectedMask) {
+    doMerge(selectedMask, i);
+    return;
+  }
+  selectedMask = i;
+  lastListClickIdx = i;
+  if (autoCenter) centerOnMask(i);
+  renderMaskList();
+  render();
+}
+
+// Multi-delete: reject every mask in the multi-select set in one action.
+// Rejecting (not hard-removing) matches the rest of the tool — a rejected mask
+// is "deleted" in the operator's mental model, is skipped on export, and can be
+// recovered. Persists each status so Add/Refine stop clipping against them.
+async function deleteCheckedMasks() {
+  if (!currentData || currentIdx < 0) return;
+  if (checkedMaskIds.size < 1) { setStatus('No masks selected (Ctrl+click rows)'); return; }
+  const ids = Array.from(checkedMaskIds);
+  let n = 0;
+  let nLocked = 0;
+  for (const id of ids) {
+    const m = currentData.masks.find(mm => mm.id === id);
+    if (!m || m.status === 'rejected') continue;
+    if (isExpertLocked(m)) { nLocked++; continue; }
+    m.status = 'rejected';
+    // Track independently of currentData.masks so a reload can't drop it from
+    // rejectedMaskIds() before the PUT lands. Cleared per-frame in selectImage().
+    recentlyDeletedIds.add(m.id);
+    persistMaskStatus(m.id, 'rejected');
+    n++;
+  }
+  // If the single selected mask was in the deleted set, drop the selection.
+  if (selectedMask >= 0) {
+    const sel = currentData.masks[selectedMask];
+    if (sel && checkedMaskIds.has(sel.id)) selectedMask = -1;
+  }
+  checkedMaskIds = new Set();
+  flashMode('✗ ' + n);
+  setStatus(nLocked
+    ? `Deleted ${n} mask${n === 1 ? '' : 's'} (${nLocked} in expert review, skipped)`
+    : `Deleted ${n} mask${n === 1 ? '' : 's'}`);
+  renderMaskList();
+  render();
+}
+
+function centerOnMask(idx) {
+  if (!currentData || !currentData.masks[idx]) return;
+  const m = currentData.masks[idx];
+  // Compute bounding box across all polygons
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const poly of (m.polygon_px || [])) {
+    for (let j = 0; j < poly.length; j += 2) {
+      if (poly[j] < minX) minX = poly[j];
+      if (poly[j] > maxX) maxX = poly[j];
+      if (poly[j+1] < minY) minY = poly[j+1];
+      if (poly[j+1] > maxY) maxY = poly[j+1];
+    }
+  }
+  if (minX === Infinity) return;
+  // Add padding (30% around the mask)
+  const padX = (maxX - minX) * 0.3;
+  const padY = (maxY - minY) * 0.3;
+  minX -= padX; minY -= padY; maxX += padX; maxY += padY;
+  // Zoom to fit this region
+  const ww = canvas.width, wh = canvas.height;
+  const maskW = maxX - minX, maskH = maxY - minY;
+  if (maskW <= 0 || maskH <= 0) return;
+  scale = Math.min(ww / maskW, wh / maskH) * 0.9;
+  // Clamp scale to reasonable range
+  scale = Math.max(0.1, Math.min(scale, 15));
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  offsetX = ww / 2 - cx * scale;
+  offsetY = wh / 2 - cy * scale;
+}
+
+// Center/zoom on a raw [x_min, y_min, x_max, y_max] pixel bbox. Scan candidates
+// (Task 13) are NOT in currentData.masks, so centerOnMask (which indexes that
+// array and reads polygon_px) can't be used for them; this mirrors its viewport
+// math but takes a bbox directly. Each candidate dict carries a `bbox` field
+// (mask_ops.mask_bbox order). Same 30% padding and scale clamp as centerOnMask.
+function centerOnBBox(bbox) {
+  if (!bbox || bbox.length < 4) return;
+  let [minX, minY, maxX, maxY] = bbox;
+  const padX = (maxX - minX) * 0.3;
+  const padY = (maxY - minY) * 0.3;
+  minX -= padX; minY -= padY; maxX += padX; maxY += padY;
+  const ww = canvas.width, wh = canvas.height;
+  const bw = maxX - minX, bh = maxY - minY;
+  if (bw <= 0 || bh <= 0) return;
+  scale = Math.min(ww / bw, wh / bh) * 0.9;
+  scale = Math.max(0.1, Math.min(scale, 15));
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  offsetX = ww / 2 - cx * scale;
+  offsetY = wh / 2 - cy * scale;
+}
+
+function selectNextPending() {
+  if (!currentData) return;
+  const masks = currentData.masks;
+  if (!masks.length) return;
+
+  let start = selectedMask >= 0 ? selectedMask + 1 : 0;
+  for (let k = 0; k < masks.length; k++) {
+    const i = (start + k) % masks.length;
+    if (masks[i].status === 'pending') {
+      selectedMask = i;
+      centerOnMask(i);  // always zoom to fit
+      renderMaskList();
+      render();
+      return;
+    }
+  }
+  setStatus('No more pending masks');
+}
+
+// ══════════════════════════════════════════════
+// MASK ACTIONS
+// ══════════════════════════════════════════════
+// Sticky toggle — when off, accept/reject do NOT auto-advance. Useful when
+// you're doing fine-scale edits and don't want Enter to yank you off the mask.
+// Toggle with Space or the "Auto-advance" button in the top bar.
+let autoAdvance = true;
+
+// Sticky Add mode: when A is pressed, we stay in a "ADD -> click -> refine ->
+// Enter/Delete -> ADD" loop until A is pressed again. Separate from
+// interactionMode because the user passes through 'refine' between masks.
+let stickyAddMode = false;
+
+// REVIEW-arming is REMOVED in editMasks (present in combinedAnnotate, kept
+// there on purpose). editMasks fixes an EXISTING export and must never spawn
+// a NEW expert-review round-trip, so there is no control and no keybinding
+// that flags a mask for expert review here. armedReview stays permanently
+// false; the state-machine branches below that read it are unreachable.
+let armedReview = false;
+
+// Read-only reference points (step 4 OCR/CPC guide). Initial state comes from
+// the REFERENCE_DEFAULT template var (orchestrator panel / env; default ON).
+// These markers are guidance only; they live in reference_points and NEVER
+// become masks or labels. Toggled by the toolbar checkbox + the G key; a saved
+// localStorage pref (loadPrefs) overrides this initial default per browser.
+let showReference = {{ 'true' if reference_default else 'false' }};
+
+function _updateStickyAddIndicator() {
+  const btn = document.getElementById('btn-mode-add');
+  if (btn) {
+    if (stickyAddMode) {
+      btn.style.background = 'var(--magenta)';
+      btn.style.borderColor = 'var(--magenta)';
+      btn.style.color = '#fff';
+      btn.title = 'Sticky Add ON — A to exit. Click places a mask, refine it, Enter/Delete to accept, repeat.';
+      btn.textContent = 'Add (A) *';
+    } else {
+      btn.style.background = '';
+      btn.style.borderColor = '';
+      btn.style.color = '';
+      btn.title = 'Press A to enter sticky Add mode: add -> refine -> accept -> repeat.';
+      btn.textContent = 'Add (A)';
+    }
+  }
+  setStatus(stickyAddMode
+    ? 'Sticky Add ON — click to place, refine, Enter to accept -> next mask. A to stop.'
+    : 'Sticky Add OFF');
+}
+
+function setAutoAdvance(v) {
+  autoAdvance = !!v;
+  const btn = document.getElementById('auto-advance-btn');
+  if (btn) {
+    btn.textContent = autoAdvance ? 'Auto YES' : 'Auto NO';
+    btn.style.background = autoAdvance ? 'rgba(0,255,179,0.12)' : 'rgba(255,77,109,0.12)';
+    btn.style.borderColor = autoAdvance ? 'var(--success)' : 'var(--error)';
+    btn.style.color = autoAdvance ? 'var(--success)' : 'var(--error)';
+    btn.title = autoAdvance
+      ? 'Auto-advance ON — Enter/Reject move to next mask/frame. Press Space to turn off.'
+      : 'Auto-advance OFF — Enter/Reject stay on the current mask. Press Space to turn on.';
+  }
+  setStatus(autoAdvance ? 'Auto-advance ON' : 'Auto-advance OFF (Enter stays put)');
+}
+
+function acceptMask() {
+  if (!currentData) return;
+  // Fresh frame (nothing selected) -> Enter zooms to the first pending mask.
+  // This lets the user land on a frame in full view, then press Enter once
+  // to start reviewing. (Respects autoAdvance: if off, this still selects
+  // the first mask — that's an initial focus, not a progression.)
+  if (selectedMask < 0) {
+    advanceToNextOrFrame();
+    return;
+  }
+  const m = currentData.masks[selectedMask];
+  // Expert-locked masks are read-only here (best-effort client check; the
+  // server is the source of truth and refuses the mutation regardless).
+  if (isExpertLocked(m)) {
+    setStatus('This mask is in expert review, read-only here.');
+    return;
+  }
+  // A mask with no species assigned cannot be accepted. An unlabeled
+  // accepted mask gets silently stripped at train time. Open the classify
+  // popup instead of accepting so the operator picks a label right now.
+  // Pre-existing REVIEW masks (species === 'REVIEW') are an intentional
+  // label and are never caught here; this app cannot assign a NEW one.
+  if (!m.species) {
+    pendingAddMaskIdx = selectedMask;
+    showCatPopup();
+    setStatus('Pick a species to accept this mask.');
+    return;
+  }
+  m.status = 'accepted';
+  persistMaskStatus(m.id, 'accepted');
+  flashMode('\u2713 ' + m.label + (m.species ? ' ' + m.species : ''));
+  // In sticky Add mode, after acceptance snap back to Add so the next click
+  // creates a new mask. Otherwise follow the normal auto-advance (or stay
+  // put when auto-advance is off).
+  if (stickyAddMode) {
+    selectedMask = -1;
+    setInteractionMode('add');
+    renderMaskList(); render();
+    setStatus('Accepted — click to add the next mask (A to stop).');
+    return;
+  }
+  setInteractionMode('select');
+  renderMaskList(); render();
+  if (autoAdvance) {
+    setTimeout(() => advanceToNextOrFrame(), 150);
+  }
+}
+
+function rejectMask() {
+  if (selectedMask < 0 || !currentData) return;
+  const m = currentData.masks[selectedMask];
+  if (isExpertLocked(m)) {
+    setStatus('This mask is in expert review, read-only here.');
+    return;
+  }
+  m.status = 'rejected';
+  // Track the deletion independently of currentData.masks so rejectedMaskIds()
+  // keeps reporting it to /add even if a reload restores its 'pending' status
+  // before this PUT lands. Cleared on frame change in selectImage().
+  recentlyDeletedIds.add(m.id);
+  // Persist right away so the next Add/Refine request sees this mask as
+  // rejected and stops clipping against it.
+  persistMaskStatus(m.id, 'rejected');
+  flashMode('\u2717 ' + m.label);
+  if (stickyAddMode) {
+    selectedMask = -1;
+    setInteractionMode('add');
+    renderMaskList(); render();
+    setStatus('Rejected — click to add the next mask (A to stop).');
+    return;
+  }
+  renderMaskList(); render();
+  if (autoAdvance) {
+    setTimeout(() => advanceToNextOrFrame(), 150);
+  }
+}
+
+async function acceptAllMasks() {
+  if (!currentData || currentIdx < 0) return;
+  const filename = images[currentIdx].filename;
+  const res = await fetch(`/api/image/${encodeURIComponent(filename)}/accept_all`, { method: 'POST' });
+  const data = await res.json();
+  if (data.ok) {
+    // The server refuses to accept an unlabeled (species === '') mask; its id
+    // comes back in needs_species and it stays 'pending' on the backend. Mirror
+    // that here instead of blindly flipping every pending mask to accepted.
+    const blocked = new Set(data.needs_species || []);
+    for (const m of currentData.masks) {
+      if (m.status === 'pending' && !blocked.has(m.id)) m.status = 'accepted';
+    }
+    if (blocked.size) {
+      setStatus(`${data.accepted} masks accepted, ${blocked.size} need a species first (press C to label).`);
+    } else {
+      setStatus(`${data.accepted} masks accepted`);
+    }
+    renderMaskList(); render();
+  }
+}
+
+// ══════════════════════════════════════════════
+// REFINEMENT (click to add/remove)
+// ══════════════════════════════════════════════
+// When the server returns `affected = {updated:[…], removed:[…]}`, merge
+// those deltas into currentData.masks so the canvas matches the new truth
+// without a full refetch. `updated` entries are full mask dicts; `removed`
+// is just `[{id: ...}, ...]`.
+function applyAffected(affected) {
+  if (!affected || !currentData) return;
+  const upd = affected.updated || [];
+  const rm = new Set((affected.removed || []).map(r => r && r.id));
+  if (upd.length) {
+    for (const newMask of upd) {
+      const i = currentData.masks.findIndex(m => m.id === newMask.id);
+      if (i >= 0) Object.assign(currentData.masks[i], newMask);
+    }
+  }
+  if (rm.size) {
+    currentData.masks = currentData.masks.filter(m => !rm.has(m.id));
+    if (selectedMask >= 0 && !currentData.masks[selectedMask]) selectedMask = -1;
+  }
+}
+
+async function doRefine(clickX, clickY, clickLabel) {
+  if (selectedMask < 0 || !currentData || refineInFlight) return;
+  const mask = currentData.masks[selectedMask];
+  if (isExpertLocked(mask)) {
+    setStatus('This mask is in expert review, read-only here.');
+    return;
+  }
+  const filename = images[currentIdx].filename;
+
+  refineInFlight = true;
+  setStatus(clickLabel === 1 ? 'Adding...' : 'Removing...');
+
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/refine`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        mask_id: mask.id,
+        click_x: clickX, click_y: clickY,
+        click_label: clickLabel, rejected_ids: rejectedMaskIds(),
+      }),
+    });
+    const data = await res.json();
+    if (data.ok && data.mask) {
+      // Update mask in place
+      Object.assign(mask, data.mask);
+      setStatus(clickLabel === 1 ? 'Region added' : 'Region removed');
+      renderMaskList(); render();
+    } else {
+      setStatus('Refinement failed: ' + (data.error || ''));
+    }
+  } catch (e) {
+    setStatus('Refinement error');
+  }
+  refineInFlight = false;
+}
+
+// ══════════════════════════════════════════════
+// BOX REDRAW
+// ══════════════════════════════════════════════
+async function doBoxRedraw(imgBox) {
+  if (selectedMask < 0 || !currentData) return;
+  const mask = currentData.masks[selectedMask];
+  if (isExpertLocked(mask)) {
+    setStatus('This mask is in expert review, read-only here.');
+    return;
+  }
+  const filename = images[currentIdx].filename;
+
+  setStatus('Redrawing from box...');
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/rebox`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ mask_id: mask.id, box: imgBox, rejected_ids: rejectedMaskIds() }),
+    });
+    const data = await res.json();
+    if (data.ok && data.mask) {
+      Object.assign(mask, data.mask);
+      applyAffected(data.affected);
+      setStatus('Mask redrawn');
+      renderMaskList(); render();
+    } else {
+      setStatus('Box redraw failed: ' + (data.error || ''));
+    }
+  } catch (e) {
+    setStatus('Box redraw error');
+  }
+}
+
+// ══════════════════════════════════════════════
+// MERGE
+// ══════════════════════════════════════════════
+// Single source of truth for the "merge" action: 2+ checked masks → merge
+// them all; otherwise toggle click-A-then-B merge mode.
+function mergeAction() {
+  if (checkedMaskIds.size >= 2) {
+    mergeCheckedMasks();
+  } else {
+    setInteractionMode(interactionMode === 'merge' ? 'select' : 'merge');
+  }
+}
+
+// ══════════════════════════════════════════════
+// Merge every mask in checkedMaskIds into the first one (lowest id), using
+// the existing pairwise /merge endpoint. Fails fast if any step errors.
+async function mergeCheckedMasks() {
+  if (!currentData || currentIdx < 0) return;
+  if (checkedMaskIds.size < 2) { setStatus('Check at least 2 masks first'); return; }
+  const anyLocked = currentData.masks.some(
+    m => checkedMaskIds.has(m.id) && isExpertLocked(m));
+  if (anyLocked) {
+    setStatus('One or more checked masks are in expert review, read-only here.');
+    return;
+  }
+
+  const filename = images[currentIdx].filename;
+  // Anchor = lowest id in the selection (arbitrary but deterministic).
+  const ids = Array.from(checkedMaskIds).sort((a, b) => a - b);
+  let anchorId = ids[0];
+  const toMerge = ids.slice(1);
+
+  setStatus(`Merging ${ids.length} masks...`);
+  for (const otherId of toMerge) {
+    try {
+      const res = await fetch(`/api/image/${encodeURIComponent(filename)}/merge`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ mask_id_a: anchorId, mask_id_b: otherId }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        setStatus(`Merge stopped: ${data.error || 'unknown'} (some merges may have landed)`);
+        break;
+      }
+      // Replace the anchor mask with the merged result locally.
+      const anchorIdx = currentData.masks.findIndex(m => m.id === anchorId);
+      if (anchorIdx >= 0) Object.assign(currentData.masks[anchorIdx], data.mask);
+      // Drop the removed mask locally.
+      currentData.masks = currentData.masks.filter(m => m.id !== data.removed_id);
+      // The backend may have assigned a new id to the merged mask — follow it.
+      anchorId = data.mask.id;
+    } catch (e) {
+      setStatus('Merge error: ' + e.message);
+      break;
+    }
+  }
+
+  // Leave only the surviving anchor checked, select it for immediate review.
+  checkedMaskIds = new Set([anchorId]);
+  const newIdx = currentData.masks.findIndex(m => m.id === anchorId);
+  if (newIdx >= 0) {
+    selectedMask = newIdx;
+    if (interactionMode !== 'refine') setInteractionMode('refine');
+  }
+  setStatus(`Merged ${ids.length} masks`);
+  renderMaskList();
+  render();
+}
+
+async function doMerge(idxA, idxB) {
+  if (!currentData) return;
+  const maskA = currentData.masks[idxA];
+  const maskB = currentData.masks[idxB];
+  const filename = images[currentIdx].filename;
+
+  setStatus('Merging...');
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/merge`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ mask_id_a: maskA.id, mask_id_b: maskB.id }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      Object.assign(maskA, data.mask);
+      currentData.masks = currentData.masks.filter(m => m.id !== data.removed_id);
+      selectedMask = currentData.masks.indexOf(maskA);
+      setStatus('Masks merged');
+      interactionMode = 'select'; mergeFirstId = -1;
+      updateModeButtons();
+      renderMaskList(); render();
+    } else {
+      setStatus('Merge failed: ' + (data.error || ''));
+    }
+  } catch (e) {
+    setStatus('Merge error');
+  }
+}
+
+// Merge overlapping SAME-ID (same species/label) masks into one, on demand.
+// Segmentation-time overlap resolution (larger_wins) drops the smaller of two
+// overlapping same-species masks; this unions them back so a colony split
+// across two clicks becomes a single mask. Server returns the rebuilt list.
+async function mergeSameId() {
+  if (!currentData || currentIdx < 0) return;
+  const filename = images[currentIdx].filename;
+  setStatus('Merging overlapping same-ID masks...');
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/merge_same_id`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+    });
+    const data = await res.json();
+    if (data.ok) {
+      // Preserve the selected mask's identity across the rebuild if possible.
+      const selId = (selectedMask >= 0 && currentData.masks[selectedMask])
+        ? currentData.masks[selectedMask].id : null;
+      currentData.masks = data.masks || [];
+      checkedMaskIds = new Set();
+      selectedMask = selId != null
+        ? currentData.masks.findIndex(m => m.id === selId) : -1;
+      const refused = (data.refused || []).length;
+      let msg = data.merged > 0
+        ? `Merged ${data.merged} overlapping same-ID mask${data.merged === 1 ? '' : 's'}`
+        : 'No overlapping same-ID masks to merge';
+      if (refused > 0) {
+        msg += ` — ${refused} pair${refused === 1 ? '' : 's'} kept apart (conflicting expert IDs)`;
+      }
+      setStatus(msg);
+      renderMaskList(); render();
+    } else {
+      setStatus('Merge same-ID failed: ' + (data.error || ''));
+    }
+  } catch (e) {
+    setStatus('Merge same-ID error: ' + e.message);
+  }
+}
+
+// Re-read this frame's segmentations.json from disk and merge in imported
+// expert/pending review fields WITHOUT clobbering unsaved operator edits, then
+// re-render so expert-green / pending-amber colors appear without a restart.
+async function reloadSegmentations() {
+  if (!currentData || currentIdx < 0) return;
+  const filename = images[currentIdx].filename;
+  setStatus('Reloading IDs from disk...');
+  // Flush the operator's current accept/reject statuses to the server's
+  // in-memory copy first, so the merge preserves them (it merges imported
+  // review fields onto that copy, never the other way around).
+  try { await saveCurrentMasks(); } catch (e) { /* best-effort */ }
+  try {
+    const res = await fetch('/api/reload_segmentations', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ filename }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      // The server merged fields onto its own in-memory masks; pull the fresh
+      // copy so the canvas + list reflect the imported IDs. Keep the current
+      // selection by id.
+      const selId = (selectedMask >= 0 && currentData.masks[selectedMask])
+        ? currentData.masks[selectedMask].id : null;
+      currentData.masks = data.masks || currentData.masks;
+      selectedMask = selId != null
+        ? currentData.masks.findIndex(m => m.id === selId) : -1;
+      setStatus(data.merged > 0
+        ? `Reloaded — ${data.merged} mask${data.merged === 1 ? '' : 's'} updated (${data.expert} expert ID${data.expert === 1 ? '' : 's'})`
+        : 'Reloaded — no imported IDs for this frame yet');
+      renderMaskList(); render();
+    } else {
+      setStatus('Reload failed: ' + (data.error || ''));
+    }
+  } catch (e) {
+    setStatus('Reload error: ' + e.message);
+  }
+}
+
+// Save the current frame, then return to the main menu: navigate to the
+// orchestrator if we were launched from it, otherwise try to close the tab and
+// fall back to the startup screen.
+async function doneAndReturn() {
+  try {
+    if (currentData && currentIdx >= 0) await saveCurrentMasks();
+  } catch (e) { /* save best-effort — still return */ }
+  if (ORCHESTRATOR_URL) {
+    window.location.href = ORCHESTRATOR_URL;
+    return;
+  }
+  window.close();
+  // window.close() is a no-op for tabs the script didn't open — fall back to
+  // the setup screen so the operator isn't stranded on a finished review.
+  setTimeout(() => { showScreen('startup'); }, 100);
+}
+
+// ══════════════════════════════════════════════
+// EXEMPLAR SCAN
+// ══════════════════════════════════════════════
+function getScanThreshold() {
+  return parseInt(document.getElementById('scan-threshold').value) / 100;
+}
+
+// Update threshold display
+document.getElementById('scan-threshold').addEventListener('input', function() {
+  document.getElementById('scan-threshold-val').textContent = (this.value / 100).toFixed(1);
+});
+// Release focus after a committed change so the slider does not trap keyboard shortcuts.
+document.getElementById('scan-threshold').addEventListener('change', function() { this.blur(); });
+
+async function doExemplarScan(mode) {
+  if (!currentData || currentIdx < 0) return;
+  if (mode === 'this' && selectedMask < 0) { setStatus('Select a mask first'); return; }
+
+  const filename = images[currentIdx].filename;
+  const threshold = getScanThreshold();
+
+  const body = { mode: mode, threshold: threshold };
+  if (mode === 'this') {
+    body.mask_id = currentData.masks[selectedMask].id;
+  }
+
+  const label = mode === 'all' ? 'Scanning all species' : `Scanning ${currentData.masks[selectedMask].species}`;
+  const startMsg = `${label} (threshold ${threshold})...`;
+  setStatus(startMsg); setScanStatus(startMsg);
+
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/exemplar`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      // Candidates are EPHEMERAL (Task 12): hold them client-side in
+      // scanCandidates[] and show them in the second panel. They are NOT pushed
+      // into currentData.masks and the image is NOT reloaded, so nothing is
+      // persisted until the operator keeps them (the review loop is Task 13).
+      scanCandidates = data.new_masks || [];
+      scanReviewIdx = -1;
+      if (data.count > 0) {
+        const sp = (data.species_scanned && data.species_scanned.length)
+          ? ` (${data.species_scanned.join(', ')})` : '';
+        const msg = `Found ${data.count} candidate${data.count === 1 ? '' : 's'}${sp}`;
+        setStatus(msg); setScanStatus(msg);
+      } else {
+        const msg = 'No candidates found above threshold';
+        setStatus(msg); setScanStatus(msg);
+      }
+      renderScanCandidates();
+      // Drop straight into the review loop (Task 13): auto-select the first
+      // candidate, zoom to it, and arm Enter=keep / Del=drop. No-op when the scan
+      // found nothing (startScanReview bails on an empty set).
+      startScanReview();
+    } else {
+      const msg = 'Scan failed: ' + (data.error || '');
+      setStatus(msg); setScanStatus(msg);
+    }
+  } catch (e) {
+    const msg = 'Scan error: ' + e.message;
+    setStatus(msg); setScanStatus(msg);
+  }
+}
+
+// Write a line into the second panel's status box. Kept separate from setStatus
+// (the toast) so the scan panel keeps a persistent, in-place log of the last run.
+function setScanStatus(msg) {
+  const el = document.getElementById('scan-status-box');
+  if (el) el.textContent = msg || '';
+}
+
+// ══════════════════════════════════════════════
+// ADD NEW MASK
+// ══════════════════════════════════════════════
+const ADD_LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').concat(
+  ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(c => 'A' + c)
+);
+
+// Spreadsheet-style bijective base-26 label helpers (mirror Place Points'
+// pp_core.js so the two steps speak the same label language). 1->A, 26->Z,
+// 27->AA ... unbounded.
+function colLabel(n) {
+  let s = '';
+  n = Math.floor(n);
+  while (n > 0) {
+    const r = (n - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+// Inverse of colLabel: 'A'->1, 'Z'->26, 'AA'->27 ... Non-spreadsheet labels
+// (numeric, exemplar 'E12', etc.) map to 0 so they don't inflate the cursor.
+function labelToNum(label) {
+  const s = String(label || '').toUpperCase();
+  if (!/^[A-Z]+$/.test(s)) return 0;
+  let n = 0;
+  for (let i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64);
+  return n;
+}
+
+// MONOTONIC labels: never reuse a freed label. We hand out the next label
+// strictly above the highest spreadsheet label EVER used on this frame
+// (deleted/rejected masks included), so a reject-then-add sequence keeps
+// climbing instead of recycling 'A'. Consistent with the Place-Points append
+// rule in CONTRACTS §3. Falls back to A on an empty frame.
+function nextAddLabel() {
+  if (!currentData) return 'A';
+  let hi = 0;
+  for (const m of currentData.masks) {
+    const v = labelToNum(m.label);
+    if (v > hi) hi = v;
+  }
+  if (currentData._labelHighWater && currentData._labelHighWater > hi) {
+    hi = currentData._labelHighWater;
+  }
+  const next = hi + 1;
+  currentData._labelHighWater = next;
+  return colLabel(next);
+}
+
+// Pending add click — stored until species is chosen
+let pendingAddClick = null; // {imgX, imgY, label}
+
+// Ids of masks the operator has deleted (rejected) this session. Sent with
+// add/refine/rebox so the backend never clips a new/edited mask against one the
+// user just deleted, even if that mask's reject PUT has not landed yet (the
+// reject and the add/refine requests race; Flask runs threaded).
+function rejectedMaskIds() {
+  // Union of (a) masks currently flagged rejected in our in-memory copy and
+  // (b) recentlyDeletedIds — ids deleted this frame whose 'rejected' status a
+  // wholesale reload may have transiently overwritten. (b) guarantees a
+  // just-deleted mask is always reported to /add until the frame changes, so a
+  // new overlapping mask in its freed region is never clipped to a sliver.
+  const fromState = (currentData && currentData.masks ? currentData.masks : [])
+    .filter(m => m.status === 'rejected').map(m => m.id);
+  return Array.from(new Set([...fromState, ...recentlyDeletedIds]));
+}
+
+async function addMaskAt(imgX, imgY) {
+  if (!currentData || currentIdx < 0) return;
+  const filename = images[currentIdx].filename;
+  const label = nextAddLabel();
+
+  // If a target-label number is currently armed, pre-assign species+category so
+  // the new mask is born already labeled. If REVIEW is armed instead, the mask is
+  // flagged pending-review server-side. The backend subtracts existing masks, so
+  // the new mask won't get lumped into a neighbor.
+  let species = '', category = '', name = '', reviewFlag = false;
+  if (armedReview) {
+    reviewFlag = true;
+    species = 'REVIEW';
+  } else if (numKeyDown !== null && TARGET_LABELS[numKeyDown]) {
+    const lbl = TARGET_LABELS[numKeyDown];
+    species = lbl.code;
+    category = lbl.category || 'Coral';
+    name = lbl.name || lbl.code;
+  }
+
+  setStatus(`Segmenting ${label}${reviewFlag ? ' as REVIEW' : (species ? ' as ' + species : '')}...`);
+
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/add`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        click_x: imgX, click_y: imgY,
+        label: label, species: species, category: category,
+        review: reviewFlag, rejected_ids: rejectedMaskIds(),
+      }),
+    });
+    const data = await res.json();
+    if (data.ok && data.mask) {
+      // If we pre-assigned, hydrate the returned mask so the list shows it.
+      if (reviewFlag && data.mask.review === undefined) data.mask.review = true;
+      if (species && !data.mask.species) data.mask.species = species;
+      if (category && !data.mask.category) data.mask.category = category;
+      if (name && !data.mask.name) data.mask.name = name;
+      currentData.masks.push(data.mask);
+      selectedMask = currentData.masks.length - 1;
+      // Merge in any neighbor updates (edited-wins trimmed their RLEs).
+      applyAffected(data.affected);
+      // Re-find the new mask after applyAffected potentially reordered.
+      const newIdx = currentData.masks.findIndex(m => m.id === data.mask.id);
+      if (newIdx >= 0) selectedMask = newIdx;
+      // Straight into refine mode for immediate touch-up (user request).
+      setInteractionMode('refine');
+      renderMaskList(); render();
+      flashMode(label);
+      setStatus(`${label}${species ? ' -> ' + species : ''} added — refine now, Enter to accept`);
+    } else {
+      const bb = (data.blocked_by || []).map(b => `#${b.id} ${b.species || '?'}`).join(', ');
+      setStatus(bb ? `Blocked by ${bb} — delete it or click a clearer spot` : ('Add failed: ' + (data.error || 'no mask')));
+    }
+  } catch (e) {
+    setStatus('Add error: ' + e.message);
+  }
+}
+
+function showCatPopup() {
+  const popup = document.getElementById('cat-popup');
+  const wrapRect = wrap.getBoundingClientRect();
+  popup.style.left = (wrapRect.left + wrapRect.width / 2 - 120) + 'px';
+  popup.style.top = (wrapRect.top + wrapRect.height / 2 - 20) + 'px';
+  popup.classList.add('visible');
+}
+
+function hideCatPopup() {
+  document.getElementById('cat-popup').classList.remove('visible');
+  pendingAddMaskIdx = -1;
+  pendingAddClick = null;
+}
+
+// Target species list from server
+const TARGET_SPECIES = [{% for sp in target_species %}'{{ sp }}'{% if not loop.last %}, {% endif %}{% endfor %}];
+const TARGET_LABELS = [{% for lbl in target_labels %}{code:'{{ lbl.code }}', name:{{ lbl.name|tojson }}, category:{{ lbl.category|tojson }}}{% if not loop.last %}, {% endif %}{% endfor %}];
+
+// Held-number-key state (mirror of step 4). While a number is held, clicks
+// in ADD mode create a new mask with the corresponding target label.
+let numKeyDown = null;
+
+function highlightQuickBtn(idx) {
+  document.querySelectorAll('.qa-btn').forEach((b, i) => {
+    b.classList.toggle('active', i === idx);
+  });
+}
+
+// Sticky-arm a numeric target label: arms it AND enters Add mode. Arming the
+// same label again disarms back to select. Shared by the number keys and the
+// quickadd-bar buttons. (numKeyDown is the armed index, not a physically-held key.)
+function armLabel(idx) {
+  const lbl = TARGET_LABELS[idx];
+  if (!lbl) return;
+  if (numKeyDown === idx && !armedReview) {
+    // arm same label -> disarm
+    numKeyDown = null;
+    armedReview = false;
+    highlightQuickBtn(-1);
+    setInteractionMode('select');
+    setStatus('Label disarmed');
+    return;
+  }
+  numKeyDown = idx;
+  armedReview = false;
+  highlightQuickBtn(idx);
+  stickyAddMode = true;            // arming = sticky add loop
+  setInteractionMode('add');       // 'add' is exempt from the disarm in setInteractionMode
+  _updateStickyAddIndicator();
+  setStatus(`Armed ${lbl.code}${lbl.name ? ' (' + lbl.name + ')' : ''} — click to place + segment`);
+}
+
+function toggleQuickLabel(idx) {
+  armLabel(idx);
+}
+
+function assignNewMaskSpecies(species) {
+  if (pendingAddMaskIdx < 0 || !currentData) { hideCatPopup(); return; }
+  const mask = currentData.masks[pendingAddMaskIdx];
+  mask.species = species;
+  mask.category = 'Coral';
+  mask.name = species;
+  hideCatPopup();
+  mask.status = 'accepted';
+  persistMaskStatus(mask.id, 'accepted');
+  flashMode('\u2713 ' + mask.label + ' ' + species);
+  if (stickyAddMode) {
+    selectedMask = -1;
+    setInteractionMode('add');
+    renderMaskList(); render();
+    setStatus('Accepted — click to add the next mask (A to stop).');
+    return;
+  }
+  setInteractionMode('select');
+  renderMaskList(); render();
+  if (autoAdvance) setTimeout(() => advanceToNextOrFrame(), 150);
+}
+
+// The "flag this new mask for REVIEW" popup option is REMOVED in editMasks:
+// this app must never flag a mask for expert REVIEW (see the armedReview note
+// above). combinedAnnotate keeps the equivalent popup option on purpose.
+
+function assignNewMaskCategory(category) {
+  if (pendingAddMaskIdx < 0 || !currentData) { hideCatPopup(); return; }
+  const mask = currentData.masks[pendingAddMaskIdx];
+  const catCodes = {'Sponge':'SPO', 'Macroalgae':'MACA', 'Gorgonian':'GORG',
+    'Turf':'TURF', '':''};
+  mask.species = catCodes[category] || category.toUpperCase().slice(0, 4);
+  mask.category = category;
+  hideCatPopup();
+  mask.status = 'accepted';
+  persistMaskStatus(mask.id, 'accepted');
+  flashMode('\u2713 ' + mask.label + ' ' + (mask.species || ''));
+  if (stickyAddMode) {
+    selectedMask = -1;
+    setInteractionMode('add');
+    renderMaskList(); render();
+    setStatus('Accepted — click to add the next mask (A to stop).');
+    return;
+  }
+  setInteractionMode('select');
+  renderMaskList(); render();
+  if (autoAdvance) setTimeout(() => advanceToNextOrFrame(), 150);
+}
+
+// ══════════════════════════════════════════════
+// MOUSE INTERACTION
+// ══════════════════════════════════════════════
+function findMaskAt(imgX, imgY) {
+  if (!currentData) return -1;
+  const masks = currentData.masks;
+  for (let i = masks.length - 1; i >= 0; i--) {
+    if (masks[i].status === 'rejected') continue;
+    const polys = masks[i].polygon_px || [];
+    for (const poly of polys) {
+      if (pointInPolygon(imgX, imgY, poly)) return i;
+    }
+  }
+  return -1;
+}
+
+function pointInPolygon(x, y, poly) {
+  let inside = false;
+  const n = poly.length / 2;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = poly[i * 2], yi = poly[i * 2 + 1];
+    const xj = poly[j * 2], yj = poly[j * 2 + 1];
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+// Click-vs-drag threshold for promoting a pending left-click to a pan.
+const PAN_THRESHOLD = 4;
+let pendingClick = null; // {clientX, clientY, startOffsetX, startOffsetY, sx, sy, imgX, imgY}
+
+// TagLab-style draw gesture (active only in interactionMode === 'draw').
+let isDrawing = false;
+let drawPath = []; // array of {x,y} in IMAGE coords
+
+// Double-click-to-accept tracking (see mousedown handler below).
+let _lastLeftDownMs = 0, _lastLeftDownSx = 0, _lastLeftDownSy = 0;
+canvas.addEventListener('mousedown', e => {
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+
+  // Pan: middle button or alt+left (power-user shortcut)
+  if (e.button === 1 || (e.button === 0 && e.altKey)) {
+    isPanning = true;
+    panStartX = e.clientX - offsetX;
+    panStartY = e.clientY - offsetY;
+    canvas.style.cursor = 'grabbing';
+    return;
+  }
+
+  const {x: imgX, y: imgY} = screenToImage(sx, sy);
+
+  // DRAW mode: start capturing a freehand path. Short-circuits all other
+  // click handling until mouseup.
+  if (e.button === 0 && interactionMode === 'draw' && selectedMask >= 0) {
+    isDrawing = true;
+    drawPath = [{x: imgX, y: imgY}];
+    e.preventDefault();
+    return;
+  }
+
+  // Shift+left drag: box redraw (still instant; needs drag detection directly)
+  if (e.button === 0 && e.shiftKey && selectedMask >= 0) {
+    isDrawingBox = true;
+    boxStartX = sx; boxStartY = sy;
+    boxEndX = sx; boxEndY = sy;
+    e.preventDefault();
+    return;
+  }
+
+  // Double-click (plain left button, a mask active) = accept the mask, same as
+  // Enter, then back to Add in sticky mode. We intercept the SECOND click of a
+  // rapid same-spot pair so it accepts instead of adding a refine click.
+  if (e.button === 0 && !e.altKey && !e.shiftKey && selectedMask >= 0) {
+    const nowMs = Date.now();
+    if (_lastLeftDownMs && (nowMs - _lastLeftDownMs) < 320 &&
+        Math.abs(sx - _lastLeftDownSx) < 8 && Math.abs(sy - _lastLeftDownSy) < 8) {
+      _lastLeftDownMs = 0;
+      e.preventDefault();
+      acceptMask();
+      return;
+    }
+    _lastLeftDownMs = nowMs;
+    _lastLeftDownSx = sx; _lastLeftDownSy = sy;
+  }
+
+  // Right-click: always instant negative refinement on selected mask
+  if (e.button === 2 && selectedMask >= 0) {
+    e.preventDefault();
+    doRefine(imgX, imgY, 0);
+    return;
+  }
+
+  // Plain left click: defer. If the cursor moves > PAN_THRESHOLD before
+  // release, promote to pan. Otherwise fire the mode-specific click action
+  // in mouseup. This gives us click+drag=pan everywhere without disrupting
+  // single-click semantics.
+  if (e.button === 0) {
+    pendingClick = {
+      clientX: e.clientX, clientY: e.clientY,
+      startOffsetX: offsetX, startOffsetY: offsetY,
+      sx, sy, imgX, imgY,
+    };
+    canvas.style.cursor = 'grab';
+  }
+});
+
+canvas.addEventListener('mousemove', e => {
+  // Active draw gesture — append to path and re-render to show the trail.
+  if (isDrawing) {
+    const rect = canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    const {x: imgX, y: imgY} = screenToImage(sx, sy);
+    const last = drawPath[drawPath.length - 1];
+    if (!last || Math.hypot(last.x - imgX, last.y - imgY) > 1) {
+      drawPath.push({x: imgX, y: imgY});
+      render();
+    }
+    return;
+  }
+
+  // Active pan drag
+  if (isPanning) {
+    offsetX = e.clientX - panStartX;
+    offsetY = e.clientY - panStartY;
+    render();
+    return;
+  }
+
+  // Pending click — promote to pan once we've moved enough
+  if (pendingClick) {
+    const dx = e.clientX - pendingClick.clientX;
+    const dy = e.clientY - pendingClick.clientY;
+    if ((dx * dx + dy * dy) > PAN_THRESHOLD * PAN_THRESHOLD) {
+      isPanning = true;
+      panStartX = pendingClick.clientX - pendingClick.startOffsetX;
+      panStartY = pendingClick.clientY - pendingClick.startOffsetY;
+      pendingClick = null;
+      canvas.style.cursor = 'grabbing';
+    }
+    // Keep updating loupe even while deciding
+    updateLoupe(e.clientX, e.clientY, e.clientX - (canvas.getBoundingClientRect().left), e.clientY - (canvas.getBoundingClientRect().top));
+    return;
+  }
+
+  // Loupe follow-cursor for all other move events
+  const rect = canvas.getBoundingClientRect();
+  updateLoupe(e.clientX, e.clientY, e.clientX - rect.left, e.clientY - rect.top);
+
+  if (isDrawingBox) {
+    boxEndX = e.clientX - rect.left;
+    boxEndY = e.clientY - rect.top;
+    const boxEl = document.getElementById('box-overlay');
+    const left = Math.min(boxStartX, boxEndX);
+    const top = Math.min(boxStartY, boxEndY);
+    const w = Math.abs(boxEndX - boxStartX);
+    const h = Math.abs(boxEndY - boxStartY);
+    boxEl.style.display = 'block';
+    boxEl.style.left = left + 'px';
+    boxEl.style.top = top + 'px';
+    boxEl.style.width = w + 'px';
+    boxEl.style.height = h + 'px';
+    return;
+  }
+});
+
+function _restCursor() {
+  return interactionMode === 'add' ? 'cell' : 'crosshair';
+}
+
+function executePendingClick(pc) {
+  const {imgX, imgY} = pc;
+  // ADD mode (or A key held)
+  if (interactionMode === 'add' || aKeyDown) { addMaskAt(imgX, imgY); return; }
+  // MERGE mode
+  if (interactionMode === 'merge') {
+    const hitIdx = findMaskAt(imgX, imgY);
+    if (hitIdx >= 0) {
+      if (mergeFirstId < 0) {
+        mergeFirstId = hitIdx;
+        selectedMask = hitIdx;
+        setStatus(`Merge: click second mask (selected ${currentData.masks[hitIdx].label})`);
+        renderMaskList(); render();
+      } else if (hitIdx !== mergeFirstId) {
+        doMerge(mergeFirstId, hitIdx);
+      }
+    }
+    return;
+  }
+  // REFINE mode: positive refinement on selected mask
+  if (interactionMode === 'refine' && selectedMask >= 0) { doRefine(imgX, imgY, 1); return; }
+  // SELECT mode (default)
+  const hitIdx = findMaskAt(imgX, imgY);
+  if (hitIdx === selectedMask && selectedMask >= 0) { doRefine(imgX, imgY, 1); return; }
+  if (hitIdx >= 0) {
+    selectedMask = hitIdx;
+    // Auto-enter refine mode on selection so the user's next click edits
+    // the mask (not deselects). Was: stay in select, requiring another click.
+    setInteractionMode('refine');
+    renderMaskList(); render();
+    return;
+  }
+  // Click on nothing: deselect
+  selectedMask = -1;
+  renderMaskList(); render();
+}
+
+canvas.addEventListener('mouseup', e => {
+  // Finalize draw gesture
+  if (isDrawing) {
+    isDrawing = false;
+    const path = drawPath;
+    drawPath = [];
+    if (path.length < 3) {
+      setStatus('Draw too short — try a larger gesture.');
+      render();
+      return;
+    }
+    submitDrawEdit(path);
+    return;
+  }
+  if (isPanning) { isPanning = false; canvas.style.cursor = _restCursor(); pendingClick = null; return; }
+  if (pendingClick) {
+    const pc = pendingClick;
+    pendingClick = null;
+    canvas.style.cursor = _restCursor();
+    executePendingClick(pc);
+    return;
+  }
+  if (isDrawingBox) {
+    isDrawingBox = false;
+    document.getElementById('box-overlay').style.display = 'none';
+    const p1 = screenToImage(boxStartX, boxStartY);
+    const p2 = screenToImage(boxEndX, boxEndY);
+    const imgBox = [
+      Math.min(p1.x, p2.x), Math.min(p1.y, p2.y),
+      Math.max(p1.x, p2.x), Math.max(p1.y, p2.y),
+    ];
+    if (imgBox[2] - imgBox[0] > 5 && imgBox[3] - imgBox[1] > 5) {
+      doBoxRedraw(imgBox);
+    }
+    return;
+  }
+});
+
+// Prevent context menu on right-click
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const zoom = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const newScale = scale * zoom;
+  if (newScale < 0.05 || newScale > 30) return;
+  offsetX = mx - (mx - offsetX) * zoom;
+  offsetY = my - (my - offsetY) * zoom;
+  scale = newScale;
+  render();
+}, {passive: false});
+
+// ══════════════════════════════════════════════
+// UNDO / RESET
+// ══════════════════════════════════════════════
+async function undoRefine() {
+  if (selectedMask < 0 || !currentData) return;
+  const mask = currentData.masks[selectedMask];
+  if (isExpertLocked(mask)) {
+    setStatus('This mask is in expert review, read-only here.');
+    return;
+  }
+  if (!mask.refinement_clicks || mask.refinement_clicks.length === 0) {
+    setStatus('Nothing to undo');
+    return;
+  }
+  const filename = images[currentIdx].filename;
+  setStatus('Undoing...');
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/undo_refine`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ mask_id: mask.id, rejected_ids: rejectedMaskIds() }),
+    });
+    const data = await res.json();
+    if (data.ok && data.mask) {
+      Object.assign(mask, data.mask);
+      setStatus(`Undo (${data.remaining_undos} edits left)`);
+      renderMaskList(); render();
+    } else {
+      setStatus('Undo failed: ' + (data.error || ''));
+    }
+  } catch (e) { setStatus('Undo error'); }
+}
+
+async function resetMask() {
+  if (selectedMask < 0 || !currentData) return;
+  const mask = currentData.masks[selectedMask];
+  if (isExpertLocked(mask)) {
+    setStatus('This mask is in expert review, read-only here.');
+    return;
+  }
+  const filename = images[currentIdx].filename;
+  setStatus('Resetting to original...');
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/reset_mask`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ mask_id: mask.id }),
+    });
+    const data = await res.json();
+    if (data.ok && data.mask) {
+      Object.assign(mask, data.mask);
+      flashMode('RESET');
+      renderMaskList(); render();
+    } else {
+      setStatus('Reset failed: ' + (data.error || ''));
+    }
+  } catch (e) { setStatus('Reset error'); }
+}
+
+// ══════════════════════════════════════════════
+// KEYBOARD
+// ══════════════════════════════════════════════
+document.addEventListener('keydown', e => {
+  // Let mask shortcuts keep working even when a range/checkbox control has focus.
+  // The opacity and scan-threshold sliders previously trapped focus, so every
+  // keydown returned here and all shortcuts died until you clicked elsewhere.
+  // Only true text-entry fields swallow keys.
+  const _tag = e.target.tagName, _ty = (e.target.type || '').toLowerCase();
+  const _isTextEntry =
+    (_tag === 'INPUT' && _ty !== 'range' && _ty !== 'checkbox' && _ty !== 'radio')
+    || _tag === 'TEXTAREA' || _tag === 'SELECT';
+  if (_isTextEntry) return;
+  const activeScreen = document.querySelector('.screen.active');
+  if (!activeScreen || activeScreen.id !== 'review') return;
+
+  // K → STICKY toggle for the keyboard cheat sheet (K opens, K again closes).
+  // Handled first so it works from any mode. e.repeat is ignored so holding K
+  // doesn't flicker the panel.
+  if (e.key === 'k' || e.key === 'K') {
+    if (!e.ctrlKey && !e.metaKey) {
+      if (!e.repeat) {
+        const kh = document.getElementById('kbd-help');
+        if (kh) kh.classList.toggle('visible');
+      }
+      e.preventDefault();
+      return;
+    }
+  }
+  // While the cheat sheet is open, swallow every other key so holding K can't
+  // fire shortcuts by accident. Esc is the fail-safe to close it.
+  {
+    const kh = document.getElementById('kbd-help');
+    if (kh && kh.classList.contains('visible')) {
+      if (e.key === 'Escape') kh.classList.remove('visible');
+      e.preventDefault();
+      return;
+    }
+  }
+  // While the end-of-batch confirm overlay is open, Y exports, N/Esc cancels;
+  // every other key is swallowed so it can't leak to the canvas behind it.
+  {
+    const ec = document.getElementById('export-confirm-overlay');
+    if (ec && ec.classList.contains('visible')) {
+      if (e.key === 'y' || e.key === 'Y') confirmExportYes();
+      else if (e.key === 'n' || e.key === 'N' || e.key === 'Escape') confirmExportNo();
+      e.preventDefault();
+      return;
+    }
+  }
+
+  // When species popup is showing: number keys assign species, letter keys assign category
+  if (pendingAddMaskIdx >= 0) {
+    const num = parseInt(e.key);
+    // 1-N: assign target species
+    if (num >= 1 && num <= TARGET_SPECIES.length) {
+      assignNewMaskSpecies(TARGET_SPECIES[num - 1]);
+      e.preventDefault();
+      return;
+    }
+    // 0: unlabel
+    if (e.key === '0') { assignNewMaskCategory(''); e.preventDefault(); return; }
+    // r: REMOVED in editMasks, no expert-REVIEW arming here.
+    // Letter shortcuts for generic categories
+    const catKeys = {s:'Sponge', m:'Macroalgae', g:'Gorgonian', t:'Turf'};
+    if (catKeys[e.key.toLowerCase()]) {
+      assignNewMaskCategory(catKeys[e.key.toLowerCase()]);
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'Escape') { hideCatPopup(); e.preventDefault(); return; }
+    return;
+  }
+
+  // STICKY tap-to-arm: tapping 1..N arms that label AND enters Add mode.
+  // Tapping the same number again disarms and drops back to select.
+  // (numKeyDown is now an armed index, not a physically-held key.)
+  {
+    const num = parseInt(e.key);
+    if (num >= 1 && num <= TARGET_LABELS.length && !e.ctrlKey && !e.metaKey) {
+      if (!e.repeat) armLabel(num - 1);
+      e.preventDefault();
+      return;
+    }
+  }
+
+  // Scan-candidate review loop (Task 13). While a candidate is in focus
+  // (scanReviewIdx >= 0) the SAME Enter/Delete keys keep/drop the candidate
+  // instead of accepting/rejecting a main-list mask. Intercept here, BEFORE the
+  // switch, so the normal Enter (acceptMask) / Del (rejectMask) / Escape
+  // (deselect) cases never fire while reviewing scan candidates.
+  if (scanReviewIdx >= 0) {
+    if (e.key === 'Enter') { scanReviewAccept(); e.preventDefault(); return; }
+    if (e.key === 'Delete' || e.key === 'Backspace' || e.key === 'x' || e.key === 'X') {
+      scanReviewReject(); e.preventDefault(); return;
+    }
+    if (e.key === 'Escape') { scanReviewIdx = -1; renderScanCandidates(); e.preventDefault(); return; }
+  }
+
+  switch (e.key) {
+    case ' ':
+      // Space = NEXT image. On the last frame this opens the Export dialog (see
+      // advanceToNextFrame). The Auto-advance button still toggles auto-advance
+      // via setAutoAdvance; Space no longer does.
+      if (!e.repeat) { saveCurrentMasks(); advanceToNextFrame(); }
+      e.preventDefault();
+      break;
+    case 'Tab':
+      e.preventDefault();
+      selectNextMask();
+      break;
+    case 'Enter':
+      e.preventDefault();
+      acceptMask();
+      break;
+    case 'x': case 'X':
+    case 'Delete': case 'Backspace':
+      e.preventDefault();
+      // If 2+ masks are multi-selected (Ctrl+click), delete the whole set.
+      // Otherwise reject the single selected mask as before.
+      if (checkedMaskIds.size >= 2) deleteCheckedMasks();
+      else rejectMask();
+      break;
+    case 'n': case 'N':
+      // Next (or finish): advance, or open the export dialog on the last frame.
+      if (!e.ctrlKey && !e.metaKey) { advanceToNextFrame(); e.preventDefault(); }
+      break;
+    case 'b': case 'B':
+      if (!e.ctrlKey && !e.metaKey) { saveCurrentMasks(); prevImage(); e.preventDefault(); }
+      break;
+    case 'f': case 'F':
+      fitImage(); render(); e.preventDefault();
+      break;
+    case 'o': case 'O':
+      cycleOpacity(); e.preventDefault();
+      break;
+    case 'p': case 'P':
+      if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        _timerTogglePause();
+        e.preventDefault();
+      }
+      break;
+    // 'r'/'R' is REMOVED in editMasks, no expert-REVIEW arming here (see
+    // the armedReview note above). combinedAnnotate keeps this keybinding.
+    case 'c': case 'C':
+      // Classify the SELECTED mask: opens the label popup (target species,
+      // category, or unlabel). Locking in no longer forces this, so you
+      // can place unlabeled masks fast and label them only when you want to.
+      if (!e.ctrlKey && !e.metaKey && selectedMask >= 0) {
+        pendingAddMaskIdx = selectedMask;
+        showCatPopup();
+        e.preventDefault();
+      }
+      break;
+    case 't': case 'T':
+      // T toggles the target-only view.
+      if (!e.ctrlKey && !e.metaKey) {
+        toggleTargetOnly(!showOnlyTarget);
+        e.preventDefault();
+      }
+      break;
+    case 'a': case 'A':
+      // Sticky add: A enters Add mode AND sets a flag so that after you
+      // accept/reject the just-added mask, you snap back to Add instead of
+      // advancing to the next pending mask. A again clears the flag and
+      // drops you back to select. While in the refine sub-step (between
+      // addMaskAt and Enter/Delete), A still exits cleanly.
+      if (!e.ctrlKey && !e.metaKey) {
+        if (stickyAddMode) {
+          stickyAddMode = false;
+          setInteractionMode('select');
+        } else {
+          stickyAddMode = true;
+          setInteractionMode('add');
+        }
+        _updateStickyAddIndicator();
+        e.preventDefault();
+      }
+      break;
+    case 'd': case 'D':
+      if (!e.ctrlKey && !e.metaKey) {
+        setInteractionMode(interactionMode === 'draw' ? 'refine' : 'draw');
+        e.preventDefault();
+      }
+      break;
+    case 'm': case 'M':
+      mergeAction();
+      e.preventDefault();
+      break;
+    case 'u': case 'U':
+      undoRefine();
+      e.preventDefault();
+      break;
+    case 'z': case 'Z':
+      // Ctrl+Z reset-mask was removed; Z alone = auto-center toggle.
+      if (e.ctrlKey || e.metaKey) break;
+      autoCenter = !autoCenter;
+      setStatus(autoCenter ? 'Auto-center ON' : 'Auto-center OFF');
+      savePrefs();
+      e.preventDefault();
+      break;
+    case 'h': case 'H':
+      loupeEnabled = !loupeEnabled;
+      if (!loupeEnabled) {
+        const loupe = document.getElementById('loupe');
+        if (loupe) loupe.classList.remove('visible');
+      }
+      setStatus(loupeEnabled ? 'Magnifier ON' : 'Magnifier OFF');
+      savePrefs();
+      e.preventDefault();
+      break;
+    case 'g': case 'G':
+      if (!e.ctrlKey && !e.metaKey) {
+        const chk = document.getElementById('chk-show-reference');
+        toggleShowReference(chk ? !chk.checked : !showReference);
+        e.preventDefault();
+      }
+      break;
+    case 'Escape':
+      hideCatPopup();
+      selectedMask = -1;
+      setInteractionMode('select');
+      renderMaskList(); render();
+      break;
+    case 's': case 'S':
+      if (e.ctrlKey || e.metaKey) { saveCurrentMasks(); setStatus('Saved'); }
+      else { doExemplarScan('this'); }
+      e.preventDefault();
+      break;
+  }
+});
+
+document.addEventListener('keyup', e => {
+  // Number arming is sticky now — releasing a number must NOT disarm it. The
+  // armed label persists until an explicit disarm (tap same number, R, or Esc).
+  // K is also a sticky toggle (handled on keydown) — releasing it must NOT hide
+  // the cheat sheet. Press K again (or Esc) to close.
+});
+
+// Clear held-number + Add-mode latch on focus loss so the user doesn't return
+// to the window stuck in an invisible state.
+window.addEventListener('blur', () => {
+  if (numKeyDown !== null || armedReview) {
+    numKeyDown = null;
+    armedReview = false;
+    highlightQuickBtn(-1);
+  }
+  const kh = document.getElementById('kbd-help');
+  if (kh) kh.classList.remove('visible');
+});
+
+// ══════════════════════════════════════════════
+// Hover loupe (hidden by default — toggle with H)
+// ══════════════════════════════════════════════
+let loupeEnabled = false;   // hidden by default per user request
+const LOUPE_SIZE = 180;
+const LOUPE_ZOOM = 3;
+let lastLoupeCursor = null;
+
+function updateLoupe(clientX, clientY, sx, sy) {
+  lastLoupeCursor = {clientX, clientY, sx, sy};
+  const loupe = document.getElementById('loupe');
+  if (!loupeEnabled || !img) { if (loupe) loupe.classList.remove('visible'); return; }
+
+  const {x: imgX, y: imgY} = screenToImage(sx, sy);
+  if (imgX < 0 || imgY < 0 || imgX >= img.naturalWidth || imgY >= img.naturalHeight) {
+    loupe.classList.remove('visible');
+    return;
+  }
+
+  loupe.classList.add('visible');
+  const off = 20;
+  loupe.style.left = (clientX + off) + 'px';
+  loupe.style.top = (clientY + off) + 'px';
+
+  const lc = document.getElementById('loupe-canvas');
+  const lctx = lc.getContext('2d');
+  lctx.imageSmoothingEnabled = false;
+
+  const cropPx = LOUPE_SIZE / (LOUPE_ZOOM * scale);
+  const srcX = Math.max(0, imgX - cropPx / 2);
+  const srcY = Math.max(0, imgY - cropPx / 2);
+  const srcW = Math.min(cropPx, img.naturalWidth - srcX);
+  const srcH = Math.min(cropPx, img.naturalHeight - srcY);
+
+  lctx.fillStyle = '#000';
+  lctx.fillRect(0, 0, LOUPE_SIZE, LOUPE_SIZE);
+  lctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, LOUPE_SIZE, LOUPE_SIZE);
+
+  // Yellow crosshair
+  lctx.strokeStyle = 'rgba(255, 220, 50, 0.8)';
+  lctx.lineWidth = 1;
+  lctx.beginPath();
+  lctx.moveTo(LOUPE_SIZE/2 - 10, LOUPE_SIZE/2); lctx.lineTo(LOUPE_SIZE/2 + 10, LOUPE_SIZE/2);
+  lctx.moveTo(LOUPE_SIZE/2, LOUPE_SIZE/2 - 10); lctx.lineTo(LOUPE_SIZE/2, LOUPE_SIZE/2 + 10);
+  lctx.stroke();
+
+  // When a target-label number is held, overlay the label code big + pink.
+  if (numKeyDown !== null && TARGET_LABELS[numKeyDown]) {
+    const code = TARGET_LABELS[numKeyDown].code;
+    lctx.font = 'bold 36px Segoe UI, sans-serif';
+    lctx.textAlign = 'center';
+    lctx.textBaseline = 'middle';
+    lctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+    lctx.fillText(code, LOUPE_SIZE / 2 + 2, LOUPE_SIZE - 26 + 2);
+    lctx.fillStyle = '#FFB3D9';
+    lctx.fillText(code, LOUPE_SIZE / 2, LOUPE_SIZE - 26);
+  }
+}
+
+canvas.addEventListener('mouseleave', () => {
+  const loupe = document.getElementById('loupe');
+  if (loupe) loupe.classList.remove('visible');
+});
+
+// ══════════════════════════════════════════════
+// Persisted prefs (localStorage) — carries loupe on/off, autocenter,
+// mask opacity across frames, relaunches, and exports.
+// ══════════════════════════════════════════════
+const PREFS_KEY = 'tcrmp_segment_prefs_v1';
+
+function loadPrefs() {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return;
+    const p = JSON.parse(raw);
+    if (typeof p.loupeEnabled === 'boolean') loupeEnabled = p.loupeEnabled;
+    if (typeof p.autoCenter === 'boolean') autoCenter = p.autoCenter;
+    if (typeof p.showReference === 'boolean') {
+      showReference = p.showReference;
+      const chk = document.getElementById('chk-show-reference');
+      if (chk) chk.checked = showReference;
+    }
+    if (typeof p.maskOpacity === 'number') {
+      maskOpacity = p.maskOpacity;
+      const slider = document.getElementById('opacity-slider');
+      if (slider) slider.value = Math.round(maskOpacity * 100);
+      const val = document.getElementById('opacity-val');
+      if (val) val.textContent = Math.round(maskOpacity * 100) + '%';
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function savePrefs() {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({
+      loupeEnabled, autoCenter, maskOpacity, showReference,
+    }));
+  } catch (e) { /* ignore */ }
+}
+
+loadPrefs();
+
+// ══════════════════════════════════════════════
+// Scrap Frame — same API shape as step 4.
+// ══════════════════════════════════════════════
+async function submitDrawEdit(path) {
+  if (selectedMask < 0 || !currentData || currentIdx < 0) return;
+  const mask = currentData.masks[selectedMask];
+  if (isExpertLocked(mask)) {
+    setStatus('This mask is in expert review, read-only here.');
+    return;
+  }
+  const filename = images[currentIdx].filename;
+
+  setStatus(`Applying draw edit (${path.length} pts)...`);
+  try {
+    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/draw_edit`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        mask_id: mask.id,
+        path: path.map(p => [p.x, p.y]),
+        rejected_ids: rejectedMaskIds(),
+      }),
+    });
+    const data = await res.json();
+    if (data.ok && data.mask) {
+      Object.assign(mask, data.mask);
+      applyAffected(data.affected);
+      renderMaskList(); render();
+      const verb = data.op === 'subtract' ? 'Carved' : 'Added';
+      setStatus(`${verb} via draw edit — ${mask.area} px`);
+    } else {
+      setStatus('Draw edit failed: ' + (data.error || 'unknown'));
+    }
+  } catch (e) {
+    setStatus('Draw edit error: ' + e.message);
+  }
+  render();
+}
+
+async function scrapFrame() {
+  if (currentIdx < 0 || !images[currentIdx]) return;
+  const filename = images[currentIdx].filename;
+  if (!confirm(`Scrap this frame?\n\n${filename}\n\nExcluded from review and export. Reversible via /unscrap.`)) return;
+
+  const res = await fetch(`/api/image/${encodeURIComponent(filename)}/scrap`, {method: 'POST'});
+  const data = await res.json();
+  if (!res.ok) { alert('Scrap failed: ' + (data.error || res.status)); return; }
+
+  setStatus(`Scrapped ${filename} — ${data.remaining} frames remaining`);
+  images.splice(currentIdx, 1);
+  if (!images.length) {
+    setStatus('No more frames to review.');
+    return;
+  }
+  const nextIdx = Math.min(currentIdx, images.length - 1);
+  selectImage(nextIdx);
+}
+
+window.addEventListener('resize', () => { if (img) { fitImage(); render(); } });
+
+// ══════════════════════════════════════════════
+// Two cycle entry points:
+//   selectNextMask       — cycles ALL masks. Bound to Space. Never advances
+//                          frames on its own (the user is reviewing manually).
+//   advanceToNextOrFrame — cycles PENDING masks. Bound to Enter/X progression.
+//                          When no pending masks are left the frame is done
+//                          and we auto-advance + fit the next frame.
+// ══════════════════════════════════════════════
+function selectNextMask() {
+  if (!currentData) return;
+  const masks = currentData.masks;
+  if (!masks.length) { setStatus('No masks in this frame'); return; }
+  const start = selectedMask >= 0 ? (selectedMask + 1) % masks.length : 0;
+  selectedMask = start;
+  centerOnMask(selectedMask);
+  if (interactionMode !== 'refine') setInteractionMode('refine');
+  renderMaskList();
+  render();
+}
+
+function advanceToNextOrFrame() {
+  if (!currentData) return;
+  const masks = currentData.masks;
+  if (masks.length) {
+    // Prefer the next pending mask.
+    const start = selectedMask >= 0 ? (selectedMask + 1) % masks.length : 0;
+    for (let k = 0; k < masks.length; k++) {
+      const i = (start + k) % masks.length;
+      if (masks[i].status === 'pending') {
+        selectedMask = i;
+        centerOnMask(selectedMask);
+        if (interactionMode !== 'refine') setInteractionMode('refine');
+        renderMaskList();
+        render();
+        return;
+      }
+    }
+  }
+  // No pending masks left (or no masks at all) — advance to next frame in full view.
+  advanceToNextFrame();
+}
+
+// ── Per-frame timer (mirrors step 4) ─────────────────────────────
+// Per-session rolling average of time-per-frame. `P` or the ⏸ button pauses.
+const FRAME_TIMER_TARGET_S = 15.0;
+let _frameStartMs = 0;
+let _framePausedAtMs = 0;
+let _framePausedTotalMs = 0;
+let _frameTickInt = null;
+let _frameTimesSec = [];
+
+function _timerFmt(sec) {
+  if (!isFinite(sec)) return '—';
+  if (sec < 60) return sec.toFixed(1) + 's';
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return `${m}m ${s}s`;
+}
+function _timerColor(sec) {
+  if (sec <= FRAME_TIMER_TARGET_S) return '#00FFB3';
+  if (sec <= FRAME_TIMER_TARGET_S * 2) return '#FFB800';
+  return '#FF4D6D';
+}
+function _timerElapsedSec() {
+  if (_frameStartMs <= 0) return 0;
+  const now = _framePausedAtMs > 0 ? _framePausedAtMs : Date.now();
+  return Math.max(0, (now - _frameStartMs - _framePausedTotalMs) / 1000);
+}
+function _timerRender() {
+  const el = document.getElementById('frame-timer');
+  if (!el) return;
+  const now = _timerElapsedSec();
+  const avg = _frameTimesSec.length
+    ? _frameTimesSec.reduce((a, b) => a + b, 0) / _frameTimesSec.length
+    : NaN;
+  const nowStr = _frameStartMs > 0 ? _timerFmt(now) : '—';
+  const avgStr = isFinite(avg) ? _timerFmt(avg) : '—';
+  const color = _timerColor(now);
+  const avgColor = isFinite(avg) ? _timerColor(avg) : '#b0a7ab';
+  const paused = _framePausedAtMs > 0;
+  el.innerHTML =
+    '<span style="color:var(--text-dim)">this </span>' +
+    `<span style="color:${paused ? 'var(--text-dim)' : color};font-weight:700">${nowStr}${paused ? ' (paused)' : ''}</span>` +
+    ' <span style="color:var(--text-dim)">· avg </span>' +
+    `<span style="color:${avgColor}">${avgStr}</span>` +
+    ` <span style="color:var(--text-dim)">(n=${_frameTimesSec.length}, target ${FRAME_TIMER_TARGET_S.toFixed(0)}s)</span>`;
+  const btn = document.getElementById('frame-timer-pause');
+  if (btn) btn.textContent = paused ? 'Resume' : 'Pause';
+}
+function _timerStart() {
+  _frameStartMs = Date.now();
+  _framePausedAtMs = 0;
+  _framePausedTotalMs = 0;
+  if (_frameTickInt) clearInterval(_frameTickInt);
+  _timerRender();
+  _frameTickInt = setInterval(_timerRender, 250);
+}
+function _timerTogglePause() {
+  if (_frameStartMs <= 0) return;
+  if (_framePausedAtMs > 0) {
+    _framePausedTotalMs += Date.now() - _framePausedAtMs;
+    _framePausedAtMs = 0;
+    if (!_frameTickInt) _frameTickInt = setInterval(_timerRender, 250);
+  } else {
+    _framePausedAtMs = Date.now();
+    if (_frameTickInt) { clearInterval(_frameTickInt); _frameTickInt = null; }
+  }
+  _timerRender();
+}
+function _timerRecordPrev() {
+  if (_frameStartMs <= 0) return;
+  if (_framePausedAtMs > 0) {
+    _framePausedTotalMs += Date.now() - _framePausedAtMs;
+    _framePausedAtMs = 0;
+  }
+  const elapsed = (Date.now() - _frameStartMs - _framePausedTotalMs) / 1000;
+  if (elapsed >= 0.5) _frameTimesSec.push(elapsed);
+  _frameStartMs = 0;
+  _framePausedTotalMs = 0;
+  if (_frameTickInt) { clearInterval(_frameTickInt); _frameTickInt = null; }
+  _timerRender();
+}
+
+function advanceToNextFrame() {
+  if (currentIdx < images.length - 1) {
+    saveCurrentMasks();
+    selectImage(currentIdx + 1);
+    setStatus('Next frame — full view. Enter to start reviewing.');
+  } else {
+    // End of batch — ask before exporting (no auto-export). Save first so the
+    // confirm acts on the persisted state.
+    saveCurrentMasks();
+    openExportConfirm();
+  }
+}
+
+// ══════════════════════════════════════════════
+// UI HELPERS
+// ══════════════════════════════════════════════
+function updateCounter() {
+  const el = document.getElementById('img-counter');
+  el.textContent = images.length > 0 ? `${currentIdx + 1} / ${images.length}` : '0 / 0';
+  if (unlabeledOnly) {
+    const remaining = images.filter(im => unlabeledSet.has(im.filename)).length;
+    el.title = `${remaining} unlabeled frame${remaining === 1 ? '' : 's'} left in this batch`;
+  } else {
+    el.title = '';
+  }
+}
+
+let statusTimer = null;
+function setStatus(msg) {
+  const el = document.getElementById('status-text');
+  el.textContent = msg;
+  el.classList.add('flash');
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(() => { el.textContent = ''; el.classList.remove('flash'); }, 3000);
+}
+
+// ══════════════════════════════════════════════
+// EXPORT
+// ══════════════════════════════════════════════
+// ── End-of-batch confirm ("Export now? y/n") ─────────────────────────────────
+function openExportConfirm() {
+  document.getElementById('export-confirm-overlay').classList.add('visible');
+}
+
+function confirmExportNo() {
+  document.getElementById('export-confirm-overlay').classList.remove('visible');
+  setStatus('Export cancelled — still on last frame.');
+}
+
+async function confirmExportYes() {
+  document.getElementById('export-confirm-overlay').classList.remove('visible');
+  await doExport();   // exports, then shows the post-export choice overlay
+}
+
+async function openExportFolder() {
+  try { const r = await (await fetch('/api/open_export_folder', {method:'POST'})).json();
+        if (r.error) setStatus('Open folder: ' + r.error); }
+  catch (e) { setStatus('Open folder failed'); }
+}
+async function openExportManifest() {
+  try { const r = await (await fetch('/api/open_export_manifest', {method:'POST'})).json();
+        if (r.error) setStatus('Open manifest: ' + r.error); }
+  catch (e) { setStatus('Open manifest failed'); }
+}
+
+async function doExport() {
+  if (currentData && currentIdx >= 0) await saveCurrentMasks();
+
+  setStatus('Exporting batch...');
+  const res = await fetch('/api/export_batch', { method: 'POST' });
+  const data = await res.json();
+
+  if (!data.ok) { setStatus('Export failed'); return; }
+
+  document.getElementById('export-summary').innerHTML = `
+    Images: ${data.exported_images}<br>
+    Masks: ${data.exported_masks}<br>
+    New classes: ${data.new_classes}<br>
+    Total classes: ${data.total_classes}
+    ${data.blocked_unlabeled ? `<br><span style="color:var(--error)">Blocked (no species): ${data.blocked_unlabeled}, nothing was dropped silently, label and re-export.</span>` : ''}
+  `;
+
+  // Last-batch detection: ask the backend whether any review batches remain
+  // (export_batch already rebuilt the review list). batches_remaining > 0 means
+  // "Open next batch" is meaningful; otherwise this was the last batch. This
+  // replaces the old images.length < 999 placeholder.
+  let moreBatches = false;
+  try {
+    const st = await (await fetch('/api/status')).json();
+    moreBatches = (st.batches_remaining || 0) > 0;
+  } catch (e) { moreBatches = false; }
+
+  const remEl = document.getElementById('export-remaining');
+  document.getElementById('btn-next-review').style.display = moreBatches ? 'inline-block' : 'none';
+  // "Save and close" (#btn-save-close) is always visible.
+  if (moreBatches) {
+    remEl.textContent = `Batch of ${data.exported_images} exported to YOLO format`;
+    document.getElementById('export-title').textContent = 'Batch Exported';
+  } else {
+    remEl.textContent = 'All images exported!';
+    document.getElementById('export-title').textContent = 'All Done!';
+  }
+
+  document.getElementById('export-overlay').classList.add('visible');
+}
+
+async function nextReviewBatch() {
+  document.getElementById('export-overlay').classList.remove('visible');
+  // Removed-frames model: do_export() already dropped the exported frames from
+  // review_files and reset review_offset to 0, so the rebuilt list IS the next
+  // batch. Just reload it; never POST /api/next_review_batch (the old advance
+  // skipped past the rebuilt short list and lost the final partial batch).
+  await loadReviewBatch();
+  if (images.length > 0) selectImage(0);
+  else setStatus('All images reviewed');
+}
+
+// ══════════════════════════════════════════════
+// Auto-skip startup when the orchestrator has already
+// configured + kicked off processing. The user should
+// land directly in the review view, not see the setup form.
+// ══════════════════════════════════════════════
+const ORCHESTRATED = {{ 'true' if orchestrated else 'false' }};
+// Base URL of the pipeline orchestrator (empty when launched standalone). The
+// "Done — return to main menu" button uses it to navigate back.
+const ORCHESTRATOR_URL = {{ orchestrator_url|tojson }};
+// Session boot mode: 'configure' (default, Step-4-routed boot) or 'resume'
+// (active-learning loop: boot straight into the review queue of seeded,
+// non-exported frames via POST /api/resume, skipping configure/routing).
+const SESSION_MODE = {{ session_mode|tojson }};
+// Export dir the resume boot POSTs (mirrors #inp-export's server-seeded
+// default; the orchestrator sets this via TCRMP_EXPORT_DIR).
+const RESUME_EXPORT_DIR = {{ default_export|tojson }};
+
+async function _bootStep(s) {
+  const processed = s.processing_done || 0;
+  const total = s.processing_total || 0;
+  const stillProcessing = total > 0 && processed < total;
+  if (stillProcessing) {
+    showScreen('processing');
+    await runProcessing(total);
+    return;
+  }
+  await loadReviewBatch();
+  showScreen('review');
+  if (images.length > 0) selectImage(0);
+}
+
+// ── orchestrated boot helpers ────────────────────────────────────────────────
+let _orchBooting = false;
+function _orchStep(name) {
+  // Mark the named step active; all prior steps done.
+  const steps = document.querySelectorAll('#orch-steps .orch-step');
+  let found = false;
+  steps.forEach(el => {
+    if (el.dataset.step === name) { found = true; el.className = 'orch-step active'; }
+    else if (!found) { el.className = 'orch-step done'; }
+    else { el.className = 'orch-step'; }
+  });
+}
+function _orchDone() {
+  document.querySelectorAll('#orch-steps .orch-step').forEach(el => {
+    el.className = 'orch-step done';
+  });
+}
+function _orchError(msg) {
+  document.querySelectorAll('#orch-steps .orch-step.active').forEach(el => {
+    el.className = 'orch-step error';
+  });
+  const errEl = document.getElementById('orch-error-msg');
+  if (errEl) { errEl.textContent = msg; errEl.style.display = ''; }
+  const btn = document.getElementById('orch-retry-btn');
+  if (btn) btn.style.display = '';
+}
+
+async function _runOrchestratedBoot() {
+  // In-flight guard: a second Retry click must not spawn a concurrent boot
+  // chain (two would both reach _bootStep + showScreen, double-initializing).
+  if (_orchBooting) return;
+  _orchBooting = true;
+  try {
+    // Always keep #orch-loading visible — never fall back to #startup.
+    // On failure: show error + Retry; on success: advance to segmentation.
+    const errEl = document.getElementById('orch-error-msg');
+    const btn = document.getElementById('orch-retry-btn');
+    if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+    if (btn) btn.style.display = 'none';
+    // Reset step states
+    document.querySelectorAll('#orch-steps .orch-step').forEach((el, i) => {
+      el.className = i === 0 ? 'orch-step active' : 'orch-step';
+    });
+
+    // Step 1: configure (normal boot) or resume (active-learning loop boot:
+    // skips configure/routing entirely and loads straight from the seeded
+    // export_dir's segmentations.json; see POST /api/resume).
+    _orchStep('configure');
+    try {
+      const bootUrl = SESSION_MODE === 'resume' ? '/api/resume' : '/api/configure';
+      const bootBody = SESSION_MODE === 'resume'
+        ? JSON.stringify({ export_dir: RESUME_EXPORT_DIR })
+        : '{}';
+      const cr = await fetch(bootUrl, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: bootBody
+      });
+      const cj = await cr.json().catch(() => ({}));
+      if (!cr.ok) {
+        _orchError('Could not load project: ' + (cj.error || ('HTTP ' + cr.status)));
+        return;
+      }
+    } catch (e) {
+      _orchError('Could not load project: ' + ((e && e.message) || String(e)));
+      return;
+    }
+
+    // Step 2: fetch status and advance
+    _orchStep('queue');
+    let s2;
+    try {
+      const sr = await fetch('/api/status');
+      s2 = await sr.json();
+    } catch (e) {
+      _orchError('Could not fetch status: ' + ((e && e.message) || String(e)));
+      return;
+    }
+    if (!s2.configured) {
+      _orchError('Configuration did not persist; please retry.');
+      return;
+    }
+    _orchDone();
+    // Brief pause so the user can see all bars complete before the screen switches.
+    await new Promise(r => setTimeout(r, 350));
+    const veil = document.getElementById('orch-loading');
+    if (veil) veil.classList.remove('active');
+    await _bootStep(s2);
+  } finally {
+    _orchBooting = false;
+  }
+}
+
+window.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const res = await fetch('/api/status');
+    const s = await res.json();
+    if (s.configured) { await _bootStep(s); return; }
+
+    // Standalone (no env config): show the startup form.
+    if (!ORCHESTRATED) return;
+
+    // Orchestrated path: auto-configure from env-backed defaults.
+    // Wire up the Retry button before launching the first attempt.
+    const btn = document.getElementById('orch-retry-btn');
+    if (btn) btn.addEventListener('click', _runOrchestratedBoot);
+    await _runOrchestratedBoot();
+  } catch (e) {
+    console.warn('combined-annotator init failed:', e);
+    if (ORCHESTRATED) {
+      _orchError('Initialisation error: ' + ((e && e.message) || String(e)));
+    }
+  }
+});
+</script>
+</body>
+</html>

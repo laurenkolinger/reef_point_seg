@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Add Expert IDs — reef_point_seg</title>
+<link rel="stylesheet" href="{{ url_for('expertids.static', filename='expertids.css') }}?v=1">
+<style>
+  /* Standalone host theme — the .eid fragment maps onto these vars. */
+  :root { --surface:#161d22; --input-bg:#0f1417; --border:#2a363d; --text:#e7eef2;
+          --text-dim:#93a4ad; --pink:#00c8dc; --success:#36c275; --warning:#e8a33d; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#0f1417; color:var(--text);
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; }
+  header { padding:18px 24px; background:var(--surface); border-bottom:1px solid var(--border); }
+  header h1 { margin:0; font-size:20px; }
+  header p { margin:6px 0 0; color:var(--text-dim); font-size:13px; max-width:80ch; }
+  main { padding:22px 24px; max-width:960px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Add Expert IDs</h1>
+  <p>Standalone view of the Add-Expert-IDs workflow (the same panel the reef_point_seg orchestrator shows inline).</p>
+</header>
+<main>
+  {% include 'expertids/panel.html' %}
+</main>
+<script>window.EXPERTIDS_BASE = '/expertids';</script>
+<script src="{{ url_for('expertids.static', filename='expertids.js') }}?v=1"></script>
+<script>window.addEventListener('load', function () { if (window.ExpertIDs) window.ExpertIDs.onShow(); });</script>
+</body>
+</html>

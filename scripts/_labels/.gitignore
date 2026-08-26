@@ -1,0 +1,5 @@
+# Timestamped canonical backups written by add_or_edit / run_recode.
+backups/
+**/backups/
+__pycache__/
+*.pyc
