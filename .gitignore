@@ -1,5 +1,9 @@
 # env/ and caches live inside github_repo/ and must not be committed.
 env/
+
+# Bulk reference data (68G+: cpc_all, TCRMP_clip/CVR, model_weights). Synced
+# from /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/.
+supporting_data/
 __pycache__/
 *.pyc
 *.pyo
@@ -8,6 +12,11 @@ __pycache__/
 # Vendored tree .git dirs (re-cloneable from upstream).
 scripts/TCRMPtrain_oceankindCV/oceankind_CV/.git/
 scripts/TCRMPtrain_oceankindCV/ultralytics_src/.git/
+
+# Model weights (Ultralytics pretrained auto-download; trained weights live in runs/).
+# Large binaries, not source. Covers yolo*.pt under TCRMPtrain_oceankindCV and elsewhere.
+*.pt
+*.pth
 
 # OS / editor cruft.
 .DS_Store
