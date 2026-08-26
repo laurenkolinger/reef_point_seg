@@ -11,10 +11,13 @@ TARGET_SPECIES = ["PA", "OFAV"]
 # TARGET_SPECIES = ["OFRA", "PA", "OA", "OFAV", "AL", "MC", "AA"]
 
 # ── Selection parameters ─────────────────────────────────────────────────────
-TARGET_INSTANCES_PER_SPECIES = 100    # frame-instances (1 frame = 1 instance) default 1000 
-MIN_YEAR = 2014                       # nothing before this year
-MAX_YEAR = 2025                       # cap (ignore partial years beyond)
-CATEGORY_FILTER = "Coral"             # only count this category
+TARGET_INSTANCES_PER_SPECIES = 100    # frame-instances (1 frame = 1 instance) default 1000
+# MIN_YEAR / MAX_YEAR are fallback defaults only; the orchestrator passes the
+# actual bounds via --min-year / --max-year.
+MIN_YEAR = 2014
+MAX_YEAR = 2025
+# No category filter. Callers pass a `target_labels` list (via --species) and
+# the script filters by label membership alone — any category is selectable.
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 # Resolved against the seg_AI_img_full_april2026 repo layout (scripts/, config/,
@@ -33,7 +36,7 @@ _RECODE_DIR = os.path.join(_SCRIPTS_DIR, "TCRMPcvr_recodeSpecies", "output")
 DEFAULT_ALL_POINTS = os.path.join(_SUPPORTING, "all_points.csv")
 DEFAULT_MASTER_CODES = os.path.join(_SUPPORTING, "master_codes.csv")
 
-# Source images — offline test subset; Dropbox is the production source.
+# Source images — the local full year/period clip set under supporting_data.
 CLIP_DIR = os.path.join(_SUPPORTING, "TCRMP_clip")
 
 # Pre-existing processed outputs from the legacy CPC/OCR routers.

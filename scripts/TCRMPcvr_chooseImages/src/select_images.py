@@ -22,6 +22,8 @@ Usage:
 import os
 import sys
 import glob
+import math
+import random
 import argparse
 from datetime import datetime
 
@@ -53,28 +55,70 @@ def build_image_filename(date_str, site, transect, frame):
     return f"TCRMP{ymd}_clip_{site}_T{int(transect)}{int(frame):02d}"
 
 
-def find_source_image(basename, year_int, clip_dir):
-    """Find the actual image file on disk. Returns (path, ext) or (None, None)."""
-    year_dir_pattern = os.path.join(clip_dir, f"TCRMP{year_int}_clip")
-    # Images can be in subdirectories (Annual/, PBL/, SCTLD/, or flat)
-    for ext in ["jpg", "jpeg", "JPG", "JPEG"]:
-        # Search recursively under the year directory
-        pattern = os.path.join(year_dir_pattern, "**", f"{basename}.{ext}")
-        matches = glob.glob(pattern, recursive=True)
-        if matches:
-            return matches[0], ext
+def ast_timestamp():
+    """Local box time is AST; format 24h with an explicit AST suffix."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S AST")
+
+
+def missing_reason(found, basename, clip_dir):
+    """Human-readable reason a frame's image was not resolved on disk."""
+    if found:
+        return ""
+    return (f"no image '{basename}.(jpg|jpeg)' found anywhere under "
+            f"{clip_dir} (whole-tree recursive scan)")
+
+
+def _clip_path_rank(path):
+    """Lower rank = more canonical. When the same frame stem exists in more than
+    one place (e.g. a high-res JPEG/ re-export or an _edit variant alongside the
+    original), prefer the flat original: re-export/edit copies can be cropped or
+    re-encoded and would misalign the CPC/OCR points computed for the original.
+    Deterministic so Step 3 and Step 4 always resolve to the same file."""
+    parts = path.split(os.sep)
+    noncanonical = any(p == "JPEG" or p.endswith("_edit") for p in parts[:-1])
+    return (1 if noncanonical else 0, len(parts))
+
+
+def build_clip_index(clip_dir):
+    """One-pass recursive scan of the whole clip tree.
+
+    Maps each image stem (filename without extension) -> absolute path.
+    TCRMP basenames are globally unique per logical frame, so a flat index lets
+    us resolve a frame regardless of which TCRMP{season}_clip or period subfolder
+    (Annual/, PostBL/, ...) it is filed under. This fixes frames whose survey
+    date year differs from their season-folder year (e.g. a 2018-01 frame filed
+    under TCRMP2017_clip). Hidden dirs (.AppleDouble, .git) and dot-files are
+    skipped; stem collisions resolve to the most canonical copy. jpg/jpeg only.
+    """
+    index = {}
+    if not clip_dir or not os.path.isdir(clip_dir):
+        return index
+    for root, dirs, files in os.walk(clip_dir):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for fn in files:
+            if fn.startswith("."):
+                continue
+            stem, ext = os.path.splitext(fn)
+            if ext.lower() in (".jpg", ".jpeg"):
+                path = os.path.join(root, fn)
+                prev = index.get(stem)
+                if prev is None or _clip_path_rank(path) < _clip_path_rank(prev):
+                    index[stem] = path
+    return index
+
+
+def find_source_image(basename, clip_index):
+    """Resolve the raw image via the prebuilt clip index.
+    Returns (path, ext) or (None, None)."""
+    path = clip_index.get(basename)
+    if path:
+        return path, os.path.splitext(path)[1].lstrip(".")
     return None, None
 
 
-def find_pts_image(basename, year_int, clip_dir):
-    """Find the _pts annotated variant."""
-    year_dir_pattern = os.path.join(clip_dir, f"TCRMP{year_int}_clip")
-    for ext in ["jpg", "jpeg", "JPG", "JPEG"]:
-        pattern = os.path.join(year_dir_pattern, "**", f"{basename}_pts.{ext}")
-        matches = glob.glob(pattern, recursive=True)
-        if matches:
-            return matches[0]
-    return None
+def find_pts_image(basename, clip_index):
+    """Resolve the _pts annotated variant via the prebuilt clip index."""
+    return clip_index.get(f"{basename}_pts")
 
 
 def load_cpc_basenames(cpc_dir, years):
@@ -92,6 +136,36 @@ def load_cpc_basenames(cpc_dir, years):
         except Exception:
             pass
     return basenames
+
+
+def frame_eligibility(binary, clip_index, cpc_basenames, name_fn):
+    """Return (eligible_index, exclusions) for the candidate pool.
+
+    A frame is eligible iff its source image resolves on disk AND its point
+    source resolves: pre-2020 -> basename in cpc_basenames (real CPC coords);
+    2020+ -> a `_pts` annotated image resolves (OCR reads it in Step 4).
+    Image existence and 2020+ _pts existence are HARD gates here, so a selected
+    frame can never be dropped downstream as image_missing / cpc_missing.
+    """
+    keep = []
+    excl = {"image_missing": 0, "cpc_missing": 0, "pts_missing": 0}
+    for fid in binary.index:
+        r = binary.loc[fid]
+        base = name_fn(str(r["date"]), r["site"], int(r["transect"]), int(r["frame"]))
+        if base not in clip_index:
+            excl["image_missing"] += 1
+            continue
+        if int(r["year_int"]) < 2020:
+            if base in cpc_basenames:
+                keep.append(fid)
+            else:
+                excl["cpc_missing"] += 1
+        else:
+            if (base + "_pts") in clip_index:
+                keep.append(fid)
+            else:
+                excl["pts_missing"] += 1
+    return keep, excl
 
 
 def _load_species_remap():
@@ -155,6 +229,16 @@ def load_cpc_species(cpc_dir, years, remap):
 # Selection algorithm
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _pick_best(scores):
+    """Fresh-random pick among the frames tied at the max score (no fixed seed).
+    Preserves the score tiers (central / single-species) — randomness only
+    breaks ties, which the binary presence scores produce in bulk."""
+    if scores.empty or scores.max() <= 0:
+        return None
+    top = scores[scores == scores.max()].index.tolist()
+    return random.choice(top)
+
+
 def even_allocate(binary, species_list, years, target):
     """Allocate target instances evenly across years, capped by availability."""
     alloc = {}
@@ -181,16 +265,269 @@ def even_allocate(binary, species_list, years, target):
     return alloc
 
 
+def allocate_by_site(avail_by_site, target, cap_frac=0.25):
+    """Distribute `target` frame-instances across sites (water-filling).
+
+    Pure, deterministic, no RNG. Guarantees:
+      - every site with avail >= 1 gets >= 1 (inclusion is a HARD rule);
+      - no site exceeds floor(cap_frac * total_allocated), UNLESS that cap is
+        mathematically below 1 (too few sites for the cap to be satisfiable at
+        all) - in that case every site is pinned at its floor of 1 and the cap
+        is documented as unsatisfiable rather than violated (see main()'s
+        WARN print for the runtime version of this check);
+      - no site exceeds its own avail;
+      - allocation is monotonic in avail (higher-abundance sites get >= lower
+        ones), modulo the cap and integer rounding;
+      - same input -> same output.
+
+    Args:
+      avail_by_site: {site: available_frame_count} - sites with avail <= 0
+        are dropped, not floored.
+      target: requested total frame-instances for this species.
+      cap_frac: max share of the FINAL allocated total any one site may hold.
+
+    Returns: {site: allocated_count}.
+    """
+    sites = [s for s, a in avail_by_site.items() if a and a >= 1]
+    if not sites:
+        return {}
+
+    avail = {s: int(avail_by_site[s]) for s in sites}
+    n_sites = len(sites)
+
+    # Step 1: inclusion floor - every site starts at 1 (never exceeds avail,
+    # and avail >= 1 for every site here so min(1, avail) == 1).
+    result = {s: 1 for s in sites}
+
+    # Step 2: if target <= n_sites, the floor already satisfies (and exceeds,
+    # if target < n_sites) the request. Inclusion beats the numeric target.
+    if target <= n_sites:
+        return result
+
+    remaining = target - n_sites
+    if remaining <= 0:
+        return result
+
+    # Step 3: water-fill the remainder proportional to avail, subject to a
+    # per-site cap that is recomputed each round from the RUNNING total (the
+    # cap is a share of what has actually been allocated so far, not of the
+    # raw target, so it stays meaningful as the total grows during filling).
+    for _ in range(50):
+        if remaining <= 0:
+            break
+        current_total = sum(result.values())
+        cap = max(1, math.floor(cap_frac * current_total))
+        headroom = {s: max(0, min(avail[s], cap) - result[s]) for s in sites}
+        total_headroom = sum(headroom.values())
+        if total_headroom <= 0:
+            break  # availability/cap-limited: no site can take more
+
+        total_avail_weight = sum(avail[s] for s in sites if headroom[s] > 0)
+        to_place = min(remaining, total_headroom)
+
+        # Largest-remainder proportional split across sites with headroom.
+        raw = {}
+        for s in sites:
+            if headroom[s] <= 0:
+                continue
+            weight = avail[s] / total_avail_weight if total_avail_weight else 0
+            raw[s] = min(headroom[s], to_place * weight)
+
+        floors = {s: int(math.floor(v)) for s, v in raw.items()}
+        placed = sum(floors.values())
+        leftover = to_place - placed
+
+        # Distribute the leftover (largest-remainder method), deterministic
+        # tie-break by (remainder desc, avail desc, site name asc).
+        remainders = sorted(
+            raw.keys(),
+            key=lambda s: (-(raw[s] - floors[s]), -avail[s], s),
+        )
+        i = 0
+        leftover_units = int(round(leftover))
+        while leftover_units > 0 and i < len(remainders):
+            s = remainders[i]
+            if floors[s] < headroom[s]:
+                floors[s] += 1
+                leftover_units -= 1
+            i += 1
+            if i >= len(remainders) and leftover_units > 0:
+                # second sweep in case earlier sites still have headroom
+                remainders = [s for s in remainders if floors[s] < headroom[s]]
+                i = 0
+                if not remainders:
+                    break
+
+        made_progress = False
+        for s, add in floors.items():
+            if add > 0:
+                result[s] += add
+                made_progress = True
+        remaining = target - sum(result.values())
+
+        if not made_progress:
+            break  # nothing placeable this round, stop (converged)
+
+    return result
+
+
+def _spread_alloc_across_years(binary_sub, species_list, site_target_by_sp, sub_years):
+    """Spread each species' site-level target across that site's years.
+
+    even_allocate() divides a scalar target by len(active_years) every round
+    and int-rounds the quotient; when target is small relative to the number
+    of years (the common case here - allocate_by_site's inclusion floor is
+    often exactly 1, spread across many years of a long-running site) that
+    quotient rounds to 0 in EVERY year and even_allocate returns an all-zero
+    alloc, which in turn makes greedy_select recover target=0 (it infers the
+    scalar target as max(sum(alloc[sp].values()))) and silently skip the
+    site. even_allocate is intentionally left untouched (its own unit tests
+    pin its rounding behavior), so this helper uses a largest-remainder
+    split instead - capped by each year's true availability, so the full
+    site_target is always placed across the years whenever avail supports
+    it, and greedy_select still performs the actual frame selection (with
+    central-region and single-species preference) inside each year's slice.
+    """
+    alloc = {sp: {yr: 0 for yr in sub_years} for sp in species_list}
+    if not sub_years:
+        return alloc
+    for sp in species_list:
+        target = site_target_by_sp.get(sp, 0)
+        if target <= 0:
+            continue
+        avail = {yr: int(binary_sub[binary_sub["year_int"] == yr][sp].sum()) for yr in sub_years}
+        total_avail = sum(avail.values())
+        target = min(target, total_avail)
+        sp_alloc = {yr: 0 for yr in sub_years}
+        remaining = target
+        active = [yr for yr in sub_years if avail[yr] > 0]
+        # Iteratively water-fill: proportional split by avail, largest-
+        # remainder rounding, capped per-year by avail, loop until placed or
+        # no year has headroom left (mirrors allocate_by_site's approach).
+        for _ in range(50):
+            if remaining <= 0 or not active:
+                break
+            total_active_avail = sum(avail[yr] for yr in active)
+            raw = {yr: remaining * (avail[yr] / total_active_avail) for yr in active}
+            floors = {yr: min(int(raw[yr]), avail[yr] - sp_alloc[yr]) for yr in active}
+            placed_now = sum(floors.values())
+            leftover = remaining - placed_now
+            order = sorted(active, key=lambda yr: (-(raw[yr] - int(raw[yr])), -avail[yr], yr))
+            i = 0
+            leftover_units = int(round(leftover))
+            while leftover_units > 0 and order:
+                yr = order[i % len(order)]
+                headroom = avail[yr] - sp_alloc[yr] - floors[yr]
+                if headroom > 0:
+                    floors[yr] += 1
+                    leftover_units -= 1
+                i += 1
+                if i >= len(order) * 2:
+                    break  # no headroom anywhere left, stop
+            made_progress = False
+            for yr, add in floors.items():
+                if add > 0:
+                    sp_alloc[yr] += add
+                    made_progress = True
+            remaining = target - sum(sp_alloc.values())
+            active = [yr for yr in active if sp_alloc[yr] < avail[yr]]
+            if not made_progress:
+                break
+        alloc[sp] = sp_alloc
+    return alloc
+
+
+def site_balanced_select(binary, species_list, years, target, cap_frac=0.25):
+    """Site-balanced frame selection: no site may exceed cap_frac of the
+    selected total, every site carrying a target label is included, and
+    frames per site are proportional to that site's label abundance.
+
+    Reuses greedy_select PER SITE so central-region preference, single-
+    species preference, and year/transect spread are preserved WITHIN each
+    site (they come for free from greedy_select's existing scoring). The
+    OUTER site loop enforces the 25% cap and the inclusion floor.
+
+    Returns (selected, achieved) - same shape as greedy_select.
+    """
+    if "site" not in binary.columns:
+        # No site column available - fall back to the original algorithm.
+        alloc = even_allocate(binary, species_list, years, target)
+        return greedy_select(binary, species_list, alloc, years)
+
+    # Step 1: per-species site allocation from abundance (eligible frames at
+    # that site carrying the label - selection-consistent, can't exceed avail).
+    site_target = {}  # site_target[sp][site] = count
+    all_sites = set()
+    for sp in species_list:
+        avail_by_site = {
+            s: int(cnt) for s, cnt in binary.groupby("site")[sp].sum().items()
+            if cnt > 0
+        }
+        site_target[sp] = allocate_by_site(avail_by_site, target, cap_frac=cap_frac)
+        all_sites.update(site_target[sp].keys())
+
+    selected = []
+    achieved = {sp: 0 for sp in species_list}
+    used = set()
+
+    # Step 2: iterate sites deterministically (sorted) and select within each
+    # site's sub-frame via the existing greedy_select machinery.
+    for site in sorted(all_sites):
+        sub = binary[(binary["site"] == site) & (~binary.index.isin(used))]
+        if sub.empty:
+            continue
+        sub_years = [y for y in years if y in set(sub["year_int"].unique())]
+        if not sub_years:
+            continue
+
+        site_sp_target = {sp: site_target[sp].get(site, 0) for sp in species_list}
+        if not any(v > 0 for v in site_sp_target.values()):
+            continue
+
+        site_alloc = _spread_alloc_across_years(sub, species_list, site_sp_target, sub_years)
+
+        site_selected, site_achieved = greedy_select(sub, species_list, site_alloc, sub_years)
+
+        for fid in site_selected:
+            if fid in used:
+                continue  # defensive: never double-count a frame
+            used.add(fid)
+            selected.append(fid)
+            for sp in species_list:
+                achieved[sp] += int(binary.loc[fid, sp])
+
+    return selected, achieved
+
+
 def greedy_select(binary, species_list, alloc, years):
-    """Year-stratified greedy frame selection.
+    """Year-stratified greedy frame selection with a forgiving top-up.
 
-    Two-pass: first selects frames with central target-species points
-    (25-75% of image w/h) to fill 1/3 of each species allocation,
-    then fills remaining slots with any eligible frame.
+    Pass 0 (year-stratified, unchanged): two sub-passes — first selects
+    frames with central target-species points (25-75% of image w/h) to fill
+    the central slice of each species' per-year allocation, then fills the
+    remaining per-year slots with any eligible frame. Prefers single-species
+    frames for diversity — frames with only one needed species score higher
+    than frames with multiple, unless the extra species is also still needed.
 
-    Prefers single-species frames for diversity — frames with only one
-    needed species score higher than frames with multiple, unless the
-    extra species is also still needed and under-represented.
+    Top-up passes (new): the stratified passes fill each year's quota
+    independently and stop when a year holds no more frames with a needed
+    species, so a label can finish SHORT even though enough instances exist in
+    OTHER years. After pass 0, any label still below target is topped up with
+    additional passes that progressively RELAX constraints:
+        pass 1 — drop year-stratification (pull ANY unused frame with the
+                 species, best-first, still preferring single-needed-species
+                 frames);
+        pass 2 — additionally drop the central-region constraint (a no-op
+                 unless an earlier relaxed pass had been central-gated; kept
+                 explicit so the relaxation ladder is auditable).
+    The loop repeats until every label reaches target OR no eligible unused
+    frame remains for any short label (genuinely exhausted). A label only stays
+    SHORT when binary[sp].sum() is truly < target.
+
+    Preserves the original signature and the (selected, achieved) return; the
+    per-species `target` is recovered from the allocation (the even_allocate
+    pass distributes the full scalar target across years for any label whose
+    total availability >= target, so the max allocation-sum is that target).
     """
     has_central = all(f"{sp}_central" in binary.columns for sp in species_list)
 
@@ -199,6 +536,7 @@ def greedy_select(binary, species_list, alloc, years):
     achieved_central = {sp: 0 for sp in species_list}
     used = set()
 
+    # ── Pass 0: the original year-stratified two-pass selection ─────────────
     for pass_name in (["central", "any"] if has_central else ["any"]):
         for yr in years:
             yr_data = binary[(binary["year_int"] == yr) & (~binary.index.isin(used))]
@@ -231,9 +569,9 @@ def greedy_select(binary, species_list, alloc, years):
                         if yr_rem[sp] > 0:
                             central_mask |= avail[f"{sp}_central"] > 0
                     scores = scores.where(central_mask, 0)
-                if scores.max() == 0:
+                best = _pick_best(scores)
+                if best is None:
                     break
-                best = scores.idxmax()
                 selected.append(best)
                 used.add(best)
                 for sp in species_list:
@@ -252,7 +590,153 @@ def greedy_select(binary, species_list, alloc, years):
             pct = central / total * 100 if total > 0 else 0
             print(f"  {sp}: {central}/{total} central ({pct:.0f}%)")
 
+    # ── Top-up: redistribute deficits across years (relax progressively) ────
+    # Recover the scalar per-label target from the allocation. even_allocate
+    # spreads the full target across years for any label whose total
+    # availability >= target, so the largest allocation-sum is the true target.
+    target = max((sum(alloc[sp].values()) for sp in species_list), default=0)
+    # True availability per label — used to decide genuine exhaustion (SHORT).
+    sp_total = {sp: int(binary[sp].sum()) for sp in species_list}
+
+    # Relaxation ladder. central=True keeps the central-region gate; the final
+    # rung drops it. When the matrix has no central columns we only ever run
+    # the year-relaxed rung (central gating is meaningless).
+    if has_central:
+        relax_rungs = [
+            (1, "year", True),
+            (2, "year + central", False),
+        ]
+    else:
+        relax_rungs = [(1, "year", False)]
+
+    def _short_species():
+        return [sp for sp in species_list
+                if achieved[sp] < target and achieved[sp] < sp_total[sp]]
+
+    for rung, label, keep_central in relax_rungs:
+        # Repeat this rung until it can no longer make progress (each iteration
+        # pulls at most one frame, so a label needing N more frames loops N
+        # times here before either reaching target or exhausting frames).
+        while True:
+            short = _short_species()
+            if not short:
+                break
+
+            # Candidate pool: every unused frame that carries a still-short
+            # label (no year filter — that is the whole point of the relaxation).
+            cand = binary[~binary.index.isin(used)]
+            cand_mask = pd.Series(False, index=cand.index)
+            for sp in short:
+                cand_mask |= cand[sp] > 0
+            cand = cand[cand_mask]
+            if len(cand) == 0:
+                break
+
+            scores = pd.Series(0.0, index=cand.index)
+            n_needed = len(short)
+            for sp in short:
+                scores += cand[sp]
+            if n_needed > 1:
+                n_sp_in_frame = pd.Series(0, index=cand.index)
+                for sp in short:
+                    n_sp_in_frame += cand[sp]
+                scores += (n_sp_in_frame == 1).astype(float) * 0.5
+
+            if keep_central and has_central:
+                central_mask = pd.Series(False, index=cand.index)
+                for sp in short:
+                    central_mask |= cand[f"{sp}_central"] > 0
+                # Prefer central frames but do not hard-zero non-central ones:
+                # this rung still allows any frame, central just scores higher.
+                scores += central_mask.astype(float) * 0.25
+                # If ANY short label has a central candidate, gate to it so the
+                # central rung actually pulls central frames first.
+                if central_mask.any():
+                    scores = scores.where(central_mask, 0)
+
+            best = _pick_best(scores)
+            if best is None:
+                break
+
+            # Status line: which short labels does this frame help, and by how
+            # much are they still short.
+            helps = [sp for sp in short if int(binary.loc[best, sp]) > 0]
+            deficit_str = ", ".join(
+                f"{sp} short by {target - achieved[sp]}" for sp in helps
+            )
+            print(f"Top-up pass {rung} (relaxed: {label}): "
+                  f"{deficit_str} -> pulling {best}")
+
+            selected.append(best)
+            used.add(best)
+            for sp in species_list:
+                added = int(binary.loc[best, sp])
+                achieved[sp] += added
+                if has_central and added:
+                    achieved_central[sp] += int(binary.loc[best, f"{sp}_central"])
+
+        # If nothing is short after this rung, no need to relax further.
+        if not _short_species():
+            break
+
+    # ── Final per-label top-up summary ──────────────────────────────────────
+    print("Top-up summary:")
+    for sp in species_list:
+        if achieved[sp] >= target:
+            print(f"  {sp:6s}: OK ({achieved[sp]}/{target})")
+        else:
+            # SHORT must only remain when the data is genuinely exhausted.
+            print(f"  {sp:6s}: SHORT(exhausted) "
+                  f"({achieved[sp]}/{target}; only {sp_total[sp]} frames exist)")
+
     return selected, achieved
+
+
+def build_summary_lines(candidates, eligible, selected, reserve,
+                        species_list, achieved, target, exclusions):
+    """Return lines for the eligibility-funnel block of selection_summary.txt.
+
+    Pure helper — no I/O, testable in isolation.
+    """
+    L = ["=== Eligibility funnel ===",
+         f"  candidates : {candidates:,}",
+         f"  eligible   : {eligible:,}",
+         f"  selected   : {selected:,}",
+         f"  reserve    : {reserve:,}",
+         "  excluded   : "
+         f"image_missing={exclusions.get('image_missing', 0)}, "
+         f"cpc_missing={exclusions.get('cpc_missing', 0)}, "
+         f"pts_missing={exclusions.get('pts_missing', 0)}",
+         "",
+         "=== Per-species (achieved / target) ==="]
+    for sp in species_list:
+        a = achieved.get(sp, 0)
+        flag = "[OK]" if a >= target else f"[SHORT by {target - a}; pool exhausted]"
+        L.append(f"  {sp:6s}: {a}/{target}  {flag}")
+    L.append("")
+    return L
+
+
+def build_reserve_rows(binary, selected, species_list, name_fn, clip_index):
+    """Eligible-but-unselected frames, randomly ranked, tagged by which target
+    species they carry. The Step 4 OCR-failure refill draws from this pool."""
+    reserve_ids = [fid for fid in binary.index if fid not in set(selected)]
+    random.shuffle(reserve_ids)  # fresh-random order, no seed
+    rows = []
+    for rank, fid in enumerate(reserve_ids):
+        r = binary.loc[fid]
+        base = name_fn(str(r["date"]), r["site"], int(r["transect"]), int(r["frame"]))
+        carries = [sp for sp in species_list if sp in binary.columns and int(r.get(sp, 0)) == 1]
+        rows.append({
+            "frame_id": fid, "basename": base, "date": str(r["date"]),
+            "year": int(r["year_int"]), "site": r["site"],
+            "transect": int(r["transect"]), "frame": int(r["frame"]),
+            "species": ";".join(carries), "reserve_rank": rank,
+            "route": "cpc" if int(r["year_int"]) < 2020 else "ocr_needed",
+            "source_image": clip_index.get(base, ""),
+            "pts_image": clip_index.get(base + "_pts", ""),
+        })
+    return rows
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -265,15 +749,32 @@ def main():
                         help="Path to all_points CSV (default: auto-detect recoded or raw)")
     parser.add_argument("--master-codes", default=None)
     parser.add_argument("--species", nargs="+", default=None,
-                        help="Override target species (e.g., --species OFRA PA OA)")
+                        help="Target label codes (e.g., --species OFRA PA OA). "
+                             "Any label in master_codes; not limited to corals.")
     parser.add_argument("--target", type=int, default=None,
-                        help="Frame-instances per species (default: from config)")
+                        help="Frame-instances per label (default: from config)")
+    parser.add_argument("--min-year", type=int, default=None,
+                        help=f"Earliest year to consider (default: {config.MIN_YEAR})")
+    parser.add_argument("--max-year", type=int, default=None,
+                        help=f"Latest year to consider (default: {config.MAX_YEAR})")
     parser.add_argument("--skip-image-check", action="store_true",
-                        help="Skip verifying images on disk (faster, no routing)")
+                        help="Do not emit route_missing.csv. (Image paths are still "
+                             "resolved on disk and recorded in selected_frames.csv.)")
+    parser.add_argument("--no-site-balance", action="store_true",
+                        help="Disable site-balanced selection and fall back to the "
+                             "original year-only allocation (even_allocate + "
+                             "greedy_select). Site balance is ON by default.")
+    parser.add_argument("--max-site-frac", type=float, default=0.25,
+                        help="Max share of the selected frames any one site may "
+                             "hold when site-balance is on (default: 0.25).")
     args = parser.parse_args()
 
     species_list = args.species or config.TARGET_SPECIES
     target = args.target or config.TARGET_INSTANCES_PER_SPECIES
+    min_year = args.min_year if args.min_year is not None else config.MIN_YEAR
+    max_year = args.max_year if args.max_year is not None else config.MAX_YEAR
+    site_balance = not args.no_site_balance
+    max_site_frac = args.max_site_frac
 
     # Find input file
     if args.all_points:
@@ -299,7 +800,7 @@ def main():
     print(f"Loaded {len(ap):,} rows from all_points, {len(mc)} codes")
 
     # For pre-2020: replace species data with cpc_all (correct label mapping)
-    cpc_years = list(range(config.MIN_YEAR, 2020))
+    cpc_years = list(range(min_year, 2020))
     cpc_species = load_cpc_species(config.CPC_ALL_DIR, cpc_years, remap)
     if len(cpc_species) > 0:
         print(f"Loaded {len(cpc_species):,} CPC points from cpc_all (pre-2020, remapped)")
@@ -313,15 +814,18 @@ def main():
         # No cpc_all data, apply remap to all_points
         ap["species_code"] = ap["species_code"].replace(remap)
 
-    # Filter
-    ap = ap[(ap["year"] >= config.MIN_YEAR) & (ap["year"] <= config.MAX_YEAR)].copy()
+    # Year-bounds filter (bounds come from the UI; no category filter — any
+    # label in master_codes is selectable, including non-coral phyla).
+    ap = ap[(ap["year"] >= min_year) & (ap["year"] <= max_year)].copy()
     ap["frame_id"] = (
         ap["date"].astype(str) + "|" + ap["site"] + "|" +
         ap["transect"].astype(str) + "|" + ap["frame"].astype(str)
     )
-    print(f"Post-{config.MIN_YEAR} rows: {len(ap):,}")
+    print(f"Year-filtered rows ({min_year}-{max_year}): {len(ap):,}")
 
-    coral = ap[ap["category"] == config.CATEGORY_FILTER].copy()
+    # `coral` retained as the variable name to minimize downstream diff, but
+    # it now holds ALL categories, not just Coral.
+    coral = ap.copy()
 
     # Build binary frame × species presence matrix
     target_rows = coral[coral["species_code"].isin(species_list)]
@@ -371,35 +875,21 @@ def main():
 
     print(f"Frames with any target species (before filtering): {len(binary):,}")
 
-    # ── Pre-filter: exclude pre-2020 frames without CPC point coords ────────
-    # These frames have species labels but no (x,y) pixel coordinates,
-    # making them useless for downstream SAM3 segmentation.
-    pre2020 = binary[binary["year_int"] < 2020]
-    post2020 = binary[binary["year_int"] >= 2020]
-
-    if len(pre2020) > 0:
-        print("Loading CPC point_coords to filter pre-2020 frames...")
-        cpc_years = [y for y in years if y < 2020]
-        cpc_basenames = load_cpc_basenames(config.CPC_ALL_DIR, cpc_years)
-        print(f"  CPC has coords for {len(cpc_basenames):,} frames")
-
-        # Build basename for each pre-2020 frame to check against CPC
-        pre2020_keep = []
-        pre2020_drop = 0
-        for frame_id in pre2020.index:
-            r = pre2020.loc[frame_id]
-            basename = build_image_filename(
-                str(r["date"]), r["site"], int(r["transect"]), int(r["frame"])
-            )
-            if basename in cpc_basenames:
-                pre2020_keep.append(frame_id)
-            else:
-                pre2020_drop += 1
-
-        pre2020_filtered = pre2020.loc[pre2020_keep]
-        binary = pd.concat([pre2020_filtered, post2020])
-        print(f"  Kept {len(pre2020_filtered):,} pre-2020 frames with CPC coords")
-        print(f"  Dropped {pre2020_drop:,} pre-2020 frames (no CPC coords)")
+    # ── Eligibility gate: keep only frames whose IMAGE and POINT SOURCE both
+    # resolve. Pre-2020 needs CPC coords; 2020+ needs a _pts image. This makes
+    # downstream image_missing / cpc_missing impossible for a selected frame.
+    clip_index = build_clip_index(config.CLIP_DIR)
+    print(f"Indexed {len(clip_index):,} clip images under {config.CLIP_DIR}")
+    cpc_years = [y for y in years if y < 2020]
+    cpc_basenames = load_cpc_basenames(config.CPC_ALL_DIR, cpc_years)
+    print(f"  CPC has coords for {len(cpc_basenames):,} frames")
+    n_before = len(binary)
+    eligible_index, exclusions = frame_eligibility(
+        binary, clip_index, cpc_basenames, build_image_filename)
+    binary = binary.loc[eligible_index]
+    print(f"  Eligibility gate: {n_before:,} candidates -> {len(binary):,} eligible "
+          f"(excluded image_missing={exclusions['image_missing']}, "
+          f"cpc_missing={exclusions['cpc_missing']}, pts_missing={exclusions['pts_missing']})")
 
     # Recompute years after filtering
     years = sorted(binary["year_int"].unique())
@@ -417,8 +907,14 @@ def main():
     print()
 
     # Allocate and select
-    alloc = even_allocate(binary, species_list, years, target)
-    selected, achieved = greedy_select(binary, species_list, alloc, years)
+    if site_balance:
+        print(f"Site-balanced selection: ON (max_site_frac={max_site_frac})")
+        selected, achieved = site_balanced_select(
+            binary, species_list, years, target, cap_frac=max_site_frac)
+    else:
+        print("Site-balanced selection: OFF (--no-site-balance)")
+        alloc = even_allocate(binary, species_list, years, target)
+        selected, achieved = greedy_select(binary, species_list, alloc, years)
 
     sel = binary.loc[selected].copy()
     n = len(sel)
@@ -431,6 +927,7 @@ def main():
     # ── Build output with image paths and routing ────────────────────────────
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
 
+    # clip_index was built above during the eligibility gate; reuse it here.
     rows_out = []
     for frame_id in selected:
         r = sel.loc[frame_id]
@@ -463,28 +960,39 @@ def main():
             config.CPC_ALL_DIR, str(year_int), "ids", "point_coords.csv"
         ) if year_int < 2020 else ""
 
-        if not args.skip_image_check:
-            img_path, ext = find_source_image(basename, year_int, config.CLIP_DIR)
-            pts_path = find_pts_image(basename, year_int, config.CLIP_DIR)
-            row["source_image"] = img_path or ""
-            row["pts_image"] = pts_path or ""
-            row["image_found"] = img_path is not None
-        else:
-            row["source_image"] = ""
-            row["pts_image"] = ""
-            row["image_found"] = None
+        # Always verify that each selected frame maps to a real image on disk.
+        # Downstream steps (4/5) need the resolved paths. Resolution is a
+        # season-agnostic whole-tree lookup (clip_index built once above).
+        img_path, ext = find_source_image(basename, clip_index)
+        pts_path = find_pts_image(basename, clip_index)
+        row["source_image"] = img_path or ""
+        row["pts_image"] = pts_path or ""
+        row["image_found"] = img_path is not None
+        row["clip_dir_searched"] = config.CLIP_DIR
+        row["missing_reason"] = missing_reason(img_path is not None, basename, config.CLIP_DIR)
+        row["point_source"] = "cpc" if year_int < 2020 else "pts"
+        row["point_source_path"] = (
+            os.path.join(config.CPC_ALL_DIR, str(year_int), "ids", "point_coords.csv")
+            if year_int < 2020 else (pts_path or "")
+        )
 
         rows_out.append(row)
 
     df_out = pd.DataFrame(rows_out)
 
     # ── Save outputs ─────────────────────────────────────────────────────────
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Master list
     master_path = os.path.join(config.OUTPUT_DIR, "selected_frames.csv")
     df_out.to_csv(master_path, index=False)
     print(f"Saved: {master_path} ({len(df_out)} rows)")
+
+    reserve_rows = build_reserve_rows(binary, selected, species_list,
+                                      build_image_filename, clip_index)
+    if reserve_rows:
+        reserve_path = os.path.join(config.OUTPUT_DIR, "reserve_frames.csv")
+        pd.DataFrame(reserve_rows).to_csv(reserve_path, index=False)
+        print(f"Saved: {reserve_path} ({len(reserve_rows)} reserve frames)")
 
     # Route splits
     for route_name, filename in [
@@ -505,21 +1013,26 @@ def main():
             print(f"Saved: {p} ({len(missing)} rows — images not found on disk)")
 
     # ── Summary ──────────────────────────────────────────────────────────────
+    reserve_count = len(reserve_rows)
     summary_lines = [
-        f"TCRMPcvr_chooseImages — Selection Summary",
-        f"Generated: {datetime.now().isoformat()}",
+        f"TCRMPcvr_chooseImages - Selection Summary",
+        f"Generated: {ast_timestamp()}",
         f"",
         f"Input:   {os.path.basename(ap_path)}",
         f"Species: {', '.join(species_list)}",
         f"Target:  {target} frame-instances per species",
         f"",
-        f"=== Results ===",
-        f"Total frames selected: {n:,}",
-        f"",
     ]
-    for sp in species_list:
-        summary_lines.append(f"  {sp:6s}: {achieved[sp]:>5,} frame-instances")
-    summary_lines.append("")
+    summary_lines.extend(build_summary_lines(
+        candidates=n_before,
+        eligible=len(binary),
+        selected=len(df_out),
+        reserve=reserve_count,
+        species_list=species_list,
+        achieved=achieved,
+        target=target,
+        exclusions=exclusions,
+    ))
 
     # Year distribution
     yr_dist = sel["year_int"].value_counts().sort_index()
@@ -530,9 +1043,40 @@ def main():
 
     # Site distribution
     site_dist = df_out["site"].value_counts().sort_values(ascending=False)
+    n_sel_total = len(df_out)
     summary_lines.append(f"=== Sites ({len(site_dist)}) ===")
     for s, c in site_dist.items():
-        summary_lines.append(f"  {s:5s}: {c:>5}")
+        share = c / n_sel_total if n_sel_total else 0
+        summary_lines.append(f"  {s:5s}: {c:>5}  ({share*100:5.1f}%)")
+
+    if n_sel_total and len(site_dist) > 0:
+        top_site = site_dist.index[0]
+        top_share = site_dist.iloc[0] / n_sel_total
+        # Cap is mathematically unsatisfiable when there are too few sites
+        # for max_site_frac to allow every site its inclusion floor of 1
+        # (e.g. 2 sites can never both be <=25%). Only WARN in that case;
+        # otherwise assert the cap actually held.
+        cap_unsatisfiable = len(site_dist) < math.ceil(1 / max_site_frac) if max_site_frac > 0 else False
+        if site_balance:
+            if top_share <= max_site_frac + 1e-9:
+                summary_lines.append(
+                    f"  [OK] max site share {top_share*100:.1f}% ({top_site}) "
+                    f"<= cap {max_site_frac*100:.0f}%")
+            elif cap_unsatisfiable:
+                summary_lines.append(
+                    f"  [WARN] max site share {top_share*100:.1f}% ({top_site}) "
+                    f"exceeds cap {max_site_frac*100:.0f}%, but only {len(site_dist)} "
+                    f"site(s) carry this label - the cap is mathematically "
+                    f"unsatisfiable with this few sites (each needs its inclusion "
+                    f"floor of >=1); floors win.")
+            else:
+                summary_lines.append(
+                    f"  [WARN] max site share {top_share*100:.1f}% ({top_site}) "
+                    f"exceeds cap {max_site_frac*100:.0f}% unexpectedly")
+        else:
+            summary_lines.append(
+                f"  (site-balance OFF: max site share {top_share*100:.1f}% "
+                f"({top_site}), no cap enforced)")
     summary_lines.append("")
 
     # Transect distribution
@@ -568,6 +1112,17 @@ def main():
         summary_lines.append(f"  {r:15s}: {c:>5}")
     summary_lines.append("")
 
+    # Image-resolution reconciliation: found vs missing on disk. route_cpc.csv
+    # and route_ocr_needed.csv split by ROUTE and include not-yet-found frames;
+    # route_missing.csv is the image_found==False subset (with missing_reason).
+    n_found = int(df_out["image_found"].sum())
+    n_missing = len(df_out) - n_found
+    summary_lines.append("=== Image resolution ===")
+    summary_lines.append(f"  clip dir searched : {config.CLIP_DIR}")
+    summary_lines.append(f"  images found      : {n_found}/{len(df_out)}")
+    summary_lines.append(f"  images missing    : {n_missing}  (see route_missing.csv for per-frame reasons)")
+    summary_lines.append("")
+
     summary_text = "\n".join(summary_lines)
     print()
     print(summary_text)
@@ -580,13 +1135,16 @@ def main():
     # Save config snapshot
     cfg_path = os.path.join(config.OUTPUT_DIR, "config_snapshot.txt")
     with open(cfg_path, "w") as f:
-        f.write(f"timestamp: {ts}\n")
+        f.write(f"timestamp: {ast_timestamp()}\n")
         f.write(f"species: {species_list}\n")
         f.write(f"target: {target}\n")
         f.write(f"min_year: {config.MIN_YEAR}\n")
         f.write(f"max_year: {config.MAX_YEAR}\n")
+        f.write(f"clip_dir: {config.CLIP_DIR}\n")
         f.write(f"all_points: {ap_path}\n")
         f.write(f"master_codes: {mc_path}\n")
+        f.write("selection: fresh random, no seed\n")
+        f.write(f"eligible_pool: {len(binary)}\n")
 
     print(f"\nDone. Run 'python src/plot_diagnostics.py' for distribution plots.")
 
