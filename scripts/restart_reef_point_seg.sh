@@ -19,6 +19,11 @@ PY="${REPO_ROOT}/env/bin/python"
 LOG="/tmp/reef_point_seg_orch_${PORT}.log"
 
 # Ports owned by this module (orchestrator + its sub-apps). NEVER includes 5077.
+# NEVER includes 5096 either: 5096 is the fixed port of the standalone
+# "Annotate Images" annotator (runner key "annotate", launched from GET
+# /annotate, session dirs under inprocess/_standalone/<session>/). It sits
+# outside the 5080-5089 combined-annotator sweep range on purpose, so a
+# standalone session in progress survives this restart untouched.
 MODULE_PORTS=("$PORT" 5055 5065 5066 5070 5075 5080)
 
 echo "==> Restarting Reef Point Seg orchestrator on port ${PORT}"
@@ -94,7 +99,7 @@ fi
 # Note: the page HTML ($body) carries static markup; the footer Reset/Save&Close
 # buttons and the picker grouping are injected by orchestrator.js at runtime, so
 # those are checked against the served JS, not the HTML.
-js="$(curl -s -m 5 "http://127.0.0.1:${PORT}/static/orchestrator.js?v=20260710-edit-masks" 2>/dev/null || true)"
+js="$(curl -s -m 5 "http://127.0.0.1:${PORT}/static/orchestrator.js?v=20260921-start" 2>/dev/null || true)"
 echo "  self-test (live markers on :${PORT}):"
 fail=0
 assert_html_present() { printf '%s' "$body" | grep -q "$1" && echo "    OK  present: $2" || { echo "    FAIL missing: $2"; fail=1; }; }
@@ -103,7 +108,7 @@ assert_js_present()   { printf '%s' "$js"   | grep -q "$1" && echo "    OK  pres
 assert_html_present 's3-label-chips'        'Step 3 selection chips container'
 assert_html_present 'id="confirm-overlay"'  'reset-confirm modal markup'
 assert_html_present 'Do this:'              'rewritten user instructions'
-assert_html_present '20260710-edit-masks'   'fresh orchestrator.js cache-bust'
+assert_html_present '20260921-start' 'fresh orchestrator.js cache-bust'
 assert_html_absent  's3-load-labels'        'old "Load labels from Step 2" button'
 assert_html_absent  'What you do'           'old "What you do" phrasing'
 assert_html_absent  'data-step="s4review"'  'old SAM3-Review stub tile'
@@ -113,7 +118,7 @@ assert_html_present 'data-step="step4test"' 'combined-annotator tile present (ro
 assert_html_present 'panel-step4test'       'combined-annotator panel present'
 assert_html_present 'Place + Segment'       'combined-annotator promoted to Step 4 label'
 assert_html_present 'data-step="step4loop"' 'Refine model-assist loop tile present'
-assert_html_present 'Refine (4.loop)'       'Refine loop tile label present'
+assert_html_present 'Refine (model loop)'   'Refine loop tile label present'
 assert_html_present 'data-step="editmasks"' 'Edit Masks tile present'
 assert_html_present 'Edit Masks'            'Edit Masks tile label present'
 assert_html_absent  'experimental'          'experimental copy removed (4.test promoted)'
@@ -131,6 +136,15 @@ assert_html_present 's4test-target-only'    '4.test combined Step-4+5 settings b
 # JS source carries the footer wiring openResetConfirm("step4test") (the dynamic
 # URL string never appears verbatim). Assert on the footer wiring instead.
 assert_js_present   'openResetConfirm("step4test")' '4.test Reset Step button wired'
+assert_js_present   'name-preview'          'auto project-name preview'
+assert_js_present   'function renderProjectName' 'topbar project-name renderer'
+assert_js_present   'include_classes_source'   'Step 6 class picker follows the training source'
+assert_html_present 'id="s6-source"'       'Step 6 training-source select (composite exports)'
+assert_js_present   'function refreshStep6Sources' 'Step 6 training-source refresh from /api/composites'
+assert_js_present   'function paintStep4testBoot' 'popup boot painter (single loader)'
+assert_js_present   'boot-retry'                'popup retry link'
+ann="$(curl -s -m 5 "http://127.0.0.1:${PORT}/annotate" 2>/dev/null || true)"
+printf '%s' "$ann" | grep -q 'Annotate Images' && echo "    OK  present: /annotate standalone launch page" || { echo "    FAIL missing: /annotate page"; fail=1; }
 
 # Native Label Coverage Matrix blueprint — prove its full page mounts under
 # /matrix and serves its own markup (sentinel: the matrix page <h1>/<title>).
@@ -145,6 +159,23 @@ lbl="$(curl -s -m 5 "http://127.0.0.1:${PORT}/labels/" 2>/dev/null || true)"
 assert_lbl_contains() { printf '%s' "$lbl" | grep -q "$1" && echo "    OK  present: $2" || { echo "    FAIL missing: $2"; fail=1; }; }
 assert_lbl_contains 'Label Manager'         'Label Manager page mounted at /labels'
 assert_lbl_contains 'id="lb-title"'         'labels page served from blueprint'
+
+# Train + Infer (/models) was retired on 2026-09-05 (ADR 0002: one training
+# surface, the VEGA main window). The mount must be gone: a 404 proves the
+# running process is the new code, a 200 means a stale process is serving.
+mdl_status="$(curl -s -o /dev/null -w '%{http_code}' -m 5 "http://127.0.0.1:${PORT}/models/" 2>/dev/null || true)"
+if [ "$mdl_status" = "404" ]; then
+    echo "    OK  retired: /models answers 404 (Train + Infer removed)"
+else
+    echo "    FAIL stale: /models answered ${mdl_status:-nothing}, expected 404"; fail=1
+fi
+
+# Bounding Boxes blueprint stays mounted at /boxes (staging and conversion;
+# training is handed to the main window).
+bx="$(curl -s -m 5 "http://127.0.0.1:${PORT}/boxes/" 2>/dev/null || true)"
+assert_bx_contains() { printf '%s' "$bx" | grep -q "$1" && echo "    OK  present: $2" || { echo "    FAIL missing: $2"; fail=1; }; }
+assert_bx_contains 'Bounding Boxes'         'Bounding Boxes page mounted at /boxes'
+assert_bx_contains 'Train in VEGA'          'Bounding Boxes hands training to VEGA'
 
 if [ "$fail" -ne 0 ]; then
     echo "==> Restart completed but self-test FAILED (stale assets?). See above." >&2

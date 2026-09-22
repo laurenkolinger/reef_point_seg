@@ -1,6 +1,6 @@
-"""Task 8: Step 6 fine-tune surfacing (weights picker + freeze + presets),
-orchestrator-side only (train_wrapper.py --freeze itself is a separate task
-and already implemented/tested elsewhere).
+"""Task 8: Step 6 fine-tune surfacing (weights picker + freeze), orchestrator-
+side only (train_wrapper.py --freeze itself is a separate task and already
+implemented/tested elsewhere).
 
 No-pytest harness: run with env/bin/python <this file>.
 
@@ -10,7 +10,14 @@ Covers:
   cfg model_path pointing at a nonexistent file -> error response, runner's
     run_cli_stage NEVER called.
   cfg without model_path -> the catalog model name passes through unchanged.
-  /api/step/6/presets -> lists 'finetune' and 'retrain' builtin entries.
+
+The two built-in presets ('finetune', 'retrain') this suite used to pin at
+/api/step/6/presets were removed 2026-09-21: the Train panel now starts from
+a base model by default and the Continue from a VEGA model disclosure covers
+the old fine-tune shortcut (design
+docs/superpowers/specs/2026-09-21-vega-starting-model-and-training-data-
+design.md section 3.2), so /api/step/6/presets lists file recipes only
+(test_step6_preset_default.py).
 """
 import os
 import sys
@@ -204,39 +211,6 @@ def test_pin_split_env_always_forwarded_with_defaults():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def test_presets_endpoint_lists_finetune_and_retrain():
-    client, tmp, state, best_pt = _client_with_project()
-    try:
-        r = client.get("/api/step/6/presets")
-        data = r.get_json()
-        check(r.status_code == 200, f"status {r.status_code}: {data}")
-        ids = [p["id"] for p in data.get("presets", [])]
-        check("finetune" in ids, f"'finetune' missing from presets: {ids}")
-        check("retrain" in ids, f"'retrain' missing from presets: {ids}")
-
-        r2 = client.get("/api/step/6/presets/finetune")
-        d2 = r2.get_json()
-        check(r2.status_code == 200, f"finetune preset fetch failed: {d2}")
-        params = d2.get("params", {})
-        check(params.get("epochs") == 150, f"finetune epochs != 150: {params}")
-        check(params.get("patience") == 20, f"finetune patience != 20: {params}")
-        check(params.get("lr0") == 0.001, f"finetune lr0 != 0.001: {params}")
-        check(params.get("freeze") == 10, f"finetune freeze != 10: {params}")
-        # No champion.json and no runs yet in a bare project except the
-        # fixture's own prior_run - so model_path should resolve to it.
-        check(params.get("model_path") == best_pt,
-              f"finetune model_path should resolve to newest best.pt: {params}")
-
-        r3 = client.get("/api/step/6/presets/retrain")
-        d3 = r3.get_json()
-        params3 = d3.get("params", {})
-        check(params3.get("model") == "yolo11m-seg.pt", f"retrain model wrong: {params3}")
-        check(params3.get("pin_split") == "1", f"retrain pin_split wrong: {params3}")
-    finally:
-        appmod.current_project = None
-        shutil.rmtree(tmp, ignore_errors=True)
-
-
 if __name__ == "__main__":
     print("TASK 8 -- Step 6 fine-tune surfacing (orchestrator)\n")
     print("MODEL PATH OVERRIDE:")
@@ -245,8 +219,6 @@ if __name__ == "__main__":
     run(test_no_model_path_passes_catalog_name_through)
     print("PIN-SPLIT ENV DEFAULTS:")
     run(test_pin_split_env_always_forwarded_with_defaults)
-    print("PRESETS:")
-    run(test_presets_endpoint_lists_finetune_and_retrain)
 
     failed = [r for r in _RESULTS if not r[1]]
     print(f"\n{len(_RESULTS) - len(failed)}/{len(_RESULTS)} passed.")

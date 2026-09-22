@@ -1,0 +1,713 @@
+/* orchestrator_runs.css: the Step 5 Trained runs registry (VEGA).
+
+   Every rule is scoped under .vega-runs so nothing leaks onto the host page,
+   and every colour is a host token or a mix of one, per the workflow page
+   design (section 2). The tokens are read through a --vr- alias layer at the
+   top of the first rule, which names the design's own value as each token's
+   fallback: the host's value wins wherever the host defines it, and the card
+   still paints itself where the host does not. Buttons reuse the host's
+   .btn .btn-outline .btn-sm and only get the sizing and focus rules the host
+   does not declare. Fonts follow the three roles: Inter for words, Syne for
+   the headings, Space Mono for names, numbers, stamps and chips.
+
+   Type follows version 2 of that design and its legibility floor, written
+   after Lauren read VEGA on 2026-09-16 and ruled the panels hard to read:
+   table cells and row names 13 px, meta facts 13 px, chips and counts 12 px,
+   nothing below 12 px, and no hint prose in a hardcoded grey. Every row list
+   longer than three rows carries visible striping and a hover wash, so the
+   eye can track one row across its columns; before this the eighteen rows of
+   small mono text ran together.
+
+   Five columns since 2026-09-16: State, Run, Trained on, Score, Actions. The
+   Trained on column is the one Lauren asked for in place of the comparability
+   apparatus, which came off the rows the same day, so the not-comparable chip
+   colour, the dimmed score and the origin fact the new column replaced are
+   all gone from this file. Since 2026-09-17 the column carries the data
+   subset a run learned from (coral_intel_subset, fish_photo_28feb25, a
+   training set, a project export) rather than the folder that holds the run,
+   and is sized so a name of that length shows whole. */
+
+.vega-runs {
+  /* The palette, in one place, read from the host and defaulted here.
+
+     Every colour, radius and font below is a --vr- alias of the host token
+     beside it, and each alias names the design's own value as its fallback.
+     A host that has loaded the shared design block wins, because var() takes
+     the fallback only when the custom property is undefined; a host that has
+     not (a page serving a template compiled before the shared block was
+     linked, a standalone embed of this card) still paints the card in the
+     spec palette instead of dropping every declaration and letting the
+     browser's own canvas and ink show through. The pixel review of
+     2026-09-16 found exactly that on the running orchestrator: no panel, no
+     hairlines, no state colours and no magenta edge, because :root carried
+     none of these names.
+
+     The fallbacks are the spec's section 2 values written in rgb() rather
+     than hex, which is also the form the house suite accepts: --surface
+     #11111a, --surface-light #191926, --input-bg #15151f, --text #F5EDF0,
+     --text-dim #b0a7ab, --magenta #E20074, --pink #FFB3D9, --warning
+     #FFB800, --error #FF4D6D, --border #2a2a38, --border-dim #1d1d26. */
+  --vr-surface:       var(--surface,       rgb(17, 17, 26));
+  --vr-surface-light: var(--surface-light, rgb(25, 25, 38));
+  --vr-input-bg:      var(--input-bg,      rgb(21, 21, 31));
+  --vr-text:          var(--text,          rgb(245, 237, 240));
+  --vr-text-dim:      var(--text-dim,      rgb(176, 167, 171));
+  --vr-magenta:       var(--magenta,       rgb(226, 0, 116));
+  --vr-pink:          var(--pink,          rgb(255, 179, 217));
+  --vr-magenta-light: var(--magenta-light, rgb(255, 179, 217));
+  --vr-warning:       var(--warning,       rgb(255, 184, 0));
+  --vr-error:         var(--error,         rgb(255, 77, 109));
+  --vr-border:        var(--border,        rgb(42, 42, 56));
+  --vr-border-dim:    var(--border-dim,    rgb(29, 29, 38));
+  --vr-radius:        var(--radius,        2px);
+  --vr-radius-lg:     var(--radius-lg,     3px);
+  --vr-font-body:     var(--font-body,     'Inter', ui-sans-serif, sans-serif);
+  --vr-font-display:  var(--font-display,  'Syne', sans-serif);
+  --vr-font-mono:     var(--font-mono,     'Space Mono', 'Consolas', monospace);
+
+  min-width: 0;
+  margin-bottom: 16px;
+  padding: 16px;
+  background: var(--vr-surface-light);
+  border: 1px solid var(--vr-border);
+  border-radius: var(--vr-radius-lg);
+  color: var(--vr-text);
+  font-family: var(--vr-font-body);
+}
+
+/* The host's .btn declares its ink, its family and its radius through the
+   same tokens, so the row buttons and Refresh are restated here through the
+   aliases. Only the four properties that carry a token are repeated; the
+   host keeps the geometry, the tracking and the uppercase. */
+.vega-runs .btn {
+  color: var(--vr-text);
+  border-radius: var(--vr-radius);
+  font-family: var(--vr-font-mono);
+}
+.vega-runs .btn-outline {
+  background: transparent;
+  color: var(--vr-text);
+  border-color: var(--vr-border);
+}
+.vega-runs .btn-outline:hover {
+  border-color: var(--vr-pink);
+  color: var(--vr-pink);
+}
+
+/* Read by a screen reader, never drawn: the separators that keep the summary
+   line's counts from running into one another when the live region is
+   announced. */
+.vega-runs-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* -- Head row: heading, section glyph, Refresh ------------------- */
+.vega-runs-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.vega-runs .vega-runs-title {
+  margin: 0;
+  font-family: var(--vr-font-display);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--vr-magenta-light);
+}
+.vega-runs-spacer { flex: 1; }
+
+/* The section and field glyphs: a 28 px button around a 16 px ring, the same
+   shape as the reference .tip in vicarius_workflow.css, which the host page
+   does not load. "i" beside a heading explains the section, "?" beside a
+   field label explains that one choice. */
+.vega-runs-tip {
+  width: 28px;
+  height: 28px;
+  margin: -6px 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  display: inline-grid;
+  place-items: center;
+  vertical-align: middle;
+  cursor: help;
+  color: var(--vr-text-dim);
+  flex: none;
+}
+/* 18 px around a 12 px letter: the shared block draws this glyph at 10 px in
+   a 16 px ring, which version 2's legibility floor puts out of bounds. */
+.vega-runs-tip span {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--vr-border);
+  border-radius: 50%;
+  font: 700 12px/16px var(--vr-font-mono);
+  text-align: center;
+  display: block;
+}
+.vega-runs-tip:hover span,
+.vega-runs-tip:focus-visible span {
+  border-color: var(--vr-pink);
+  color: var(--vr-pink);
+}
+
+/* -- Summary line, loading, empty and error lines ----------------
+   The counts the person opens the card to find come first and keep the ink
+   of the state they name; the words around each number stay in --text-dim,
+   which holds 8:1 on this surface. */
+.vega-runs-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 14px;
+  margin-bottom: 12px;
+  font: 400 14px/1.5 var(--vr-font-body);
+  color: var(--vr-text-dim);
+}
+.vega-runs-line {
+  font: 400 14px/1.5 var(--vr-font-body);
+  color: var(--vr-text-dim);
+  margin: 10px 0;
+}
+.vega-runs-summary b {
+  font: 700 13px/1.5 var(--vr-font-mono);
+  color: var(--vr-text);
+}
+.vega-runs-count.is-failed b { color: var(--vr-error); }
+.vega-runs-champion { flex: 1 1 100%; }
+.vega-runs-champion b { color: var(--vr-text); }
+.vega-runs-dim { color: var(--vr-text-dim); }
+.vega-runs-error { color: var(--vr-error); }
+.vega-runs-nowrap { white-space: nowrap; }
+
+/* -- Filters ----------------------------------------------------
+   Search, state and source, each a visible label bound to its control with a
+   "?" glyph beside it, and a Clear filters button that appears only while a
+   filter is narrowing the table. The block wraps on its own rather than
+   through a query, so it follows the card at any width. */
+.vega-runs-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 16px;
+  padding-bottom: 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--vr-border);
+}
+.vega-runs-filter {
+  flex: 1 1 180px;
+  min-width: 160px;
+  max-width: 280px;
+}
+.vega-runs-filter-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+.vega-runs .vega-runs-label {
+  font: 500 14px/1.4 var(--vr-font-body);
+  color: var(--vr-text);
+}
+.vega-runs .vega-runs-input,
+.vega-runs .vega-runs-select {
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 8px;
+  background: var(--vr-input-bg);
+  border: 1px solid var(--vr-border);
+  border-radius: var(--vr-radius);
+  color: var(--vr-text);
+  font: 400 13px/1.4 var(--vr-font-mono);
+}
+.vega-runs .vega-runs-input::placeholder { color: var(--vr-text-dim); }
+.vega-runs-clear {
+  flex: none;
+  margin-bottom: 1px;
+}
+/* The host's .btn declares a display, which outranks the browser's own rule
+   for the hidden attribute, so the button says it again here. */
+.vega-runs .vega-runs-clear[hidden] { display: none; }
+
+/* -- Table: four columns; each run is one record (a tbody) with a main row
+   and a meta row spanning the columns, so the secondary line never widens
+   the columns and every record keeps one height. Family group headings are
+   their own rowgroups inside the same table, because a detector's boxes and
+   a segmenter's outlines are never ranked against each other and the metric
+   is then named once per group instead of once per row.
+
+   The wrapper scrolls on its own and, through inline-size containment, never
+   inflates the host panel: the page itself never scrolls sideways. It is
+   also the card's own query container, so the narrow layout at the end of
+   this file follows the card's width rather than the viewport's: the VEGA
+   window is resized inside the VICARIUS desktop, and a sidebar and two
+   paddings sit between the two numbers. contain stays beside container-type
+   as the guard a browser without container queries still honours. ------- */
+.vega-runs-wrap {
+  overflow-x: auto;
+  contain: inline-size;
+  container-type: inline-size;
+  container-name: vega-runs;
+}
+.vega-runs-table {
+  table-layout: fixed;
+  width: 100%;
+  /* 916 px is what the five columns need: 132 + 200 + 80 + 304 pinned, and
+     200 left for the run name (232 at the width measured below). The Score
+     column is sized on its own content ("no score" at 12 px is 58 px inside
+     16 px of cell padding), so every pixel beyond that goes to the two
+     columns carrying names. Measured on the running orchestrator on
+     2026-09-17, the card is 948 px wide at a 1280 px viewport and the wrapper
+     916 px inside its 16 px padding and 1 px border, so the margin is 32 px.
+     A change to this floor, to any pinned column, or to the card's padding
+     can put the Actions column behind a horizontal scrollbar at 1280 as well
+     as at 946, so re-measure the wrapper when one of them moves.
+     Re-measured 2026-09-22 after the Continue from rename: "CONTINUE FROM"
+     needs 80.6 + 72.8 + 119.7 px of buttons plus two 6 px gaps plus 16 px of
+     cell padding, 301 px, so the Actions column grew from 272 to 304 px and
+     this floor grew with it. On the Evaluate panel, where the card has lived
+     since 2026-09-21, the wrapper measures 894 px at a 1280 px viewport and
+     914 px at 1300, so the table layout starts a little above 1300 px and
+     the 946 and 1280 px review widths both render the stacked layout. */
+  min-width: 916px;
+  border-collapse: collapse;
+  font: 400 13px/1.45 var(--vr-font-mono);
+  color: var(--vr-text);
+}
+/* Fixed columns: State, Trained on, Score and Actions are pinned so the Run
+   column absorbs the squeeze and a long run name shortens its head, never the
+   actions. State fits its longest chip ("did not finish") and Actions its
+   three buttons, measured at 256 px inside 8 px cell padding each side.
+   Trained on holds 184 px of text inside its 16 px of cell padding, which at
+   13 px Space Mono (8.1 px a character, measured 2026-09-16) is 22
+   characters: every staged box dataset name on the box (coral_intel_subset
+   and fish_photo_28feb25 are 18) and every project export name shows whole,
+   and only a longer training set name shortens, with the whole name in the
+   cell's tooltip. At 184 px the column cut 17 of 23 values. */
+.vega-runs-col-state { width: 132px; }
+.vega-runs-col-trained { width: 200px; }
+.vega-runs-col-score { width: 80px; }
+.vega-runs-col-actions { width: 304px; }
+.vega-runs-table th {
+  text-align: left;
+  padding: 4px 8px 8px;
+  border-bottom: 1px solid var(--vr-border);
+  font: 500 13px/1.4 var(--vr-font-body);
+  color: var(--vr-text-dim);
+  white-space: nowrap;
+}
+.vega-runs-table td {
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.vega-runs-main td { padding: 5px 8px 1px; }
+.vega-runs-meta td {
+  padding: 0 8px 6px;
+  border-bottom: 1px solid var(--vr-border-dim);
+}
+
+/* Sortable column headings. The arrow is drawn from an escape rather than a
+   character in this file, which stays ASCII. */
+.vega-runs-th {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--vr-text-dim);
+  font: 500 13px/1.4 var(--vr-font-body);
+  cursor: pointer;
+}
+.vega-runs-th:hover { color: var(--vr-pink); }
+.vega-runs-th.is-sorted { color: var(--vr-text); }
+.vega-runs-arrow::after {
+  content: "\2195";
+  font-size: 12px;
+  opacity: 0.35;
+}
+.vega-runs-th.is-sorted .vega-runs-arrow::after { opacity: 1; }
+.vega-runs-th[data-dir="asc"] .vega-runs-arrow::after { content: "\2191"; }
+.vega-runs-th[data-dir="desc"] .vega-runs-arrow::after { content: "\2193"; }
+
+/* Family group heading: what these runs predict, the metric they are scored
+   in, and how many of them the filters kept. */
+.vega-runs-group-cell {
+  padding: 16px 8px 6px;
+  border-bottom: 1px solid var(--vr-border);
+  white-space: nowrap;
+}
+/* Syne 14 px is the scale's own Syne size under the 17 px section heading
+   (design section 3, the rail stage name row); the 15 px this heading
+   carried before is a size the scale does not hold. */
+.vega-runs-group-name {
+  font: 600 14px/1.4 var(--vr-font-display);
+  color: var(--vr-text);
+  cursor: help;
+}
+.vega-runs-group-count {
+  margin-left: 10px;
+  font: 400 12px/1.4 var(--vr-font-mono);
+  color: var(--vr-text-dim);
+}
+
+/* Striping and hover, the version 2 row-legibility rule. The card sits on
+   --surface-light already, so an alternate wash of that same token would be
+   invisible; a wash of the row ink lifts every other record by a step the
+   eye can follow across four columns, and the hover wash nearly doubles it.
+   7 percent, raised from 5 after the 2026-09-16 screenshots read the stripe
+   as barely there: it puts the alternate row at 6.2:1 under --text-dim and
+   5.2:1 under the "did not finish" chip, both over the 4.5:1 floor. The
+   class is written by the script rather than read from nth-child, because
+   the group headings between records would otherwise shift every other
+   stripe. */
+.vega-runs-record.is-alt { background: color-mix(in srgb, var(--vr-text) 7%, transparent); }
+.vega-runs-record:hover { background: color-mix(in srgb, var(--vr-text) 13%, transparent); }
+.vega-runs-record.is-champion-record { background: color-mix(in srgb, var(--vr-pink) 9%, transparent); }
+/* A run the open project trained wears a magenta edge, so a student can find
+   their own work in a table drawn from every project on the box without
+   reading a word. The edge is drawn inside the first cell rather than as a
+   border, which would shift a fixed column by its own width. */
+.vega-runs-record.is-mine-record td:first-child {
+  box-shadow: inset 3px 0 0 var(--vr-magenta);
+}
+.vega-runs-record.is-champion-record:hover { background: color-mix(in srgb, var(--vr-pink) 15%, transparent); }
+
+.vega-runs-line1,
+.vega-runs-meta-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 28px;
+}
+.vega-runs-meta-line {
+  flex-wrap: wrap;
+  min-height: 20px;
+  /* 16 px between facts: wide enough to group them by eye now that no border
+     divides them, narrow enough to keep the line on one row at 1280 px. */
+  gap: 2px 16px;
+  font-size: 13px;
+  color: var(--vr-text-dim);
+}
+/* The name never breaks a token: it is a flex line of two spans, the head
+   and the run stamp, and white-space keeps each span whole. Before that rule
+   the halves wrapped at an arbitrary character, which read as a broken name.
+   Since 2026-09-17 the line wraps at the one boundary between the spans: a
+   name wider than the Run column puts its stamp on a second line and keeps
+   its head whole, where before the head shortened to its first few letters
+   and three rows read the identical "TRAIN_fis..." at 1280 px. The head
+   still shortens at its end, but only when it alone is wider than the
+   column, and the whole name is then in the row's tooltip. The stamp span
+   never shrinks. */
+.vega-runs-name {
+  display: inline-flex;
+  flex-wrap: wrap;
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  font-weight: 700;
+  color: var(--vr-text);
+}
+/* The data subset a run trained on: the row's ink at the cell size, one
+   weight lighter than the run name beside it, so the identity column still
+   leads. It shortens at its end only when a name is wider than the column,
+   rather than overflowing into the Score column, which is what the
+   2026-09-16 screenshots caught it doing: a name longer than the column
+   painted straight over the number beside it. The 28 px line is the hit
+   target the design asks of anything focusable, and this span is focusable
+   because its tooltip carries the whole name and what kind of data it is. */
+.vega-runs-trained {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 28px;
+  font-size: 13px;
+  color: var(--vr-text);
+}
+/* A run whose record names no training data says so rather than showing a
+   blank cell, in the same dim 12 px the unscored value uses. */
+.vega-runs-trained.is-none {
+  font-size: 12px;
+  color: var(--vr-text-dim);
+}
+.vega-runs-name-head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vega-runs-name-tail {
+  flex: none;
+  white-space: nowrap;
+}
+/* Meta facts (where the run came from, its image size, when it was
+   evaluated, its strict score, what Promote is waiting for) are separated by
+   the line's own column gap and never by a left border: a bordered fact that
+   wraps to the next line begins it with a bar standing on its own, which the
+   2026-09-15 pixel review read as a rendering fault. */
+.vega-runs-fact {
+  color: var(--vr-text-dim);
+  white-space: nowrap;
+}
+/* The score value is focusable (its tooltip carries where the number came
+   from), so its own box, not just the line around it, meets the 28 px
+   hit-target floor of the design. The line already declares that floor, so
+   the record keeps its height. */
+.vega-runs-score {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--vr-text);
+}
+.vega-runs-score.is-none {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--vr-text-dim);
+}
+
+/* -- Chips: one state chip per row in the first column, carrying the role
+   colours of the registry spec's process-state family, plus the two neutral
+   markers (this project, imported) that ride beside the run name. Uppercase
+   is reserved for the window title, the tabs and the buttons (design section
+   3), so no chip is uppercase. ------------------------------------------ */
+.vega-runs-chip {
+  display: inline-block;
+  flex: none;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 2px 7px;
+  border: 1px solid var(--vr-border);
+  border-radius: var(--vr-radius);
+  font: 400 12px/1.5 var(--vr-font-mono);
+  letter-spacing: 0.01em;
+  color: var(--vr-text-dim);
+  white-space: nowrap;
+  cursor: help;
+}
+/* verified: the promoted run wins over every other state. The spec's orchid
+   misses the 4.5:1 floor at 12 px on this surface, so the champion keeps the
+   card's own pink, which measures 12:1. */
+.vega-runs-chip.is-champion {
+  background: color-mix(in srgb, var(--vr-pink) 10%, transparent);
+  border-color: color-mix(in srgb, var(--vr-pink) 35%, transparent);
+  color: var(--vr-pink);
+}
+/* failed: training ended without a weights file. The ink is --error lifted
+   30 percent of the way to --text, the same treatment the data-blue chip
+   below already carries: --error itself measures 4.25:1 at 12 px on a
+   striped row, under the design's 4.5:1 floor, and the lifted ink measures
+   5.5:1 there. Eight to fifteen of these chips are on screen at once. */
+.vega-runs-chip.is-failed {
+  background: color-mix(in srgb, var(--vr-error) 10%, transparent);
+  border-color: color-mix(in srgb, var(--vr-error) 35%, transparent);
+  color: color-mix(in srgb, var(--vr-error) 70%, var(--vr-text));
+}
+/* empty: nothing is recorded about how good the run is. */
+.vega-runs-chip.is-empty {
+  border-color: var(--vr-border);
+  color: var(--vr-text-dim);
+}
+/* done by machine: scored and rankable, in the registry spec's data blue. */
+.vega-runs-chip.is-done {
+  background: rgba(58, 160, 224, 0.1);
+  border-color: rgba(58, 160, 224, 0.35);
+  color: rgb(122, 194, 240);
+}
+/* The two markers are facts about where a run came from, not states, so they
+   keep the neutral chip ink and only firm up their ring. */
+.vega-runs-chip.is-mine,
+.vega-runs-chip.is-imported {
+  border-color: var(--vr-text-dim);
+  color: var(--vr-text);
+}
+
+/* -- Row actions ------------------------------------------------- */
+.vega-runs-actions {
+  display: flex;
+  gap: 6px;
+}
+/* One owner for the reason an action is unavailable. A disabled button
+   dispatches no pointer events, and the hit-tested element at the centre of
+   a disabled Promote is that button (measured on the live page at 946 and
+   1280 px, 2026-09-15), so the script leaves the button without a title and
+   writes the reason on this wrapper, which is what a tooltip lookup then
+   resolves. The wrapper is keyboard-focusable so the reason is also within
+   reach of a screen reader, which cannot focus the disabled button. */
+.vega-runs-action {
+  display: inline-flex;
+  cursor: help;
+}
+/* 12 px, not the shared block's 11 px: the legibility floor of version 2
+   puts no user-visible text below 12 px, and these three words are the whole
+   of what a row offers. */
+.vega-runs .btn-sm {
+  min-height: 28px;
+  padding: 6px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+/* Disabled by ink, not by opacity. --text at 45 percent opacity measures
+   3.99:1 on this card, under the design's 4.5:1 floor, and eight to fifteen
+   disabled buttons sit on screen at a time; --text-dim on the same ground
+   measures 7.4:1 and still reads as unavailable beside a --text button in a
+   --border ring. */
+.vega-runs .btn:disabled {
+  opacity: 1;
+  color: var(--vr-text-dim);
+  border-color: var(--vr-border-dim);
+  cursor: not-allowed;
+}
+.vega-runs .btn:disabled:hover {
+  border-color: var(--vr-border-dim);
+  color: var(--vr-text-dim);
+}
+
+/* -- Keyboard focus, visible everywhere -------------------------- */
+.vega-runs .btn:focus-visible,
+.vega-runs-tip:focus-visible,
+.vega-runs-chip:focus-visible,
+.vega-runs-action:focus-visible,
+.vega-runs-th:focus-visible,
+.vega-runs-group-name:focus-visible,
+.vega-runs .vega-runs-input:focus-visible,
+.vega-runs .vega-runs-select:focus-visible,
+.vega-runs-score[tabindex]:focus-visible,
+.vega-runs-trained[tabindex]:focus-visible {
+  outline: 2px solid var(--vr-pink);
+  outline-offset: 2px;
+}
+.vega-runs .vega-runs-input:focus,
+.vega-runs .vega-runs-select:focus {
+  outline: none;
+  border-color: var(--vr-magenta);
+}
+
+/* -- The narrow card: one record, stacked ------------------------
+   Below 916 px (re-measured 2026-09-22 after the Continue from rename widened
+   the Actions column; was 884 px) the five columns cannot sit side by side,
+   and the pixel
+   review of 2026-09-15 found the Score column cut mid-character and the
+   Actions column gone behind the card's right edge at a 946 px viewport
+   (the wrapper is 508 px there). So the record stacks instead: the state
+   chip and the run name on one line, what the run trained on under them, the
+   score and the three actions on the next line, then the meta line. Nothing
+   is cut, and the wrapper's scrollbar is left as a last resort rather than as
+   the way the card is read.
+
+   The threshold is the table's own minimum width less one pixel, so the two
+   layouts meet exactly and neither overlaps the other. The column headings
+   are moved out of sight rather than removed: the rendered markup declares
+   role="table" and its row, cell and header roles, so the table keeps its
+   semantics once the display is block.
+
+   Every width rule in this card sits in this one block, the training data
+   name's cap included: the VEGA window is resized inside the VICARIUS
+   desktop, so a viewport query would measure a window this card does not
+   fill. ---- */
+@container vega-runs (max-width: 915px) {
+  .vega-runs-table {
+    display: block;
+    min-width: 0;
+  }
+  .vega-runs-table colgroup { display: none; }
+  .vega-runs-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .vega-runs-group { display: block; }
+  .vega-runs-group-cell { display: block; }
+  /* The wide layout's nowrap clips the group's own "N runs" count once the
+     heading no longer sits in a table cell with room beside it; the count
+     drops to its own line instead. Found 2026-09-22, the "8 runs" count
+     clipped at 946 px after the Continue from rename widened the heading. */
+  /* Type plus class, because .vega-runs-table th sets nowrap with that
+     specificity and a bare class selector never won (the pixel re-review of
+     2026-09-22 measured the computed value still nowrap at every width). */
+  .vega-runs-table th.vega-runs-group-cell { white-space: normal; }
+  .vega-runs-group-count {
+    display: block;
+    margin-left: 0;
+    margin-top: 2px;
+  }
+  .vega-runs-record { display: block; }
+  .vega-runs-main {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .vega-runs-main td {
+    display: block;
+    padding: 5px 8px 1px;
+  }
+  /* The state chip and the run name share the first line, what the run
+     trained on takes the second, and the score and the actions the third. */
+  .vega-runs-main td:first-child { flex: 0 0 auto; }
+  .vega-runs-main td:nth-child(2) {
+    flex: 1 1 60%;
+    min-width: 0;
+  }
+  .vega-runs-main td:nth-child(3) {
+    flex: 1 1 100%;
+    min-width: 0;
+    padding-top: 0;
+  }
+  /* The stacked record has no first column to carry the open project's edge,
+     so the whole record carries it. */
+  .vega-runs-record.is-mine-record td:first-child { box-shadow: none; }
+  .vega-runs-record.is-mine-record { box-shadow: inset 3px 0 0 var(--vr-magenta); }
+  .vega-runs-main td:nth-child(4) {
+    flex: 0 0 auto;
+    padding-top: 0;
+  }
+  .vega-runs-main td:nth-child(5) {
+    flex: 1 1 auto;
+    padding-top: 0;
+  }
+  .vega-runs-meta { display: block; }
+  .vega-runs-meta td { display: block; }
+  /* The name yields its line to its markers rather than pushing them out of
+     the card, and the three buttons wrap rather than being cut. A state
+     chip, which never shrinks in the wide layout, gives way to the card once
+     the card is narrower than the chip's own 280 px cap. */
+  .vega-runs-line1 { flex-wrap: wrap; }
+  .vega-runs-chip { max-width: 100%; }
+  /* On its own line the training data name has the card's width to use, and
+     gives way to the card rather than pushing past its edge. The column
+     headings are out of sight in this layout, so a bare second name under the
+     run name would read as another name: the cell says what it is instead. */
+  .vega-runs-trained { max-width: 100%; }
+  .vega-runs-trained::before {
+    content: "trained on ";
+    color: var(--vr-text-dim);
+  }
+  /* A run with no record would otherwise read "trained on not recorded", a
+     fragment; it reads "training data not recorded" instead, a fact in the
+     same shape as "size unknown" on the line under it. */
+  .vega-runs-trained.is-none::before { content: "training data "; }
+  .vega-runs-actions {
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+}

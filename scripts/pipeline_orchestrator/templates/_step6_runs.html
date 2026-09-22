@@ -1,0 +1,31 @@
+{# Step 5 (internal step 6) Trained runs registry, folded in from the retired
+   Train + Infer page (T10 of the 2026-09-04 VEGA fold-in) and rebuilt to the
+   registry window design on 2026-09-16. Since 2026-09-21 the card lives on
+   the Evaluate Model panel (Step 6 internally), inside the closed
+   "All trained models" disclosure that follows the Rounds ledger: the Train
+   panel now shows only the starting-model choice, and this card is where a
+   run trained anywhere is evaluated, promoted or continued from.
+
+   Var-free: the host includes it inside that disclosure, links
+   static/orchestrator_runs.css, loads static/orchestrator_runs.js, and calls
+   initStep6Runs() when the disclosure opens. Everything inside #s6-runs-body is
+   rendered by VegaRuns.render() from GET /api/step/6/all_runs, with the open
+   project's folder and its own training source read from
+   GET /api/project/state so its own runs are marked and named. Row actions dispatch vega:evaluate-run, vega:promote-run and
+   vega:finetune-from on #s6-runs-card with detail {run_dir, run_name, task,
+   family, map50, origin, project_name}; the host wires them.
+   All styling lives in orchestrator_runs.css under the root class. #}
+<div class="vega-runs" id="s6-runs-card" role="region" aria-labelledby="s6-runs-title">
+  <div class="vega-runs-head">
+    <h3 class="vega-runs-title" id="s6-runs-title">All trained models</h3>
+    <button type="button" class="vega-runs-tip"
+            title="VICARIUS lists every trained model, grouped into models that draw boxes, scored in box mAP50, and models that draw outlines, scored in outline mAP50, with the data each one learned from. The champion is the promoted run that Model Inference uses unless another is picked, and a model lab holds runs trained outside any project."
+            aria-label="About trained runs"><span>i</span></button>
+    <span class="vega-runs-spacer"></span>
+    <button type="button" class="btn btn-outline btn-sm" data-action="refresh"
+            title="Re-read every run folder and ledger.">Refresh</button>
+  </div>
+  <div id="s6-runs-body" data-role="body">
+    <div class="vega-runs-line vega-runs-dim">Loading runs</div>
+  </div>
+</div>
