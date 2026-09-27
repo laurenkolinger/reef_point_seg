@@ -31,7 +31,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from detect import detect_annotations, get_ocr_reader
 from species import SpeciesLookup, ocr_date_to_lookup_date, parse_transect_frame
-from export import export_batch
+from export import export_batch, REVIEW_TAGGING_ENABLED
 from summarize import write_summary
 import config as cfg
 
@@ -197,6 +197,8 @@ session = {
     'species_lookup': None,
     'flush_counter': 0,
     'flush_interval': 50,
+    'site_allocation': {},      # site -> frames Step 3 allocated (per_site)
+    'site_counts': {},          # site -> frames currently routed this run
 }
 
 LOG_LINES = {}
@@ -311,6 +313,10 @@ _ROUTING_REPORT_FIELDS = [
     # by a reserve frame, the reserve's report row records which frame it stood
     # in for (refilled_from) and why (refill_reason).
     'refilled_from', 'refill_reason',
+    # Site-aware refill: which site the replacement came from, and the per-site
+    # routed counts immediately after it was pulled in, so an operator can see
+    # the balance the refill was steering toward.
+    'refill_site', 'site_counts_after',
 ]
 
 
@@ -420,17 +426,87 @@ def _reserve_key(row):
     return row.get('frame_id') or row.get('basename') or str(row.get('_rank'))
 
 
+def _load_site_allocation(path):
+    """Read Step 3's per-site allocation from selection_summary.json.
+
+    Step 3 writes {"per_site": {site: n}, ...} beside selected_frames.csv. The
+    refill uses it to send a replacement to the site that is furthest behind
+    its allocation instead of whichever site happens to hold the lowest reserve
+    rank. Returns {} when the file is absent or unreadable, which is the
+    fallback path for projects selected before Step 3 emitted this file: the
+    refill then keeps its original rank ordering exactly.
+    """
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, 'r') as f:
+            doc = json.load(f)
+        per_site = doc.get('per_site') or {}
+        return {str(s): int(n) for s, n in per_site.items()}
+    except Exception as e:  # noqa: BLE001
+        log(f"selection_summary.json unreadable ({path}): {e}")
+        return {}
+
+
+def _site_deficit(site):
+    """How far behind its Step 3 allocation a site currently sits.
+
+    Positive means the site is owed frames. Sites with no allocation entry
+    score 0 so an unknown site never outranks a genuinely short one.
+    """
+    alloc = session.get('site_allocation') or {}
+    counts = session.get('site_counts') or {}
+    site = str(site or '')
+    if site not in alloc:
+        return 0
+    return int(alloc.get(site, 0)) - int(counts.get(site, 0))
+
+
+def _bump_site_count(site):
+    """Record one more routed frame at `site` (drives the deficit ordering)."""
+    site = str(site or '')
+    if not site:
+        return
+    counts = session.setdefault('site_counts', {})
+    counts[site] = int(counts.get(site, 0)) + 1
+
+
+def _drop_site_count(site):
+    """Give a site its slot back after one of its frames stops being routed.
+
+    An ocr_failed frame no longer occupies a slot, so the site is one frame
+    further from its allocation. Keeping the tally honest is what lets the
+    refill compare like with like; without it a site that lost frames to OCR
+    failures would still read as full.
+    """
+    site = str(site or '')
+    if not site:
+        return
+    counts = session.setdefault('site_counts', {})
+    counts[site] = max(0, int(counts.get(site, 0)) - 1)
+
+
 def _pull_reserve_frame(species_present):
     """Return the next unused reserve frame as an OCR-queue item, or None.
 
-    Selection: lowest reserve_rank unused row whose species intersect
-    `species_present`; if none match, fall back to any unused row (keeps the
-    overall count whole even when no same-species reserve remains). A reserve
-    whose _pts image cannot be resolved on disk is skipped (it is useless for
-    OCR) but still marked used so we don't reconsider it every failure. The
-    chosen row is marked used and resolved to the same dict shape as the
-    configure-time ocr_queue.append({...}) block, with refilled_from left for
-    the caller to stamp.
+    Selection: among unused rows whose species intersect `species_present` (or
+    any unused row when none match, which keeps the overall count whole), take
+    the one whose SITE is furthest behind Step 3's per-site allocation, with
+    the lowest reserve_rank breaking ties. When no allocation is on file
+    (session['site_allocation'] empty, i.e. a project selected before Step 3
+    wrote selection_summary.json) every deficit is 0 and the ordering collapses
+    to the original lowest-rank-first behavior.
+
+    Site awareness matters because OCR failures cluster: a dominant site that
+    already holds more than its share of the selection would otherwise supply
+    its own replacements and drift further past the cap.
+
+    A reserve whose _pts image cannot be resolved on disk is skipped (it is
+    useless for OCR) but still marked used so we don't reconsider it every
+    failure. The chosen row is marked used, its site count is bumped, and it is
+    resolved to the same dict shape as the configure-time
+    ocr_queue.append({...}) block, with refilled_from left for the caller to
+    stamp.
     """
     reserve = session.get('reserve_frames') or []
     used = session.setdefault('reserve_used', set())
@@ -454,6 +530,12 @@ def _pull_reserve_frame(species_present):
     else:
         candidates = _ocr_candidates(unused)
 
+    # Largest site deficit first, lowest reserve_rank as the tie-break. Sorted
+    # is stable, so with no allocation on file this is a no-op on rank order.
+    candidates = sorted(
+        candidates,
+        key=lambda r: (-_site_deficit(r.get('site')), r.get('_rank', 0)))
+
     for row in candidates:
         key = _reserve_key(row)
         basename = (row.get('basename') or '').strip()
@@ -476,6 +558,11 @@ def _pull_reserve_frame(species_present):
             year = 0
         date_str = str(row.get('date') or '').replace('-', '')
         site = row.get('site', '')
+        # Count it before returning so a second failure in the same run sees
+        # this site as one frame closer to its allocation.
+        _bump_site_count(site)
+        log(f"Reserve pick: {basename} from site {site or 'unknown'} "
+            f"(deficit vs step 3 allocation was {_site_deficit(site) + 1})")
         try:
             transect = int(float(row.get('transect') or 0))
             frame = int(float(row.get('frame') or 0))
@@ -512,6 +599,10 @@ def _record_refill_entry(repl):
     if any(e.get('frame_id') == repl['frame_id']
            and e.get('refilled_from') for e in report):
         return
+    # Post-refill per-site counts, compact and stable-ordered so the CSV column
+    # stays readable and diffable.
+    counts = session.get('site_counts') or {}
+    counts_after = ";".join(f"{s}={counts[s]}" for s in sorted(counts))
     report.append({
         'frame_id': repl['frame_id'],
         'basename': repl['basename'],
@@ -522,6 +613,8 @@ def _record_refill_entry(repl):
         'note': f"refill for {repl.get('refilled_from', '')}",
         'refilled_from': repl.get('refilled_from', ''),
         'refill_reason': repl.get('refill_reason', 'ocr_failed'),
+        'refill_site': repl.get('site', '') or '',
+        'site_counts_after': counts_after,
     })
     session['routing_report'] = report
     export_dir = session.get('export_dir')
@@ -566,15 +659,138 @@ def enrich_with_species(points, date_str, site, t_id, species_lookup):
 
 # ── CPC loading ──────────────────────────────────────────────
 
-def load_cpc_points(basename, year, cpc_dir, species_lookup):
-    """Load (x,y) coords from CPC file directly, using border-based scaling.
+# Process-local caches for the cpc_all season search below. A routing pass
+# touches thousands of frames, so both the season-folder listing and each
+# season's point_coords.csv are read from disk at most once per process,
+# however many frames resolve against them.
+_CPC_SEASON_LIST_CACHE = {}   # cpc_dir -> [season_folder_name, ...] (sorted)
+_CPC_SEASON_ROWS_CACHE = {}   # (cpc_dir, season) -> {frame_basename: [row, ...]}
 
-    Reads the .cpc file from CLIP_DIR to get raw coords + border rectangle,
-    then scales to image pixel space. Falls back to point_coords.csv if no
-    CPC file is found.
+
+def _cpc_season_folders(cpc_dir):
+    """List the season-folder names under a cpc_all root that hold points.
+
+    A season folder is a numeric-named subdirectory of `cpc_dir` with an
+    `ids/point_coords.csv` file inside it
+    (`cpc_all/<season>/ids/point_coords.csv`). Returns folder names as
+    strings, sorted, or an empty list when `cpc_dir` does not exist.
     """
-    from PIL import Image as PILImage
+    if cpc_dir in _CPC_SEASON_LIST_CACHE:
+        return _CPC_SEASON_LIST_CACHE[cpc_dir]
 
+    folders = []
+    if os.path.isdir(cpc_dir):
+        for name in os.listdir(cpc_dir):
+            if name.isdigit() and os.path.isfile(
+                    os.path.join(cpc_dir, name, 'ids', 'point_coords.csv')):
+                folders.append(name)
+    folders.sort()
+    _CPC_SEASON_LIST_CACHE[cpc_dir] = folders
+    return folders
+
+
+def _load_cpc_season_rows(cpc_dir, season):
+    """Return {frame_basename: [row, ...]} for one cpc_all season folder.
+
+    Reads `cpc_dir/season/ids/point_coords.csv` once per process (cached in
+    `_CPC_SEASON_ROWS_CACHE`) and groups its rows by frame basename (the
+    `raw_image` column with its extension stripped), so a per-frame lookup
+    is an O(1) dict access after the first read.
+    """
+    cache_key = (cpc_dir, str(season))
+    cached = _CPC_SEASON_ROWS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    by_basename = {}
+    csv_path = os.path.join(cpc_dir, str(season), 'ids', 'point_coords.csv')
+    if os.path.exists(csv_path):
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                stem = os.path.splitext(row['raw_image'])[0]
+                by_basename.setdefault(stem, []).append(row)
+
+    _CPC_SEASON_ROWS_CACHE[cache_key] = by_basename
+    return by_basename
+
+
+def find_cpc_rows_any_season(basename, year, cpc_dir):
+    """Find a frame's CPC point rows, searching every season folder if needed.
+
+    A TCRMP season surveyed late in the year can carry dates into the
+    following January through June, but cpc_all/<folder>/ids/point_coords.csv
+    is named for the SEASON, not the date (cpc_all/2017 holds 2,623 frames
+    dated January to June 2018). A calendar-year-only lookup drops every one
+    of those frames at routing. This checks the frame's own calendar-year
+    folder first. If it is not there, the previous season (year minus 1,
+    the late-survey case above) is checked next, then every remaining
+    season in ascending order. When the frame is found in more than one
+    season and their rows differ, the season chosen by this order wins and
+    the conflict is logged.
+
+    Args:
+        basename: frame stem as point_coords.csv's `raw_image` column keys
+            it, without extension (e.g. "TCRMP20180118_clip_BWR_T101").
+        year: the frame's calendar year, from the selected-frames row.
+        cpc_dir: root of the cpc_all tree
+            (`<cpc_dir>/<season>/ids/point_coords.csv`).
+
+    Returns:
+        (rows, season_used): `rows` is the list of CSV row dicts for the
+        frame (empty if it is not in any season folder); `season_used` is
+        the season-folder name (string) the rows came from, or None if the
+        frame was not found anywhere.
+    """
+    calendar_year = str(year)
+    matches = {}  # season -> rows, for every season that names this frame
+    for season in _cpc_season_folders(cpc_dir):
+        rows = _load_cpc_season_rows(cpc_dir, season).get(basename)
+        if rows:
+            matches[season] = rows
+
+    if not matches:
+        return [], None
+
+    if calendar_year in matches:
+        calendar_rows = matches[calendar_year]
+        for season, rows in matches.items():
+            if season != calendar_year and rows != calendar_rows:
+                log(f"WARNING: {basename} has different CPC points in season "
+                    f"{season} than in its calendar year {calendar_year}; "
+                    f"using {calendar_year}")
+        return calendar_rows, calendar_year
+
+    # Not in the calendar year: prefer the previous season (year - 1), the
+    # late-survey case described above, then every remaining matching
+    # season in ascending order.
+    previous_season = str(int(year) - 1)
+    priority = [previous_season] + sorted(s for s in matches if s != previous_season)
+    season_used = next(s for s in priority if s in matches)
+
+    chosen_rows = matches[season_used]
+    for season, rows in matches.items():
+        if season != season_used and rows != chosen_rows:
+            log(f"WARNING: {basename} has different CPC points in season "
+                f"{season} than in season {season_used}; using {season_used}")
+
+    log(f"CPC points for {basename} found in season {season_used}, "
+        f"not calendar year {calendar_year}")
+    return chosen_rows, season_used
+
+
+def load_cpc_points(basename, year, cpc_dir, species_lookup):
+    """Load (x,y) coords + species for one pre-2020 frame from cpc_all.
+
+    Verifies a matching .cpc file when the whole-tree index has one for this
+    basename (name match + border sanity check only): coordinates and
+    species always come from point_coords.csv, never from the .cpc file's
+    own border-scaled geometry, so a missing or unreadable raw image no
+    longer drops the frame. Point rows are found with
+    `find_cpc_rows_any_season`, which searches every cpc_all season folder
+    so a frame surveyed late in one season (dated into the next calendar
+    year) is not lost.
+    """
     # Resolve the .cpc file via the prebuilt whole-tree index (season-agnostic:
     # the .cpc may sit in a season folder that does not match the date year).
     cpc_file_path = session.get('cpc_index', {}).get(basename)
@@ -613,50 +829,40 @@ def load_cpc_points(basename, year, cpc_dir, species_lookup):
             log(f"WARNING: Invalid CPC borders for {basename}, falling back to CSV")
             cpc_file_path = None
 
-    if cpc_file_path:
-        n_points = int(lines[5])
-        label_start = 6 + n_points
+    if cpc_file_path and not session.get('clip_index', {}).get(basename):
+        # The .cpc file's own coordinates and the raw image's size are never
+        # used (points and species always come from point_coords.csv below),
+        # so a missing raw image is informational only and no longer drops
+        # the frame.
+        log(f"NOTE: No raw image indexed for {basename}; using CPC points "
+            f"from point_coords.csv anyway")
 
-        # Get image dimensions for scaling (season-agnostic clip index).
-        raw_path = session.get('clip_index', {}).get(basename)
-        if not raw_path:
-            log(f"WARNING: No raw image for {basename}, cannot scale CPC coords")
-            return []
-        with PILImage.open(raw_path) as img:
-            img_w, img_h = img.size
-
-        # CPC file found but we use cpc_all for coords+species — fall through
-        pass
-
-    # ── Read from cpc_all/point_coords.csv (correct coords + species) ──
-    csv_path = os.path.join(cpc_dir, str(year), 'ids', 'point_coords.csv')
-    if not os.path.exists(csv_path):
+    # ── Read from cpc_all/point_coords.csv (correct coords + species),
+    # searching every season folder so a frame dated into the next calendar
+    # year (a season surveyed late) is not lost. ──
+    rows, _season_used = find_cpc_rows_any_season(basename, year, cpc_dir)
+    if not rows:
         return []
 
     points = []
-    with open(csv_path) as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            raw_stem = os.path.splitext(row['raw_image'])[0]
-            if raw_stem != basename:
-                continue
-            px, py = float(row['x']), float(row['y'])
-            # Apply species recode (e.g. MFAV->OFAV, MA->OA)
-            sp_code = row.get('species_code', '')
-            sp_code = SPECIES_REMAP.get(sp_code, sp_code)
-            points.append({
-                'label': row['label'],
-                'x': px,
-                'y': py,
-                'letter_cx': px,
-                'letter_cy': py - 50,
-                'species_code': sp_code,
-                'species_name': row.get('species_name', ''),
-                'category': row.get('category', ''),
-                'ocr_confidence': 100,
-                'has_crosshair': True,
-                'source': 'cpc',
-            })
+    for row in rows:
+        px, py = float(row['x']), float(row['y'])
+        # Apply species recode (e.g. MFAV->OFAV, MA->OA)
+        sp_code = row.get('species_code', '')
+        sp_code = SPECIES_REMAP.get(sp_code, sp_code)
+        points.append({
+            'label': row['label'],
+            'x': px,
+            'y': py,
+            'letter_cx': px,
+            'letter_cy': py - 50,
+            'species_code': sp_code,
+            'species_name': row.get('species_name', ''),
+            'category': row.get('category', ''),
+            'ocr_confidence': 100,
+            'has_crosshair': True,
+            'source': 'cpc',
+        })
 
     return points
 
@@ -884,7 +1090,12 @@ def index():
                            orchestrator_url=os.environ.get('TCRMP_ORCHESTRATOR_URL', '').rstrip('/'),
                            default_reference_mode=_env_ref,
                            default_shuffle=_env_shuf,
-                           default_batch_size=_env_batch)
+                           default_batch_size=_env_batch,
+                           # One source of truth for the expert-review lock: the
+                           # page renders the button's disabled state, its tooltip
+                           # and its help text from this, so flipping
+                           # REVIEW_TAGGING_ENABLED in export.py restores the tool.
+                           review_tagging_enabled=REVIEW_TAGGING_ENABLED)
 
 
 @app.route('/api/configure', methods=['POST'])
@@ -929,6 +1140,20 @@ def configure():
     )
     session['reserve_frames'] = _load_reserve(reserve_path)
     session['reserve_used'] = set()
+
+    # Step 3's per-site allocation steers the refill toward the site furthest
+    # behind, so failures clustered at a dominant site do not draw their own
+    # replacements from that same site. Absent file => empty allocation =>
+    # the refill keeps its original lowest-rank-first order.
+    summary_path = (
+        os.environ.get('TCRMP_SELECTION_SUMMARY')
+        or os.path.join(os.path.dirname(frames_path), 'selection_summary.json')
+    )
+    session['site_allocation'] = _load_site_allocation(summary_path)
+    session['site_counts'] = {}
+    if session['site_allocation']:
+        log(f"Step 3 site allocation loaded from {summary_path} "
+            f"({len(session['site_allocation'])} sites)")
 
     os.makedirs(session['export_dir'], exist_ok=True)
 
@@ -1027,6 +1252,7 @@ def configure():
 
         if det_key in already_processed:
             already_processed_hits += 1
+            _bump_site_count(site)
             _record(frame_id, basename, year, route, 'already_processed',
                     note='detection already present in export dir')
             continue
@@ -1061,6 +1287,7 @@ def configure():
 
             session['annotations_by_year'].setdefault(year, {})[det_key] = detection
             cpc_loaded += 1
+            _bump_site_count(site)
             _record(frame_id, basename, year, route, 'routed',
                     resolved_path=raw_path or '',
                     note='' if raw_path else 'CPC points routed but raw image not found')
@@ -1096,6 +1323,7 @@ def configure():
                 'basename': basename,
                 'species_present': sp_present,
             })
+            _bump_site_count(site)
             # OCR frames route into the queue here; whether OCR actually
             # detects anything (ocr_failed) is resolved when the queue runs
             # (see _record_ocr_outcome). We provisionally mark routed so the
@@ -1250,6 +1478,9 @@ def _process_one_item(item, position_label=''):
         _downgrade_routing_outcome(
             item['frame_id'], 'ocr_failed',
             note='image found but OCR detected no annotations')
+        # The failed frame stops occupying a slot at its site, so that site is
+        # one frame further from its Step 3 allocation again.
+        _drop_site_count(item.get('site', ''))
 
         # Reserve refill (Task 9): swap in the next species-matched reserve so
         # the per-species target stays whole. If the reserve is exhausted (or

@@ -49,7 +49,6 @@ DEFAULT_CATEGORIES = [
 
 # ── Processing ──────────────────────────────────────────────────────
 
-FLUSH_INTERVAL = 20                    # save state every N images
 REVIEW_BATCH_SIZE = 10                 # images per review batch
 
 # ── Export ──────────────────────────────────────────────────────────
@@ -59,7 +58,9 @@ SYMLINK_IMAGES = True                  # symlink raw images (saves disk space)
 
 # ── Server ──────────────────────────────────────────────────────────
 
-PORT = 5085
+# TODO T20260826-223636: was 5085, which collides with vicariusLLM's
+# autostart port on this box; vicariusLLM keeps 5085, editMasks moved off it.
+PORT = 5083
 
 # ── Combined-annotator mode (step 4.test) ───────────────────────────
 # When 1, skip the auto-segment-all pass. Prompt points are loaded as
@@ -79,6 +80,11 @@ REVIEWER = os.environ.get('TCRMP_REVIEWER', '')
 # learning loop mode: the app boots straight into the review queue via
 # POST /api/resume, skipping configure/routing entirely (the export_dir
 # already carries a seeded segmentations.json with pending model masks).
+# 'edit' reopens a finished export for correction and is THIS fork's default.
+# 'standalone' (the no-project "Annotate Images" session) belongs to
+# combinedAnnotate only: editMasks ships no standalone routes and no
+# STANDALONE_ROOT, so that mode never boots here.
+# One of: 'configure', 'resume', 'edit'.
 SESSION_MODE = os.environ.get('TCRMP_SESSION_MODE', 'edit').strip().lower()
 
 # Pipeline orchestrator overrides (no effect when env vars are unset/empty)

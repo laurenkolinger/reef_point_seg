@@ -9,7 +9,11 @@ Outcome rules (computed from a finished image's masks):
   found_expert   : an ACCEPTED non-review mask of that species carries an
                    accepted expert ID (expert_id.mode == 'EXPERT').
   found_manual   : an ACCEPTED non-review mask of that species has
-                   source_type in {manual_box, manual_click}.
+                   source_type in {manual_box, manual_click, merged}. A
+                   'merged' mask is always the product of an operator
+                   hand-merging reviewed masks (POST .../merge_many, gated on
+                   a named reviewer), so it counts as manual work even though
+                   no single manual_box/manual_click prompt produced it.
   found_ai       : an ACCEPTED non-review mask of that species exists but is
                    only model-proposed (source_type in {auto, exemplar, model}).
   pending_expert : a non-rejected REVIEW mask is still awaiting an expert ID.
@@ -30,7 +34,7 @@ AST = timezone(timedelta(hours=-4))
 
 CSV_HEADER = ['basename', 'label', 'outcome', 'source', 'reviewer', 'at', 'project_id']
 
-_MANUAL_SOURCES = {'manual_box', 'manual_click'}
+_MANUAL_SOURCES = {'manual_box', 'manual_click', 'merged'}
 _AI_SOURCES = {'auto', 'exemplar', 'model'}
 
 

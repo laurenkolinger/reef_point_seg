@@ -11,6 +11,9 @@ Outputs:
   output/route_ocr.csv            — frames needing OCR processing (2020+)
   output/route_missing.csv        — frames with no source image found
   output/selection_summary.txt    — human-readable summary
+  output/selection_summary.json   : machine-readable per-site and per-species
+                                    summary (Step 4 reserve refill and the
+                                    orchestrator read this)
   output/selection_diagnostics.png — distribution plots
 
 Usage:
@@ -22,6 +25,7 @@ Usage:
 import os
 import sys
 import glob
+import json
 import math
 import random
 import argparse
@@ -167,8 +171,18 @@ def frame_eligibility(binary, clip_index, cpc_basenames, name_fn):
     A frame is eligible iff its source image resolves on disk AND its point
     source resolves: pre-2020 -> basename in cpc_basenames (real CPC coords);
     2020+ -> a `_pts` annotated image resolves (OCR reads it in Step 4).
-    Image existence and 2020+ _pts existence are HARD gates here, so a selected
-    frame can never be dropped downstream as image_missing / cpc_missing.
+    Image existence, pre-2020 cpc_basenames membership, and 2020+ _pts
+    existence are HARD gates here, so a selected frame can never be dropped
+    downstream as image_missing or cpc_missing.
+
+    cpc_basenames is a union across every cpc_all season folder for the
+    candidate years (load_cpc_basenames), not a per-frame calendar-year
+    check, because a season surveyed late in the year carries dates into the
+    next January through June while cpc_all/<folder> is named for the
+    season, not the date (cpc_all/2017 holds 2,623 frames dated into 2018).
+    The downstream lookup in TCRMPclip_placePoints.load_cpc_points
+    (find_cpc_rows_any_season) searches the same set of season folders, so
+    this gate and that lookup agree on which frames have real CPC points.
     """
     keep = []
     excl = {"image_missing": 0, "cpc_missing": 0, "pts_missing": 0}
@@ -288,58 +302,25 @@ def even_allocate(binary, species_list, years, target):
     return alloc
 
 
-def allocate_by_site(avail_by_site, target, cap_frac=0.25):
-    """Distribute `target` frame-instances across sites (water-filling).
+def _water_fill_at_cap(avail, sites, target, cap):
+    """One water-fill of `target` across `sites` under a FIXED per-site cap.
 
-    Pure, deterministic, no RNG. Guarantees:
-      - every site with avail >= 1 gets >= 1 (inclusion is a HARD rule);
-      - no site exceeds floor(cap_frac * total_allocated), UNLESS that cap is
-        mathematically below 1 (too few sites for the cap to be satisfiable at
-        all) - in that case every site is pinned at its floor of 1 and the cap
-        is documented as unsatisfiable rather than violated (see main()'s
-        WARN print for the runtime version of this check);
-      - no site exceeds its own avail;
-      - allocation is monotonic in avail (higher-abundance sites get >= lower
-        ones), modulo the cap and integer rounding;
-      - same input -> same output.
+    Pure and deterministic. Every site starts at its inclusion floor of 1, then
+    the remainder is placed proportional to avail using the largest-remainder
+    method, bounded per site by min(avail, cap). Returns {site: count}.
 
-    Args:
-      avail_by_site: {site: available_frame_count} - sites with avail <= 0
-        are dropped, not floored.
-      target: requested total frame-instances for this species.
-      cap_frac: max share of the FINAL allocated total any one site may hold.
-
-    Returns: {site: allocated_count}.
+    The cap is fixed for the whole fill (allocate_by_site chooses it), which is
+    what makes the fill converge: the previous version recomputed the cap from
+    the RUNNING total inside the loop, so the very first round saw
+    floor(cap_frac * n_sites) and stalled at zero headroom whenever
+    n_sites * cap_frac < 2 (any site count of 7 or fewer at cap_frac 0.25).
     """
-    sites = [s for s, a in avail_by_site.items() if a and a >= 1]
-    if not sites:
-        return {}
-
-    avail = {s: int(avail_by_site[s]) for s in sites}
-    n_sites = len(sites)
-
-    # Step 1: inclusion floor - every site starts at 1 (never exceeds avail,
-    # and avail >= 1 for every site here so min(1, avail) == 1).
     result = {s: 1 for s in sites}
+    remaining = target - len(sites)
 
-    # Step 2: if target <= n_sites, the floor already satisfies (and exceeds,
-    # if target < n_sites) the request. Inclusion beats the numeric target.
-    if target <= n_sites:
-        return result
-
-    remaining = target - n_sites
-    if remaining <= 0:
-        return result
-
-    # Step 3: water-fill the remainder proportional to avail, subject to a
-    # per-site cap that is recomputed each round from the RUNNING total (the
-    # cap is a share of what has actually been allocated so far, not of the
-    # raw target, so it stays meaningful as the total grows during filling).
     for _ in range(50):
         if remaining <= 0:
             break
-        current_total = sum(result.values())
-        cap = max(1, math.floor(cap_frac * current_total))
         headroom = {s: max(0, min(avail[s], cap) - result[s]) for s in sites}
         total_headroom = sum(headroom.values())
         if total_headroom <= 0:
@@ -390,6 +371,101 @@ def allocate_by_site(avail_by_site, target, cap_frac=0.25):
 
         if not made_progress:
             break  # nothing placeable this round, stop (converged)
+
+    return result
+
+
+def _smallest_cap_reaching(avail, sites, target, lo, hi):
+    """Smallest per-site cap in [lo, hi] whose fill reaches min(target, avail).
+
+    sum(_water_fill_at_cap(...)) is monotone non-decreasing in cap, so a binary
+    search finds the tightest (most balanced) cap that still meets the request.
+    Used only when cap_frac itself is unsatisfiable, i.e. when there are too
+    few sites for any allocation to hold every site at or under cap_frac.
+    """
+    goal = min(target, sum(avail[s] for s in sites))
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if sum(_water_fill_at_cap(avail, sites, target, mid).values()) >= goal:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+
+
+def allocate_by_site(avail_by_site, target, cap_frac=0.25):
+    """Distribute `target` frame-instances across sites (water-filling).
+
+    Pure, deterministic, no RNG. Guarantees:
+      - every site with avail >= 1 gets >= 1 (inclusion is a HARD rule);
+      - no site exceeds floor(cap_frac * total_allocated), UNLESS the site
+        count makes that cap mathematically unsatisfiable (fewer than
+        ceil(1 / cap_frac) sites: 2 or 3 sites can never both clear a 25
+        percent share while each holds its floor of 1). In that case the cap
+        is documented as unsatisfiable rather than violated, and the tightest
+        cap that still meets the request is used instead, which is the most
+        even split the data allows (see main()'s WARN print for the runtime
+        version of this check);
+      - no site exceeds its own avail;
+      - allocation is monotonic in avail (higher-abundance sites get >= lower
+        ones), modulo the cap and integer rounding;
+      - same input -> same output.
+
+    Convergence: the cap is seeded from the intended total, not from the
+    post-floor running total, and then shrunk to a fixed point. Because the
+    filled total A(T) is monotone non-decreasing in the assumed total T, the
+    descent from T = min(target, total_avail) settles on the LARGEST total
+    consistent with cap = floor(cap_frac * total). The previous
+    running-total seed stalled at zero headroom for any site count of 7 or
+    fewer at cap_frac 0.25 and returned exactly n_sites frames.
+
+    Args:
+      avail_by_site: {site: available_frame_count} - sites with avail <= 0
+        are dropped, not floored.
+      target: requested total frame-instances for this species.
+      cap_frac: max share of the FINAL allocated total any one site may hold.
+
+    Returns: {site: allocated_count}.
+    """
+    sites = sorted(s for s, a in avail_by_site.items() if a and a >= 1)
+    if not sites:
+        return {}
+
+    avail = {s: int(avail_by_site[s]) for s in sites}
+    n_sites = len(sites)
+
+    # Step 1 and 2: if target <= n_sites the inclusion floor already satisfies
+    # (and exceeds, if target < n_sites) the request. Inclusion beats the
+    # numeric target.
+    if target <= n_sites:
+        return {s: 1 for s in sites}
+
+    total_avail = sum(avail.values())
+    budget = min(target, total_avail)
+
+    cap_satisfiable = cap_frac > 0 and n_sites >= math.ceil(1 / cap_frac)
+
+    if not cap_satisfiable:
+        # Too few sites for cap_frac to bind on every site at once. The most
+        # balanced allocation that still meets the request is the one with the
+        # smallest workable per-site ceiling, floored at an even split.
+        lo = max(1, math.ceil(budget / n_sites))
+        hi = max(lo, max(avail.values()))
+        cap = _smallest_cap_reaching(avail, sites, target, lo, hi)
+        return _water_fill_at_cap(avail, sites, target, cap)
+
+    # Cap-frac fixed point: start from the intended total so real headroom
+    # exists beyond the floor round, then shrink until the cap that produced
+    # the allocation is the cap the allocation's own total supports.
+    assumed_total = budget
+    result = {s: 1 for s in sites}
+    for _ in range(64):
+        cap = max(1, math.floor(cap_frac * assumed_total))
+        result = _water_fill_at_cap(avail, sites, target, cap)
+        allocated = sum(result.values())
+        if allocated >= assumed_total:
+            break
+        assumed_total = allocated
 
     return result
 
@@ -460,6 +536,26 @@ def _spread_alloc_across_years(binary_sub, species_list, site_target_by_sp, sub_
     return alloc
 
 
+def compute_site_targets(binary, species_list, target, cap_frac=0.25):
+    """Per-species site allocation: {species: {site: allocated_count}}.
+
+    Abundance comes from the eligible pool itself (frames at that site carrying
+    the label), so an allocation can never exceed what the site can supply.
+    Pure and deterministic; site_balanced_select drives the selection from it
+    and main() reads the same numbers for the summary, so the reported
+    allocation and the allocation actually used are the same object.
+    """
+    site_target = {}
+    for sp in species_list:
+        avail_by_site = {
+            s: int(cnt) for s, cnt in binary.groupby("site")[sp].sum().items()
+            if cnt > 0
+        }
+        site_target[sp] = allocate_by_site(avail_by_site, target,
+                                           cap_frac=cap_frac)
+    return site_target
+
+
 def site_balanced_select(binary, species_list, years, target, cap_frac=0.25):
     """Site-balanced frame selection: no site may exceed cap_frac of the
     selected total, every site carrying a target label is included, and
@@ -479,14 +575,10 @@ def site_balanced_select(binary, species_list, years, target, cap_frac=0.25):
 
     # Step 1: per-species site allocation from abundance (eligible frames at
     # that site carrying the label - selection-consistent, can't exceed avail).
-    site_target = {}  # site_target[sp][site] = count
+    site_target = compute_site_targets(binary, species_list, target,
+                                       cap_frac=cap_frac)  # [sp][site] = count
     all_sites = set()
     for sp in species_list:
-        avail_by_site = {
-            s: int(cnt) for s, cnt in binary.groupby("site")[sp].sum().items()
-            if cnt > 0
-        }
-        site_target[sp] = allocate_by_site(avail_by_site, target, cap_frac=cap_frac)
         all_sites.update(site_target[sp].keys())
 
     selected = []
@@ -509,7 +601,14 @@ def site_balanced_select(binary, species_list, years, target, cap_frac=0.25):
 
         site_alloc = _spread_alloc_across_years(sub, species_list, site_sp_target, sub_years)
 
-        site_selected, site_achieved = greedy_select(sub, species_list, site_alloc, sub_years)
+        # Each label is topped up to ITS OWN site allocation. Without
+        # target_by_species, greedy_select recovers one scalar target (the max
+        # allocation-sum across labels) and applies it to every label, so a
+        # low-target label at a dominant site was pulled up to the dominant
+        # label's number and the site swelled past its combined allocation.
+        site_selected, site_achieved = greedy_select(
+            sub, species_list, site_alloc, sub_years,
+            target_by_species=site_sp_target)
 
         for fid in site_selected:
             if fid in used:
@@ -522,7 +621,7 @@ def site_balanced_select(binary, species_list, years, target, cap_frac=0.25):
     return selected, achieved
 
 
-def greedy_select(binary, species_list, alloc, years):
+def greedy_select(binary, species_list, alloc, years, target_by_species=None):
     """Year-stratified greedy frame selection with a forgiving top-up.
 
     Pass 0 (year-stratified, unchanged): two sub-passes — first selects
@@ -547,10 +646,18 @@ def greedy_select(binary, species_list, alloc, years):
     frame remains for any short label (genuinely exhausted). A label only stays
     SHORT when binary[sp].sum() is truly < target.
 
-    Preserves the original signature and the (selected, achieved) return; the
-    per-species `target` is recovered from the allocation (the even_allocate
-    pass distributes the full scalar target across years for any label whose
-    total availability >= target, so the max allocation-sum is that target).
+    Preserves the (selected, achieved) return. `target_by_species` is the only
+    added argument and it is optional:
+      - omitted (the global path): the per-label target is recovered from the
+        allocation exactly as before, as ONE scalar (the even_allocate pass
+        distributes the full scalar target across years for any label whose
+        total availability >= target, so the max allocation-sum is that
+        target). Behavior is byte-for-byte the old behavior.
+      - supplied (the per-site path in site_balanced_select): each label is
+        topped up to its OWN number. One scalar is wrong per site, because a
+        site's allocation differs per label; recovering the max made a
+        low-allocation label chase the dominant label's target and inflated
+        the dominant site's share of the selection.
     """
     has_central = all(f"{sp}_central" in binary.columns for sp in species_list)
 
@@ -614,10 +721,17 @@ def greedy_select(binary, species_list, alloc, years):
             print(f"  {sp}: {central}/{total} central ({pct:.0f}%)")
 
     # ── Top-up: redistribute deficits across years (relax progressively) ────
-    # Recover the scalar per-label target from the allocation. even_allocate
-    # spreads the full target across years for any label whose total
-    # availability >= target, so the largest allocation-sum is the true target.
-    target = max((sum(alloc[sp].values()) for sp in species_list), default=0)
+    # Per-label target. When the caller supplies one (site_balanced_select
+    # does, per site), use it verbatim; otherwise recover the scalar from the
+    # allocation. even_allocate spreads the full target across years for any
+    # label whose total availability >= target, so the largest allocation-sum
+    # is the true target.
+    if target_by_species is None:
+        scalar_target = max(
+            (sum(alloc[sp].values()) for sp in species_list), default=0)
+        targets = {sp: scalar_target for sp in species_list}
+    else:
+        targets = {sp: int(target_by_species.get(sp, 0)) for sp in species_list}
     # True availability per label — used to decide genuine exhaustion (SHORT).
     sp_total = {sp: int(binary[sp].sum()) for sp in species_list}
 
@@ -634,7 +748,7 @@ def greedy_select(binary, species_list, alloc, years):
 
     def _short_species():
         return [sp for sp in species_list
-                if achieved[sp] < target and achieved[sp] < sp_total[sp]]
+                if achieved[sp] < targets[sp] and achieved[sp] < sp_total[sp]]
 
     for rung, label, keep_central in relax_rungs:
         # Repeat this rung until it can no longer make progress (each iteration
@@ -685,7 +799,7 @@ def greedy_select(binary, species_list, alloc, years):
             # much are they still short.
             helps = [sp for sp in short if int(binary.loc[best, sp]) > 0]
             deficit_str = ", ".join(
-                f"{sp} short by {target - achieved[sp]}" for sp in helps
+                f"{sp} short by {targets[sp] - achieved[sp]}" for sp in helps
             )
             print(f"Top-up pass {rung} (relaxed: {label}): "
                   f"{deficit_str} -> pulling {best}")
@@ -703,23 +817,73 @@ def greedy_select(binary, species_list, alloc, years):
             break
 
     # ── Final per-label top-up summary ──────────────────────────────────────
+    # The reason is computed, not assumed: a shortfall only reads as pool
+    # exhaustion when every frame carrying the label was actually taken.
     print("Top-up summary:")
     for sp in species_list:
-        if achieved[sp] >= target:
-            print(f"  {sp:6s}: OK ({achieved[sp]}/{target})")
+        reason = shortfall_reason(achieved[sp], targets[sp], sp_total[sp],
+                                  alloc_total=sum(alloc[sp].values()))
+        if reason == "ok":
+            print(f"  {sp:6s}: OK ({achieved[sp]}/{targets[sp]})")
+        elif reason == "pool exhausted":
+            print(f"  {sp:6s}: SHORT(pool exhausted) "
+                  f"({achieved[sp]}/{targets[sp]}; "
+                  f"only {sp_total[sp]} frames exist)")
         else:
-            # SHORT must only remain when the data is genuinely exhausted.
-            print(f"  {sp:6s}: SHORT(exhausted) "
-                  f"({achieved[sp]}/{target}; only {sp_total[sp]} frames exist)")
+            print(f"  {sp:6s}: SHORT({reason}) "
+                  f"({achieved[sp]}/{targets[sp]}; "
+                  f"{sp_total[sp]} frames exist)")
 
     return selected, achieved
 
 
+SHORTFALL_REASONS = ("ok", "cap-limited", "allocation-limited", "pool exhausted")
+
+
+def shortfall_reason(achieved, target, pool_total, alloc_total=None):
+    """Why a label finished where it did. One of SHORTFALL_REASONS.
+
+    Every shortfall used to print "pool exhausted", which is only true when the
+    selection actually took every frame carrying the label. The three real
+    causes are now separated:
+
+      ok                 - the target was met.
+      pool exhausted     - achieved == the whole eligible pool for that label;
+                           no frame was left to take.
+      cap-limited        - the pool could have supplied the target but the
+                           per-site cap held the allocation below it. When
+                           pool_total >= target, an allocation below target can
+                           only come from the cap: the water-fill runs until
+                           either the target is met or every site sits at
+                           min(avail, cap), and all-at-avail would mean the
+                           allocation equals the pool.
+      allocation-limited - the allocation covered the target but the per-site
+                           and per-year spread could not place it.
+
+    Args:
+      achieved: frame-instances actually selected for the label.
+      target: requested frame-instances for the label.
+      pool_total: frames in the eligible pool carrying the label.
+      alloc_total: summed site allocation for the label, when site balance is
+        on. None on the global path, where no site allocation exists.
+    """
+    if achieved >= target:
+        return "ok"
+    if pool_total is not None and achieved >= pool_total:
+        return "pool exhausted"
+    if alloc_total is not None and alloc_total < target:
+        return "cap-limited"
+    return "allocation-limited"
+
+
 def build_summary_lines(candidates, eligible, selected, reserve,
-                        species_list, achieved, target, exclusions):
+                        species_list, achieved, target, exclusions,
+                        reasons=None):
     """Return lines for the eligibility-funnel block of selection_summary.txt.
 
-    Pure helper — no I/O, testable in isolation.
+    Pure helper, no I/O, testable in isolation. `reasons` is an optional
+    {species: reason} map from shortfall_reason(); omitting it keeps the
+    original wording so callers that do not compute reasons are unaffected.
     """
     L = ["=== Eligibility funnel ===",
          f"  candidates : {candidates:,}",
@@ -734,17 +898,101 @@ def build_summary_lines(candidates, eligible, selected, reserve,
          "=== Per-species (achieved / target) ==="]
     for sp in species_list:
         a = achieved.get(sp, 0)
-        flag = "[OK]" if a >= target else f"[SHORT by {target - a}; pool exhausted]"
+        if a >= target:
+            flag = "[OK]"
+        else:
+            why = (reasons or {}).get(sp) or "pool exhausted"
+            flag = f"[SHORT by {target - a}; {why}]"
         L.append(f"  {sp:6s}: {a}/{target}  {flag}")
     L.append("")
     return L
 
 
+def build_selection_summary(species_list, achieved, target, per_site,
+                            pool_totals, alloc_totals, cap_frac, n_selected):
+    """Machine-readable twin of selection_summary.txt.
+
+    Written as output/selection_summary.json beside the text summary. Step 4's
+    reserve refill reads per_site to steer a replacement toward the site with
+    the largest deficit, and the orchestrator UI reads per_species to show why
+    a label finished short. Pure helper, no I/O.
+
+    Keys:
+      per_site      {site: selected frame count}
+      per_species   {species: {target, achieved, reason}}
+      cap_frac      the per-site share cap that was requested
+      cap_ok        did the largest site actually stay at or under cap_frac
+      n_selected    total frames selected
+      shortfalls    [{species, target, achieved, reason}] for every label whose
+                    reason is not "ok"
+    """
+    per_species = {}
+    shortfalls = []
+    for sp in species_list:
+        a = int(achieved.get(sp, 0))
+        reason = shortfall_reason(
+            a, target,
+            (pool_totals or {}).get(sp),
+            (alloc_totals or {}).get(sp))
+        per_species[sp] = {"target": int(target), "achieved": a,
+                           "reason": reason}
+        if reason != "ok":
+            shortfalls.append({"species": sp, "target": int(target),
+                               "achieved": a, "reason": reason})
+
+    per_site = {str(s): int(c) for s, c in (per_site or {}).items()}
+    total = int(n_selected)
+    if total > 0 and per_site:
+        cap_ok = bool(max(per_site.values()) / total <= cap_frac + 1e-9)
+    else:
+        cap_ok = True
+    n_sites = len(per_site)
+    cap_satisfiable = bool(
+        cap_frac > 0 and n_sites >= math.ceil(1 / cap_frac)) if n_sites else True
+
+    return {
+        "per_site": per_site,
+        "per_species": per_species,
+        "cap_frac": float(cap_frac),
+        "cap_ok": cap_ok,
+        "cap_satisfiable": cap_satisfiable,
+        "n_selected": total,
+        "shortfalls": shortfalls,
+    }
+
+
 def build_reserve_rows(binary, selected, species_list, name_fn, clip_index):
-    """Eligible-but-unselected frames, randomly ranked, tagged by which target
-    species they carry. The Step 4 OCR-failure refill draws from this pool."""
-    reserve_ids = [fid for fid in binary.index if fid not in set(selected)]
+    """Eligible-but-unselected frames, ranked, tagged by which target species
+    they carry. The Step 4 OCR-failure refill draws from this pool.
+
+    Rank order is under-represented sites first: a frame's rank rises with the
+    share of the SELECTION its site already holds, and the fresh-random shuffle
+    breaks ties within a site. Step 4 filters this list by species and takes
+    the lowest rank it can use, so a rank order that ignored site sent
+    replacements straight back to whichever site happened to shuffle to the
+    top, typically the dominant one. Ordering by site share means that within
+    any species bucket Step 4 sees the most under-represented sites first.
+    """
+    selected_set = set(selected)
+    reserve_ids = [fid for fid in binary.index if fid not in selected_set]
     random.shuffle(reserve_ids)  # fresh-random order, no seed
+
+    # Share of the selection each site already holds. A site absent from the
+    # selection scores 0 and therefore sorts first.
+    n_selected = len(selected_set)
+    site_share = {}
+    if n_selected and "site" in binary.columns and selected_set:
+        counts = binary.loc[sorted(selected_set), "site"].value_counts()
+        site_share = {s: c / n_selected for s, c in counts.items()}
+
+    if "site" in binary.columns:
+        # One vectorized pull instead of a .loc lookup per comparison: the
+        # reserve pool runs to tens of thousands of rows on a real selection.
+        site_of = binary["site"].to_dict()
+        # list.sort is stable, so the shuffled order survives as the tie-break
+        # inside each site.
+        reserve_ids.sort(key=lambda fid: site_share.get(site_of.get(fid), 0.0))
+
     rows = []
     for rank, fid in enumerate(reserve_ids):
         r = binary.loc[fid]
@@ -930,8 +1178,16 @@ def main():
     print()
 
     # Allocate and select
-    if site_balance:
+    use_site_balance = site_balance and "site" in binary.columns
+    alloc_totals = {}
+    if use_site_balance:
         print(f"Site-balanced selection: ON (max_site_frac={max_site_frac})")
+        # Same pure allocator site_balanced_select drives its selection from,
+        # so the allocation reported here is the allocation actually used.
+        site_targets = compute_site_targets(
+            binary, species_list, target, cap_frac=max_site_frac)
+        alloc_totals = {sp: sum(site_targets[sp].values())
+                        for sp in species_list}
         selected, achieved = site_balanced_select(
             binary, species_list, years, target, cap_frac=max_site_frac)
     else:
@@ -939,12 +1195,25 @@ def main():
         alloc = even_allocate(binary, species_list, years, target)
         selected, achieved = greedy_select(binary, species_list, alloc, years)
 
+    # Per-label pool sizes drive the honest shortfall reason: a label is only
+    # reported as exhausted when the selection actually took every frame that
+    # carries it. Everything else is cap-limited or allocation-limited.
+    pool_totals = {sp: int(binary[sp].sum()) for sp in species_list}
+    reasons = {
+        sp: shortfall_reason(achieved[sp], target, pool_totals[sp],
+                             alloc_totals.get(sp))
+        for sp in species_list
+    }
+
     sel = binary.loc[selected].copy()
     n = len(sel)
     print(f"Selected {n:,} frames")
     for sp in species_list:
-        ok = "OK" if achieved[sp] >= target else f"SHORT by {target - achieved[sp]}"
-        print(f"  {sp:6s}: {achieved[sp]:>5,} frame-instances  [{ok}]")
+        if reasons[sp] == "ok":
+            status = "OK"
+        else:
+            status = f"SHORT by {target - achieved[sp]} ({reasons[sp]})"
+        print(f"  {sp:6s}: {achieved[sp]:>5,} frame-instances  [{status}]")
     print()
 
     # ── Build output with image paths and routing ────────────────────────────
@@ -1055,6 +1324,7 @@ def main():
         achieved=achieved,
         target=target,
         exclusions=exclusions,
+        reasons=reasons,
     ))
 
     # Year distribution
@@ -1091,7 +1361,7 @@ def main():
                     f"exceeds cap {max_site_frac*100:.0f}%, but only {len(site_dist)} "
                     f"site(s) carry this label - the cap is mathematically "
                     f"unsatisfiable with this few sites (each needs its inclusion "
-                    f"floor of >=1); floors win.")
+                    f"floor of >=1); the tightest even split is used instead.")
             else:
                 summary_lines.append(
                     f"  [WARN] max site share {top_share*100:.1f}% ({top_site}) "
@@ -1154,6 +1424,25 @@ def main():
     with open(summary_path, "w") as f:
         f.write(summary_text)
     print(f"Saved: {summary_path}")
+
+    # Machine-readable twin of the Sites and per-species blocks above. Step 4's
+    # reserve refill reads per_site to steer a replacement toward the site with
+    # the largest deficit, and the orchestrator reads per_species to show why a
+    # label finished short instead of guessing "pool exhausted".
+    summary_doc = build_selection_summary(
+        species_list=species_list,
+        achieved=achieved,
+        target=target,
+        per_site=site_dist.to_dict(),
+        pool_totals=pool_totals,
+        alloc_totals=alloc_totals,
+        cap_frac=max_site_frac if use_site_balance else 1.0,
+        n_selected=n_sel_total,
+    )
+    summary_json_path = os.path.join(config.OUTPUT_DIR, "selection_summary.json")
+    with open(summary_json_path, "w") as f:
+        json.dump(summary_doc, f, indent=2)
+    print(f"Saved: {summary_json_path}")
 
     # Save config snapshot
     cfg_path = os.path.join(config.OUTPUT_DIR, "config_snapshot.txt")

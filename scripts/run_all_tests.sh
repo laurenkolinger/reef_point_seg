@@ -117,6 +117,7 @@ SUITES=(
   "py pipeline_orchestrator/tests/test_workflow_design_conformance.py"
   "py _ablation/tests/test_fish_ablation.py"
   "py TCRMPclip_combinedAnnotate/tests/test_annotator_design.py"
+  "py TCRMPclip_combinedAnnotate/tests/test_annotator_layout_stability.py"
   "py _reefreview/tests/test_reefreview.py"
   "py _reefreview/tests/test_review_schema.py"
   "py _reefreview/tests/test_project_identity.py"
@@ -206,6 +207,10 @@ SUITES=(
   # pulls from selection_summary.json, fallback preserved, routing_report columns.
   "py TCRMPclip_placePoints/tests/test_reserve_site_balance.py"
   "py TCRMPclip_placePoints/tests/test_lores_scaling.py"
+  # 2018 frame fix (2026-09-27, VEGA annotation safety net): a pre-2020
+  # frame's CPC points can sit in a season folder other than its own
+  # calendar year (cpc_all/2017 holds frames dated into 2018).
+  "py TCRMPclip_placePoints/tests/test_cpc_cross_season.py"
   "py pipeline_orchestrator/tests/test_orchestrator_ui.py"
   # Orchestrator SPA sweep (2026-09-01, quality-sweep Task 1): linkage,
   # relics, internal-number leaks, tooltips, cache-bust.
@@ -253,6 +258,11 @@ SUITES=(
   # paths are refused before subprocess.Popen; a PATH-shim xdg-open drives
   # the real spawn path end to end without touching the desktop.
   "py tests/test_host_open_guard.py"
+  # Nightly run-data safety net (2026-09-27): rsync --link-dest snapshots of
+  # inprocess/ with count + sha256 verification, atomic .partial rename,
+  # single-instance locking, and 14-snapshot retention that never deletes
+  # anything unverified, outside dest, or reached through a symlink.
+  "py tests/test_snapshot_runs.py"
   # Model-assist loop (2026-07-09): inference predictions.json, prediction seeder, transect frozen split.
   "py TCRMPtrain_oceankindCV/tests/test_predictions_output.py"
   "py TCRMPclip_combinedAnnotate/tests/test_seed_from_predictions.py"
@@ -298,6 +308,18 @@ SUITES=(
   # keep, flush-to-disk, wire_mask payload trim, warm-up prefetch, relic removal.
   # Drives both combinedAnnotate and editMasks from this one file.
   "py TCRMPclip_combinedAnnotate/tests/test_polish_20260901.py"
+  # VEGA annotation safety net (2026-09-27): SIGTERM/SIGINT/atexit flush the
+  # session before the process exits, a closed tab's edit reaches disk via a
+  # pagehide sendBeacon, and a merged mask records found_manual, not
+  # not_found. Drives both combinedAnnotate and editMasks from these files.
+  "py TCRMPclip_combinedAnnotate/tests/test_save_on_quit.py"
+  "py TCRMPclip_combinedAnnotate/tests/test_merged_outcome_found.py"
+  # Review defect fix (2026-09-27): flush_all overwrote segmentations.json
+  # from memory unconditionally; the expert-ID importer can rewrite the same
+  # file while an annotator sits idle. A dirty flag now gates the quiet quit
+  # and pre-kill save paths, and save_segmentations diverts to a conflict
+  # sibling file rather than clobbering an externally-changed original.
+  "py TCRMPclip_combinedAnnotate/tests/test_flush_conflict_guard.py"
   # Edit Masks app (2026-07-10): standalone editor - boot, expert-lock, registry-on-edit; orchestrator tile.
   "py TCRMPclip_editMasks/tests/test_edit_boot.py"
   "py TCRMPclip_editMasks/tests/test_expert_lock.py"
@@ -380,6 +402,10 @@ SUITES=(
   "py pipeline_orchestrator/tests/test_step6_source_summary.py"
   "py pipeline_orchestrator/tests/test_step6_starting_model.py"
   "py pipeline_orchestrator/tests/test_step6_continue_from_js.py"
+  # 2026-09-27 annotation safety-net plan, Task T2: every stop path flushes
+  # the annotator/Edit Masks process (POST /api/flush) before it kills it,
+  # including the step4loop/run reorder (flush + stop precede the seeder).
+  "py pipeline_orchestrator/tests/test_flush_before_kill.py"
   "py _matrix/tests/test_registry_matrix_e2e.py"
   # Matrix cell drill-down, preferences, composite export, stats (2026-08-26).
   "py _matrix/tests/test_matrix_cell.py"

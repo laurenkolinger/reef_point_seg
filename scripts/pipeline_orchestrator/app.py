@@ -548,7 +548,9 @@ def _build_detect_dataset(source_dir, dataset_dir, seed_name, *, valid_frac, tes
     Returns:
         the split manifest the builder wrote (seed, fractions, fingerprint,
         counts). Raises ValueError when the source holds no image and label
-        pair, the seed is empty or a fraction is out of range.
+        pair, the seed is empty, a fraction is out of range, or the saved or
+        staged split names a photo the dataset cannot train on (VEGA never
+        re-draws a held-out photo in silence; _launch_step6 shows the reason).
     """
     return _load_detect_dataset().build_detect_dataset(
         source_dir, dataset_dir, seed_name, valid_frac=valid_frac, test_frac=test_frac)
@@ -1041,6 +1043,97 @@ def _annotator_pids(entry_match):
         return [int(tok) for tok in out.split() if tok.strip().isdigit()]
     except Exception:
         return []
+
+
+def _listener_port_for_pid(ss_output, pid):
+    """The local TCP port `pid` is listening on, read out of the same
+    `ss -ltnp` snapshot _port_listener_pids parses, or None when this pid is
+    not a listener in that snapshot (already exited, not yet bound, or ss
+    failed). Reverse of _port_listener_pids (port -> pids): this goes
+    pid -> port, so a zombie annotator matched only by _annotator_pids (no
+    runner-tracked port) can still be flushed by port before it is
+    signalled. Never raises."""
+    needle = re.compile(rf"pid={pid}\b")
+    try:
+        for line in (ss_output or "").splitlines():
+            if not needle.search(line):
+                continue
+            fields = line.split()
+            if len(fields) < 4 or ":" not in fields[3]:
+                continue
+            try:
+                return int(fields[3].rsplit(":", 1)[1])
+            except ValueError:
+                continue
+    except Exception as exc:
+        vic.note(f"[orch] _listener_port_for_pid could not parse ss output "
+                 f"for pid {pid}: {exc}")
+        return None
+    return None
+
+
+# Timeout for the "save first" annotator flush (2026-09-27 annotation
+# safety-net plan): long enough for a local JSON write, short enough that a
+# process that will never answer cannot hang a stop for more than this.
+_ANNOTATOR_FLUSH_TIMEOUT_S = 5
+
+
+def _flush_annotator(port):
+    """Ask the annotator or Edit Masks process listening on `port` to save its
+    in-memory session to disk (POST /api/flush) before it is stopped.
+
+    The plan's "save first" decision: every path that stops a combined
+    annotator or Edit Masks process calls this before signalling it, so an
+    unsaved review edit reaches disk before the process is cut off. Never
+    raises: no listener, a timeout, and a non-2xx status are all just a
+    failed flush, so a stop is never blocked by a process that will not
+    answer. Returns (True, None) on any 2xx response, else
+    (False, <short reason>) for the caller to log and move on.
+    """
+    if not port:
+        return False, "no port"
+    url = f"http://127.0.0.1:{port}/api/flush"
+    try:
+        req = Request(url, data=b"", method="POST")
+        with urlopen(req, timeout=_ANNOTATOR_FLUSH_TIMEOUT_S) as resp:
+            status = resp.status if hasattr(resp, "status") else resp.getcode()
+            if 200 <= status < 300:
+                return True, None
+            return False, f"HTTP {status}"
+    except URLError as exc:
+        code = getattr(exc, "code", None)
+        if code is not None:
+            return False, f"HTTP {code}"
+        return False, str(getattr(exc, "reason", None) or exc)
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _live_annotator_port(step):
+    """The port to flush for a StageRunner key (step4test, step4loop or
+    editmasks), or None when there is nothing safe to flush.
+
+    runner.ports[step] survives after the process behind it exits (kill()
+    never clears its own ports map entry), so on its own it can name a port
+    an unrelated process has since bound (vicariusLLM on 5085, or
+    benthic_species_viewer's serve_edit.py on 5081, on this shared box
+    today). This returns a port only when runner.is_running(step) confirms
+    that SAME key still owns a live, runner-tracked process; getattr-safe
+    for a test double that omits either attribute, in which case nothing is
+    returned rather than guessed at.
+    """
+    is_running = getattr(runner, "is_running", None)
+    if is_running is None:
+        return None
+    try:
+        alive = bool(is_running(step))
+    except Exception as exc:
+        vic.note(f"[orch] _live_annotator_port could not confirm {step!r} "
+                 f"is running: {exc}")
+        return None
+    if not alive:
+        return None
+    return (getattr(runner, "ports", None) or {}).get(step)
 
 
 def _project_champion(step6_dir):
@@ -4566,6 +4659,18 @@ def create_app():
     @app.route("/api/project/quit", methods=["POST"])
     def project_quit():
         global current_project
+        # Save first (D1): runner.kill_all() below also stops any live
+        # combined annotator, Refine annotator or Edit Masks, so each is
+        # flushed before that kill reaches it. _live_annotator_port confirms
+        # runner.is_running(key) first, so a dead key's stale port (since
+        # reused by an unrelated process) is never flushed.
+        for _annotator_key in ("step4test", "step4loop", "editmasks"):
+            _port = _live_annotator_port(_annotator_key)
+            if _port:
+                _ok, _reason = _flush_annotator(_port)
+                if not _ok:
+                    vic.note(f"[orch] annotator flush failed on port {_port} "
+                             f"before quit: {_reason}")
         runner.kill_all()
         _reset_transient_status("Project closed.")
         if current_project:
@@ -5323,13 +5428,39 @@ def create_app():
         entry script) AND (b) zombies from a prior orchestrator session (not in
         runner.processes) by matching both entry scripts (via pgrep, one pid at
         a time, so a standalone pid can be skipped) and freeing the shared
-        annotator port range. No lsof on this box; pgrep and ss only."""
+        annotator port range. No lsof on this box; pgrep and ss only.
+
+        2026-09-27: every kill below is preceded by a flush (_flush_annotator,
+        POST /api/flush) of that same port, so an operator's unsaved review
+        edit reaches disk before the process is cut off. A failed flush (no
+        listener, timeout, non-2xx) is logged to vic.note and the kill
+        proceeds regardless, since a process that will not answer must never
+        block a stop. Each port is flushed at most once per call
+        (flushed_ports), since the pgrep pass and the port sweep below can
+        both name the same live pid."""
         import subprocess
         import signal
+        flushed_ports = set()
+
+        def _flush_before_kill(port):
+            """Flush `port` (POST /api/flush) unless it is falsy or was
+            already flushed earlier in this call, then remember it either
+            way so a later call in the same sweep never re-flushes it. A
+            failed flush is logged with its port and reason; the caller
+            still proceeds to kill regardless."""
+            if not port or port in flushed_ports:
+                return
+            flushed_ports.add(port)
+            ok, reason = _flush_annotator(port)
+            if not ok:
+                vic.note(f"[orch] annotator flush failed on port {port} before kill: {reason}")
+
+        _flush_before_kill(_live_annotator_port("step4test"))
         try:
             runner.kill("step4test")
         except Exception:
             pass
+        _flush_before_kill(_live_annotator_port("editmasks"))
         try:
             runner.kill("editmasks")
         except Exception:
@@ -5338,11 +5469,20 @@ def create_app():
             os.path.join("TCRMPclip_combinedAnnotate", "src", "app.py"),
             os.path.join("TCRMPclip_editMasks", "src", "app.py"),
         )
+        # ss is fetched once, up front, so both the pgrep pass right below (a
+        # pid -> port reverse lookup, for a zombie process runner.ports never
+        # tracked) and the port sweep after it read the SAME snapshot.
+        try:
+            _ss = subprocess.run(["ss", "-ltnp"], capture_output=True, text=True, timeout=10)
+            _ss_out = getattr(_ss, "stdout", "") or ""
+        except Exception:
+            _ss_out = ""
         for entry_match in entry_matches:
             for pid in _annotator_pids(entry_match):
                 environ = _proc_environ(pid)
                 if b"TCRMP_SESSION_MODE=standalone" in environ:
                     continue  # standalone session - never killed by a project launch
+                _flush_before_kill(_listener_port_for_pid(_ss_out, pid))
                 try:
                     os.kill(pid, signal.SIGTERM)
                 except Exception:
@@ -5357,11 +5497,6 @@ def create_app():
         # cmdline fails closed (the process is left running). ANNOTATE_PORT
         # (5096) is deliberately outside 5080-5089, so this sweep can never hit
         # the standalone annotator's port either.
-        try:
-            _ss = subprocess.run(["ss", "-ltnp"], capture_output=True, text=True, timeout=10)
-            _ss_out = getattr(_ss, "stdout", "") or ""
-        except Exception:
-            _ss_out = ""
         for _p in range(5080, 5090):
             for pid in _port_listener_pids(_ss_out, _p):
                 cmdline = _proc_cmdline(pid)
@@ -5369,6 +5504,7 @@ def create_app():
                     continue  # not an annotator (vicariusLLM on 5085, say), or unreadable
                 if b"TCRMP_SESSION_MODE=standalone" in _proc_environ(pid):
                     continue  # standalone session - never killed by a project launch
+                _flush_before_kill(_p)
                 try:
                     os.kill(pid, signal.SIGTERM)
                 except Exception:
@@ -8069,6 +8205,14 @@ def create_app():
         """
         route_cancel.set()
         runner.kill("step4test_route")
+        # _live_annotator_port confirms runner.is_running("step4test") first,
+        # so a dead key's stale port (since reused by an unrelated process)
+        # is never flushed.
+        port = _live_annotator_port("step4test")
+        if port:
+            ok, reason = _flush_annotator(port)
+            if not ok:
+                vic.note(f"[orch] annotator flush failed on port {port} before stop: {reason}")
         runner.kill("step4test")
         with route_lock:
             phase = route_status.get("phase")
@@ -8121,7 +8265,16 @@ def create_app():
         if refused is not None:
             return refused
         # Kill both runners (the headless routing pass + the combined UI) so
-        # nothing is mid-write while we remove the tree.
+        # nothing is mid-write while we remove the tree. Flush the combined UI
+        # first (save first, D1), moot for this route's own rmtree below, but
+        # every other stop of a live annotator follows the same rule.
+        # _live_annotator_port confirms runner.is_running("step4test") first,
+        # so a dead key's stale port is never flushed.
+        port = _live_annotator_port("step4test")
+        if port:
+            ok, reason = _flush_annotator(port)
+            if not ok:
+                vic.note(f"[orch] annotator flush failed on port {port} before reset: {reason}")
         runner.kill("step4test")
         runner.kill("step4test_route")
         # Both sides resolved: an export dir that is a symlink OUT of the
@@ -8277,6 +8430,33 @@ def create_app():
         if os.path.isfile(lores_manifest):
             cmd += ["--lores_manifest", lores_manifest]
 
+        # Save first, THEN stop, before the seeder writes (2026-09-27 safety
+        # net, D1). The seeder below rewrites segmentations.json directly on
+        # disk; flush_all() in the annotator is a blind dump of its in-memory
+        # segmentations dict (never a merge), so if that process were still
+        # alive when the seeder finished, any later save from it, the generic
+        # flush _launch_step4test_ui's _kill_all_annotators performs right
+        # before its own kill, or the process's own save-on-quit handler,
+        # would overwrite the seeder's freshly seeded masks with the stale
+        # pre-seed content. Fully stopping it here, before the seeder ever
+        # runs, means nothing is left alive to re-save that stale copy;
+        # _kill_all_annotators still runs its normal sweep afterward for
+        # zombies, but finds nothing tracked left to flush twice.
+        # _live_annotator_port confirms runner.is_running(key) first, so a
+        # dead key's stale port is never flushed.
+        for _annotator_key in ("step4test", "step4loop"):
+            _port = _live_annotator_port(_annotator_key)
+            if _port:
+                _ok, _reason = _flush_annotator(_port)
+                if not _ok:
+                    vic.note(f"[orch] annotator flush failed on port {_port} "
+                             f"before seeding: {_reason}")
+            try:
+                runner.kill(_annotator_key)
+            except Exception as _exc:
+                vic.note(f"[orch] runner.kill({_annotator_key!r}) failed "
+                         f"before seeding: {_exc}")
+
         import subprocess as _sp
         try:
             proc = _sp.run(cmd, capture_output=True, text=True, timeout=300)
@@ -8405,6 +8585,17 @@ def create_app():
         refused = _refuse_for_composite()
         if refused is not None:
             return refused
+        # Save first (D1), before the kill: this route reads and rewrites
+        # segmentations.json itself right below, so the live process must be
+        # both flushed AND stopped before that read, or its later exit would
+        # overwrite what this route is about to write. _live_annotator_port
+        # confirms runner.is_running("step4loop") first, so a dead key's
+        # stale port is never flushed.
+        port = _live_annotator_port("step4loop")
+        if port:
+            ok, reason = _flush_annotator(port)
+            if not ok:
+                vic.note(f"[orch] annotator flush failed on port {port} before reset: {reason}")
         runner.kill("step4loop")
         _route_mark_stopped_if_owner("step4loop", "Refine annotator stopped.")
 
@@ -8586,6 +8777,13 @@ def create_app():
 
     @app.route("/api/step/editmasks/stop", methods=["POST"])
     def editmasks_stop():
+        # _live_annotator_port confirms runner.is_running("editmasks") first,
+        # so a dead key's stale port is never flushed.
+        port = _live_annotator_port("editmasks")
+        if port:
+            ok, reason = _flush_annotator(port)
+            if not ok:
+                vic.note(f"[orch] annotator flush failed on port {port} before stop: {reason}")
         runner.kill("editmasks")
         _route_mark_stopped_if_owner("editmasks", "Edit Masks stopped.")
         editmasks_state.update(running=False, project_id=None, input_dir=None)
@@ -8612,6 +8810,13 @@ def create_app():
         """
         if current_project is None:
             return jsonify({"error": "No project loaded"}), 400
+        # _live_annotator_port confirms runner.is_running("editmasks") first,
+        # so a dead key's stale port is never flushed.
+        port = _live_annotator_port("editmasks")
+        if port:
+            ok, reason = _flush_annotator(port)
+            if not ok:
+                vic.note(f"[orch] annotator flush failed on port {port} before reset: {reason}")
         runner.kill("editmasks")
         _route_mark_stopped_if_owner("editmasks", "Edit Masks stopped.")
         editmasks_state.update(running=False, port=None,

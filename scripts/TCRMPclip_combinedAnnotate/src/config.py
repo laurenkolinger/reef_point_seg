@@ -49,7 +49,6 @@ DEFAULT_CATEGORIES = [
 
 # ── Processing ──────────────────────────────────────────────────────
 
-FLUSH_INTERVAL = 20                    # save state every N images
 REVIEW_BATCH_SIZE = 10                 # images per review batch
 
 # ── Export ──────────────────────────────────────────────────────────
@@ -79,7 +78,15 @@ REVIEWER = os.environ.get('TCRMP_REVIEWER', '')
 # learning loop mode: the app boots straight into the review queue via
 # POST /api/resume, skipping configure/routing entirely (the export_dir
 # already carries a seeded segmentations.json with pending model masks).
+# 'edit' reopens a finished export for correction. 'standalone' is the no-project
+# "Annotate Images" session: the operator names the session, picks labels, and
+# imports their own frames (see STANDALONE_ROOT below).
+# One of: 'configure', 'resume', 'edit', 'standalone'.
 SESSION_MODE = os.environ.get('TCRMP_SESSION_MODE', 'configure').strip().lower()
+
+# Standalone "Annotate Images" sessions (no project). Root dir for every session.
+STANDALONE_ROOT = (os.environ.get('TCRMP_STANDALONE_ROOT', '')
+                   or os.path.join(os.path.dirname(_REPO_DIR), 'inprocess', '_standalone'))
 
 # Pipeline orchestrator overrides (no effect when env vars are unset/empty)
 INPUT_DIR = os.environ.get('TCRMP_INPUT_DIR', '') or INPUT_DIR

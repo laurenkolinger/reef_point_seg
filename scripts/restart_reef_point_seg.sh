@@ -28,6 +28,37 @@ MODULE_PORTS=("$PORT" 5055 5065 5066 5070 5075 5080)
 
 echo "==> Restarting Reef Point Seg orchestrator on port ${PORT}"
 
+# ── 0. Save first (2026-09-27 safety net, D1) ─────────────────────────────────
+# Flush any live combined annotator or Edit Masks session before anything
+# below can kill it: a best-effort POST to /api/flush, never a stop. Only a
+# listener whose /proc/<pid>/cmdline names one of the two annotator entry
+# scripts is flushed (the same cmdline check _kill_all_annotators uses in
+# pipeline_orchestrator/app.py), so an unrelated service sharing this port
+# range is never poked (benthic_species_viewer's serve_edit.py on 5081 and
+# vicariusLLM on 5085 have both been seen live here). A standalone "Annotate
+# Images" session (port 5096) is included in the candidate list too; this
+# script never kills it (see MODULE_PORTS below), so a flush there is only
+# ever a save, never a disruption. This script does not set -e, but a failed
+# curl is swallowed and printed either way so a future -e stays safe.
+ANNOTATOR_FLUSH_PORTS=(5080 5081 5082 5083 5084 5085 5086 5087 5088 5089 5096)
+ANNOTATOR_ENTRY_PATTERN='TCRMPclip_combinedAnnotate/src/app.py|TCRMPclip_editMasks/src/app.py'
+echo "  flushing any live annotator / Edit Masks session first..."
+for fp in "${ANNOTATOR_FLUSH_PORTS[@]}"; do
+    fp_ss_line="$(ss -ltnp "sport = :${fp}" 2>/dev/null | grep LISTEN || true)"
+    [ -z "$fp_ss_line" ] && continue
+    fp_pid="$(printf '%s' "$fp_ss_line" | sed -nE 's/.*pid=([0-9]+).*/\1/p' | head -n1)"
+    [ -z "$fp_pid" ] && continue
+    fp_cmdline="$(tr '\0' ' ' < "/proc/${fp_pid}/cmdline" 2>/dev/null || true)"
+    if ! printf '%s' "$fp_cmdline" | grep -qE "$ANNOTATOR_ENTRY_PATTERN"; then
+        continue  # not an annotator/editMasks process, or an unreadable cmdline; skip
+    fi
+    flush_code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${fp}/api/flush" 2>/dev/null || true)"
+    case "$flush_code" in
+        2??) echo "    flushed port ${fp} (pid ${fp_pid})" ;;
+        *)   echo "    flush on port ${fp} (pid ${fp_pid}) did not confirm (http ${flush_code:-none}); continuing" ;;
+    esac
+done
+
 # ── 1. Hard-kill the orchestrator + sub-app processes ─────────────────────────
 # NOTE: deliberately NO lsof here. lsof hangs on this box (stale NFS mounts
 # under /mnt), which is exactly why `vicarius restart` / run_pipeline.sh stall.

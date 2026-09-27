@@ -21,6 +21,38 @@ fi
 # fresh projects. Kill anything matching our known entry points before
 # we start.
 echo ""
+echo "  Flushing any live annotator / Edit Masks session before the sweep..."
+# Save first (2026-09-27 safety net, D1): the stale-process sweep just below
+# pattern-matches TCRMPclip_combinedAnnotate/src/app.py by command line, which
+# reaches a standalone "Annotate Images" session on port 5096 too, not only a
+# project session in 5080-5089. Only a listener whose /proc/<pid>/cmdline
+# names one of the two annotator entry scripts is flushed here (the same
+# cmdline check _kill_all_annotators uses in pipeline_orchestrator/app.py),
+# so an unrelated service sharing this port range is never poked
+# (benthic_species_viewer's serve_edit.py on 5081 and vicariusLLM on 5085
+# have both been seen live here). A flush is a best-effort POST to
+# /api/flush, never a stop, so it costs nothing when the pid turns out to be
+# spared or nothing is actually listening. This script does not set -e; a
+# failed curl is swallowed and printed either way so a future -e stays safe.
+ANNOTATOR_FLUSH_PORTS=(5080 5081 5082 5083 5084 5085 5086 5087 5088 5089 5096)
+ANNOTATOR_ENTRY_PATTERN='TCRMPclip_combinedAnnotate/src/app.py|TCRMPclip_editMasks/src/app.py'
+for fp in "${ANNOTATOR_FLUSH_PORTS[@]}"; do
+    fp_ss_line="$(ss -ltnp "sport = :${fp}" 2>/dev/null | grep LISTEN || true)"
+    [ -z "$fp_ss_line" ] && continue
+    fp_pid="$(printf '%s' "$fp_ss_line" | sed -nE 's/.*pid=([0-9]+).*/\1/p' | head -n1)"
+    [ -z "$fp_pid" ] && continue
+    fp_cmdline="$(tr '\0' ' ' < "/proc/${fp_pid}/cmdline" 2>/dev/null || true)"
+    if ! printf '%s' "$fp_cmdline" | grep -qE "$ANNOTATOR_ENTRY_PATTERN"; then
+        continue  # not an annotator/editMasks process, or an unreadable cmdline; skip
+    fi
+    flush_code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${fp}/api/flush" 2>/dev/null || true)"
+    case "$flush_code" in
+        2??) echo "    flushed port ${fp} (pid ${fp_pid})" ;;
+        *)   echo "    flush on port ${fp} (pid ${fp_pid}) did not confirm (http ${flush_code:-none}); continuing" ;;
+    esac
+done
+
+echo ""
 echo "  Checking for stale orchestrator + sub-app processes..."
 
 STALE_PATTERNS=(

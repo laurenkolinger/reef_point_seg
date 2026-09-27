@@ -1,23 +1,31 @@
 """
-TCRMP Segment Images — SAM3 Segmentation Review App
+Annotate Images (combinedAnnotate)
 
-Takes sam_click_prompts.json + raw images from TCRMPclip_placePoints
-and runs SAM3 segmentation on each point. Provides a review UI for
-accepting/rejecting/refining masks, then exports to YOLO Segmentation format.
+SAM3 segmentation plus review, in one app. Takes sam_click_prompts.json and
+raw images from TCRMPclip_placePoints, runs SAM3 segmentation on each point,
+and serves the annotation UI where the operator accepts, rejects, refines,
+adds and labels masks before exporting to YOLO Segmentation format. The UI
+calls this tool "Annotate Images" everywhere the operator can see it.
 
 Usage:
     python app.py [--port 5070]
 """
 
+import atexit
+import functools
+import hashlib
 import os
+import re
+import signal
 import sys
 import json
 import argparse
 import subprocess
+import tempfile
 import threading
 import numpy as np
 import cv2
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_cors import CORS
@@ -26,8 +34,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config as cfg
 from mask_ops import (
     rle_encode, rle_decode, mask_to_polygon, mask_bbox, mask_centroid,
-    resolve_overlaps, merge_close_masks, check_no_overlap, union_masks,
+    resolve_overlaps, merge_close_masks, check_no_overlap, union_many,
     build_mask_dict, update_mask_geometry, merge_overlapping_same_id,
+    REVIEW_TAGGING_ENABLED, REVIEW_LOCKED_MSG, review_tag_requested,
+    strip_review_tag,
 )
 from export_yolo import load_class_map, save_class_map, export_batch, update_data_yaml
 from render_overlay import render_segmentation_overlays
@@ -52,13 +62,63 @@ except Exception as _re_err:  # pragma: no cover
     _REVIEW_OK = False
     print(f"[review] _reefreview unavailable, expert-review export disabled: {_re_err}")
 
-# Load target species from TCRMPcvr_chooseImages config
+# Where the label list is cleaned of the expert-review tag (Lauren Olinger,
+# 2026-09-06). A target label of REVIEW draws a live, armable REVIEW button in
+# the quick-add row beside the greyed locked one, which offers the operator a
+# control the server answers only with a 409. The environment value is DROPPED
+# rather than refused, because TCRMP_TARGET_SPECIES comes from a launcher and
+# refusing a whole launch over one entry would cost the operator the session;
+# the standalone form, where a person types the list, refuses instead and says
+# why. Logged with print(): log() is not defined yet when this runs at import.
+def _drop_review_labels(labels, source):
+    """Remove every label that spells out the expert-review tag.
+
+    Parameters:
+        labels: the label codes read from one source, in their original order.
+        source: plain words naming where they came from, for the log line.
+
+    Returns:
+        list: the labels that are not the review tag, in their original order.
+        The list comes back unchanged when review tagging is enabled again, so
+        flipping REVIEW_TAGGING_ENABLED reverses this with no other edit.
+
+    Example:
+        _drop_review_labels(['PA', 'review'], 'TCRMP_TARGET_SPECIES') returns
+        ['PA'] and prints one line naming 'review'.
+    """
+    if REVIEW_TAGGING_ENABLED:
+        return list(labels)
+    kept, dropped = [], []
+    for label in labels:
+        if review_tag_requested({'species': label}):
+            dropped.append(label)
+        else:
+            kept.append(label)
+    if dropped:
+        print(f"[review-lock] dropped {len(dropped)} target label(s) spelling "
+              f"out the expert-review tag from {source}: {', '.join(dropped)}. "
+              f"{REVIEW_LOCKED_MSG}")
+    return kept
+
+
 def _load_target_species():
+    """The target species codes this annotator offers, in priority order.
+
+    Reads the orchestrator override TCRMP_TARGET_SPECIES first, then the
+    TARGET_SPECIES line of TCRMPcvr_chooseImages' config.py, then a built-in
+    default list. Every source is passed through _drop_review_labels, so no
+    source can arm the suspended expert-review flag.
+
+    Returns:
+        list: the species codes, in the order the source gave them.
+    """
     import re
     # Pipeline orchestrator override
     env_sp = os.environ.get('TCRMP_TARGET_SPECIES', '')
     if env_sp:
-        return [s.strip() for s in env_sp.split(',') if s.strip()]
+        return _drop_review_labels(
+            [s.strip() for s in env_sp.split(',') if s.strip()],
+            'TCRMP_TARGET_SPECIES')
     config_path = os.path.join(REPO_DIR, 'TCRMPcvr_chooseImages', 'src', 'config.py')
     try:
         with open(config_path) as f:
@@ -66,11 +126,15 @@ def _load_target_species():
                 if line.strip().startswith('TARGET_SPECIES'):
                     match = re.search(r'\[(.+)\]', line)
                     if match:
-                        return [s.strip().strip('"').strip("'")
-                                for s in match.group(1).split(',')]
+                        return _drop_review_labels(
+                            [s.strip().strip('"').strip("'")
+                             for s in match.group(1).split(',')],
+                            config_path)
     except FileNotFoundError:
         pass
-    return ['OFRA', 'PA', 'OA', 'OFAV', 'AL', 'MC', 'AA']
+    return _drop_review_labels(
+        ['OFRA', 'PA', 'OA', 'OFAV', 'AL', 'MC', 'AA'],
+        'the built-in default target list')
 
 TARGET_SPECIES = _load_target_species()
 
@@ -80,6 +144,153 @@ def _is_review(p):
     a non-target '?' point, which is a negative refinement click), shipped to the
     expert-review site, and never trained."""
     return bool(p.get('review')) or p.get('species', p.get('species_code', '')) == 'REVIEW'
+
+
+# ── Expert-review flagging lock ──────────────────────────────────
+# Lauren Olinger, 2026-09-06: no review tag may be added to a mask in any
+# annotator. The policy itself (the switch, the message, the spellings a
+# refusal has to catch) lives in mask_ops.py so every annotator app shares one
+# copy, and flipping REVIEW_TAGGING_ENABLED to True there reverses the lock
+# everywhere. What lives here is the HTTP shape the routes answer with and the
+# tally of what the lock dropped.
+#
+# The refusal is deliberately broader than _is_review above, and the gap widened
+# on 2026-09-06 when the category joined the spellings it catches. The refusal
+# recognises FOUR spellings, each normalised for case and whitespace and each
+# tested on its own: the review key, species, species_code and category. The
+# read predicate recognises TWO: a truthy review key or a species of exactly
+# REVIEW. That asymmetry is deliberate. What may be WRITTEN is judged as widely
+# as the tag can be spelled; what the masks already on disk MEAN is judged by
+# _is_review, which drives the expert export, the training filter, the coverage
+# matrix and the provenance ledger, so widening it would change their meaning.
+
+# HTTP 409 Conflict: the request is well formed and the server refuses it by
+# policy. One status and one body shape, so the browser special-cases it once.
+REVIEW_LOCKED_STATUS = 409
+
+# What the lock has dropped that mask_ops cannot see. A tag dropped while a
+# mask is BUILT is counted by mask_ops.review_tags_dropped(), which is the one
+# number every caller reports; a scan candidate arrives already built, so its
+# strip is counted here. Read by the log lines and by the tests; never
+# persisted, so a restart starts the tally again.
+REVIEW_LOCK_COUNTS = {'candidates_stripped': 0}
+
+# The tally is written from request threads (keeping a scan candidate is a
+# route), and this app serves several at once, so the increment runs under this
+# lock rather than as a bare read-modify-write. Two commits arriving together
+# would otherwise both read the same value and one increment would be lost.
+# mask_ops guards its own dropped-tag counter the same way.
+_review_lock_counts_lock = threading.Lock()
+
+
+def _record_candidate_stripped():
+    """Add one to the stripped-candidate tally, safely across threads."""
+    with _review_lock_counts_lock:
+        REVIEW_LOCK_COUNTS['candidates_stripped'] += 1
+
+# Expert round-trip keys a scan candidate posted by the browser may not bring
+# with it under the lock. The shared strip_review_tag covers the tag spellings;
+# these three are the round trip's own identifiers, which a candidate minted by
+# a scan has no way to have earned: review_uid is the join key the expert
+# importer matches on and the key that makes a mask read-only in Edit Masks.
+CLIENT_REVIEW_PROVENANCE_KEYS = ('review_uid', 'reviews', 'expert_id')
+
+
+def _review_tag_refused(payload):
+    """True when a request body asks to add an expert-review tag under the lock.
+
+    Parameters:
+        payload: a request body or mask dict. Anything that is not a dict is
+            not a request for a tag and answers False rather than raising:
+            this app binds 0.0.0.0 with no authentication, so a route reads
+            whatever a caller sends.
+
+    Returns:
+        True when review tagging is locked AND the payload asks for a tag in
+        any of its spellings. False when the lock is off, so flipping
+        REVIEW_TAGGING_ENABLED restores the previous behaviour exactly.
+
+    Example:
+        _review_tag_refused({'species': ' review '})  ->  True
+    """
+    if REVIEW_TAGGING_ENABLED:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    return review_tag_requested(payload)
+
+
+def _review_locked_response(detail='', **extra):
+    """The one refusal every locked route answers with.
+
+    Parameters:
+        detail: an optional second sentence naming what was refused (a count,
+            for a request carrying several entries). Left out of the body when
+            empty.
+        extra: further JSON fields for the caller, such as the mask ids that
+            asked for a tag.
+
+    Returns:
+        A (response, status) pair Flask returns as HTTP 409 carrying
+        {'ok': False, 'review_locked': True, 'error': REVIEW_LOCKED_MSG}.
+
+    Raises:
+        ValueError when extra tries to overwrite one of those three fixed
+        fields, which would leave the browser with two shapes to handle.
+    """
+    body = {'ok': False, 'review_locked': True, 'error': REVIEW_LOCKED_MSG}
+    clash = sorted(set(extra) & set(body))
+    if clash:
+        raise ValueError(
+            "_review_locked_response: " + ", ".join(clash) + " is fixed by the "
+            "shared refusal shape and cannot be overridden by a caller")
+    if detail:
+        body['detail'] = str(detail)
+    body.update(extra)
+    return jsonify(body), REVIEW_LOCKED_STATUS
+
+
+def _review_locked_candidate(cand):
+    """A scan candidate as it will actually be stored under the lock.
+
+    Parameters:
+        cand: the mask dict the browser posted back for a kept scan candidate.
+
+    Returns:
+        The candidate itself when it carries no expert-review tag, otherwise a
+        tag-free copy of it. The candidate is never modified. Used so the label
+        guard judges what will be stored rather than what was posted: a
+        candidate kept while REVIEW was armed is an unlabelled mask once the
+        tag is stripped, and the operator is asked for a species code.
+    """
+    if _review_tag_refused(cand):
+        return strip_review_tag(cand)
+    return cand
+
+
+def _review_locked_relabel_ids(relabel):
+    """Mask ids in a relabel body whose entry asks to ADD an expert-review tag.
+
+    Parameters:
+        relabel: the relabel map from a PUT /masks body, {mask id: {field:
+            value}}. A non-dict map, a non-dict entry and a key that is not a
+            mask id are all tolerated rather than raising.
+
+    Returns:
+        A list of the offending ids, integers in numeric order first, then any
+        key that is not an integer as a string. Empty when nothing asks for a
+        tag, which is the ordinary case.
+    """
+    if not isinstance(relabel, dict):
+        return []
+    flagged = [key for key, info in relabel.items() if _review_tag_refused(info)]
+    numeric, other = [], []
+    for key in flagged:
+        try:
+            numeric.append(int(key))
+        except (TypeError, ValueError):
+            other.append(str(key))
+    return sorted(numeric) + sorted(other)
 
 
 def _load_target_label_info():
@@ -134,12 +345,26 @@ def _load_target_label_info():
 
 ALL_TARGET_LABELS = _load_target_label_info()
 
+
+def _target_labels():
+    """Per-session label list (standalone picks them at start) else the env/CSV list."""
+    return session.get('target_labels') or ALL_TARGET_LABELS
+
+
+def _target_species():
+    """Per-session target codes (standalone picks them at start) else TARGET_SPECIES."""
+    return [l['code'] for l in session['target_labels']] if session.get('target_labels') else TARGET_SPECIES
+
+
 # ── Session state ────────────────────────────────────────────────
 
 session = {
     'input_dir': '',
     'export_dir': '',
     'categories': [],
+    # Per-session label list, set by a standalone start. Empty means "use the
+    # env/CSV list" (see _target_labels / _target_species).
+    'target_labels': [],
     'configured': False,
     'phase': 'startup',          # startup | processing | review
     'sam_engine': None,
@@ -158,10 +383,6 @@ session = {
 
     # Class registry for YOLO export
     'class_map': {},
-
-    # Flush
-    'flush_counter': 0,
-    'flush_interval': cfg.FLUSH_INTERVAL,
 
     # Currently-embedded image for refinement
     'current_review_image': None,
@@ -187,30 +408,247 @@ def _manifest_path(export_dir):
     return os.path.join(export_dir, 'segmentations', 'processed_manifest.json')
 
 
+# Atlantic Standard Time, fixed UTC-4, no daylight saving (matches
+# provenance.AST; kept separately here so this file has no import-order
+# dependency on provenance.py for a filename stamp).
+_AST = timezone(timedelta(hours=-4))
+
+# Group-readable, matching every other file a run writes: tempfile.mkstemp
+# creates its temp file 0o600 (owner-only), which would otherwise make a
+# freshly-saved segmentations.json unreadable by a teammate's process running
+# under a different primary group.
+_SAVED_FILE_MODE = 0o664
+
+
+def _ast_stamp():
+    """Compact AST timestamp for filenames: YYYYMMDD-HHMMSS."""
+    return datetime.now(_AST).strftime('%Y%m%d-%H%M%S')
+
+
+# The (mtime_ns, size) of each session's segmentations.json as THIS process
+# last read or wrote it, keyed by the file's path so opening a different
+# project (a fresh fixture in a test, or a real operator switching projects
+# without restarting the annotator) never compares against a stale identity
+# left by a different file. Populated by load_segmentations() and refreshed
+# by save_segmentations() on every successful write of the real file. A
+# stat-only mismatch is not by itself proof of a real conflict (a touch, or a
+# rewrite that reproduced the same bytes, moves mtime without changing
+# content), so _seg_disk_hash below carries the content check that decides.
+_seg_disk_identity = {}
+_seg_disk_hash = {}
+
+
+def _seg_file_identity(path):
+    """(mtime_ns, size) for `path`, or None when it does not exist."""
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _hash_bytes(data_bytes):
+    """sha256 hex digest of `data_bytes`."""
+    return hashlib.sha256(data_bytes).hexdigest()
+
+
+def _hash_file(path):
+    """sha256 hex digest of the file at `path`, or None when it does not
+    exist (a plain read, not the tracked identity: this always reflects the
+    file's CURRENT bytes, checked against the identity save_segmentations()
+    already believes it holds)."""
+    try:
+        with open(path, 'rb') as f:
+            return _hash_bytes(f.read())
+    except FileNotFoundError:
+        return None
+
+
+# Monotonically increasing counter, incremented by _mark_dirty() under
+# _dirty_lock. A session is dirty (_is_dirty()) while this is greater than
+# _segmentations_saved_version. This replaces a plain boolean flag, which
+# cleared itself unconditionally at the end of every save: an edit that
+# lands WHILE a save is still serializing (a click ~2s after the last, in
+# the middle of, say, a 24MB write) would set the flag, and the finishing
+# save's `dirty = False` would then stomp that back out with no way to tell
+# a captured edit from a missed one. save_segmentations() instead snapshots
+# this counter BEFORE it starts writing and only ever advances
+# _segmentations_saved_version to that snapshot once the write actually
+# lands, so a save can only clear the edits it demonstrably captured; an
+# increment that happens after the snapshot leaves the session dirty
+# regardless of how that in-flight save turns out.
+_dirty_lock = threading.Lock()
+_segmentations_dirty_counter = 0
+_segmentations_saved_version = 0
+
+
+def _mark_dirty():
+    """Record one more unsaved change to session['segmentations'].
+
+    Central call site for every mutation: applied to a mutating route via the
+    _dirty_on_success decorator below, and called directly from the one
+    mutation point that runs outside any route's request cycle (the
+    background segmentation loop's per-image write in
+    _process_single_image).
+    """
+    global _segmentations_dirty_counter
+    with _dirty_lock:
+        _segmentations_dirty_counter += 1
+
+
+def _is_dirty():
+    """True while session['segmentations'] holds a change no save has
+    captured yet."""
+    return _segmentations_dirty_counter > _segmentations_saved_version
+
+
+def _dirty_on_success(view):
+    """Decorator: mark the segmentations store dirty after `view` answers
+    with a non-error status.
+
+    Applied to every route that can change session['segmentations'] content,
+    so flush_before_exit() and the pre-kill POST /api/flush know there is
+    unsaved work without re-deriving it from each route's internals, and a
+    validation failure (400/404/409, a mask left exactly as it was) never
+    marks a request dirty that changed nothing. functools.wraps keeps the
+    wrapped function's __name__, which Flask uses as the endpoint name, so
+    stacking this under @app.route registers no duplicate endpoint.
+    """
+    @functools.wraps(view)
+    def wrapper(*args, **kwargs):
+        result = view(*args, **kwargs)
+        if isinstance(result, tuple):
+            status = result[1] if len(result) > 1 else 200
+        else:
+            status = getattr(result, 'status_code', 200)
+        if isinstance(status, int) and status < 400:
+            _mark_dirty()
+        return result
+    return wrapper
+
+
 def load_segmentations(export_dir):
     path = _seg_path(export_dir)
     if os.path.exists(path):
-        with open(path) as f:
-            return json.load(f)
+        with open(path, 'rb') as f:
+            raw = f.read()
+        _seg_disk_identity[path] = _seg_file_identity(path)
+        _seg_disk_hash[path] = _hash_bytes(raw)
+        return json.loads(raw)
+    _seg_disk_identity.pop(path, None)
+    _seg_disk_hash.pop(path, None)
     return {}
 
 
-def save_segmentations(export_dir, data):
-    path = _seg_path(export_dir)
+# Every writer to the session's on-disk stores serializes here. Three callers
+# now race: POST /api/flush (the client arms a trailing flush 2s after any
+# mask-status PUT), the export path, and the background segmentation loop.
+# Reentrant, so flush_all() can hold it across all three of its writes while
+# the individual savers take it again when called directly.
+_store_write_lock = threading.RLock()
+
+
+def _atomic_write_json(path, payload, indent):
+    """Write JSON to `path` so a reader only ever sees a complete file.
+
+    json.dump streams, so writing straight into the destination leaves it
+    truncated when anything fails partway through. The bytes go to a temp file
+    in the SAME directory (os.replace is only atomic within one filesystem),
+    chmod'd group-readable to match the rest of a run's output (mkstemp
+    creates it 0o600, owner-only, by default), and are then renamed over the
+    destination. A failed write removes the temp file and leaves the previous
+    file exactly as it was.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
-        json.dump(data, f, indent=1)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path),
+                               prefix='.' + os.path.basename(path) + '.',
+                               suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(payload, f, indent=indent)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, _SAVED_FILE_MODE)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def save_segmentations(export_dir, data):
+    """Write segmentations.json, unless another process changed it first.
+
+    The expert-ID importer (MOD/scripts/_expertids/importer.py) can rewrite
+    this exact file while an annotator sits open on the same project. A
+    mismatched (mtime_ns, size) against what THIS process last read or wrote
+    (_seg_disk_identity) is a first, cheap signal, not a verdict on its own:
+    a touch, or a rewrite that reproduced the exact same bytes, moves the
+    stat without changing content, so a stat mismatch is followed by a
+    sha256 comparison against _seg_disk_hash before anything is refused.
+    Equal content adopts the current stat as ours and the save proceeds
+    normally; different content diverts the in-memory copy to a sibling
+    segmentations.conflict-<AST stamp>.json instead of overwriting the real
+    file, with one line logged naming both paths, and keeps diverting on
+    every later save while the real file stays unreconciled, so this process
+    is never told it saved when it did not. A normal save (no external
+    change, or the first save of a session that never loaded an existing
+    file) proceeds and refreshes the tracked identity and hash to the file
+    it just wrote, so this process's own next save is never mistaken for a
+    conflict with itself.
+
+    The dirty counter is snapshotted before the write starts, not after it
+    finishes: see _segmentations_dirty_counter for why.
+
+    Returns:
+        (status, conflict_path): status is 'saved' when segmentations.json
+        itself was written, or 'conflict' when the write was diverted to a
+        sibling file instead; conflict_path is that sibling's absolute path,
+        or None when status is 'saved'.
+    """
+    global _segmentations_saved_version
+    path = _seg_path(export_dir)
+    with _store_write_lock:
+        version_being_saved = _segmentations_dirty_counter
+
+        on_disk_stat = _seg_file_identity(path)
+        known_stat = _seg_disk_identity.get(path)
+        if known_stat is not None and on_disk_stat != known_stat:
+            disk_hash = _hash_file(path)
+            known_hash = _seg_disk_hash.get(path)
+            if disk_hash is not None and known_hash is not None and disk_hash == known_hash:
+                # Stat moved (a touch, a metadata-only rewrite) but the bytes
+                # this process already has ARE the bytes on disk: not a real
+                # conflict, just an updated stat to trust from here on.
+                _seg_disk_identity[path] = on_disk_stat
+            else:
+                conflict_path = os.path.join(
+                    os.path.dirname(path), f'segmentations.conflict-{_ast_stamp()}.json')
+                _atomic_write_json(conflict_path, data, 1)
+                log(f"conflict: {path} changed on disk since this process last "
+                    f"saved it (an outside writer, most likely the expert-ID "
+                    f"importer); wrote the in-memory copy to {conflict_path} "
+                    f"instead of overwriting it")
+                return 'conflict', conflict_path
+
+        _atomic_write_json(path, data, 1)
+        with open(path, 'rb') as f:
+            written = f.read()
+        _seg_disk_identity[path] = _seg_file_identity(path)
+        _seg_disk_hash[path] = _hash_bytes(written)
+        _segmentations_saved_version = version_being_saved
+        return 'saved', None
 
 
 def save_manifest(export_dir, filenames):
-    path = _manifest_path(export_dir)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
-        json.dump({
+    with _store_write_lock:
+        _atomic_write_json(_manifest_path(export_dir), {
             'processed': sorted(filenames),
             'last_updated': datetime.now().isoformat(),
             'count': len(filenames),
-        }, f, indent=2)
+        }, 2)
 
 
 EXPORT_MANIFEST_FIELDS = ['basename', 'n_masks', 'label_file', 'image_file',
@@ -314,13 +752,116 @@ def reconcile_export(export_dir, manifest_entries):
 
 
 def flush_all():
+    """Write every session store to disk: segmentations, the processed
+    manifest, and the class map.
+
+    Returns:
+        (status, conflict_path): save_segmentations()'s own return, passed
+        straight through, so a caller that flushed on the operator's behalf
+        (POST /api/flush, scrap/unscrap) can tell them their edit was
+        diverted rather than answering ok when it was not. ('saved', None)
+        when no project is open, since there is nothing to conflict with.
+    """
     export_dir = session['export_dir']
     if not export_dir:
+        return 'saved', None
+    # One lock across all three writes: a timer-driven /api/flush, an export
+    # and the background segmentation loop all arrive here, and a reader must
+    # never catch the set half-updated. save_class_map lives in the shared
+    # export_yolo.py (parity-guarded, not editable from this task), so it is
+    # serialized here but is not itself an atomic replace.
+    with _store_write_lock:
+        result, conflict_path = save_segmentations(export_dir, session['segmentations'])
+        save_manifest(export_dir, list(session['segmentations'].keys()))
+        if session['class_map']:
+            save_class_map(export_dir, session['class_map'])
+    return result, conflict_path
+
+
+# ── Save on quit ─────────────────────────────────────────────────
+# VEGA annotation safety net, 2026-09-27: a stopped or killed annotator must
+# not drop an operator's un-flushed edits. Wired into SIGTERM, SIGINT and a
+# normal interpreter exit from the __main__ block only, never at import time,
+# so importing this module (every test in tests/ does) installs nothing.
+
+# How long the quit-time flush waits for the session write lock before giving
+# up. The GPU right-of-way sweep sends SIGTERM and the pipeline orchestrator's
+# runner.kill follows with SIGKILL 5s later (which cannot be caught), so this
+# must land comfortably inside that window.
+_QUIT_FLUSH_LOCK_TIMEOUT_S = 4.0
+
+# Set once flush_before_exit() has completed one attempt (saved, diverted to
+# a conflict file, or found nothing to save), so a signal handler and the
+# atexit hook its sys.exit() triggers on the way out never both act on the
+# same quit: a lock that stays busy past the timeout is the one case this
+# does NOT set, so a later attempt (e.g. atexit, if the signal handler's own
+# attempt could not get the lock) still gets to try.
+_quit_flushed = False
+
+
+def flush_before_exit():
+    """Flush the active session to disk once before the process exits, if it
+    has an unsaved change.
+
+    Idempotent per process: once a call has completed one attempt, later
+    calls (a signal handler's sys.exit() re-running the atexit hook it just
+    triggered) are a no-op, so a session is never written twice on the way
+    out.
+
+    An unconfigured session (session['export_dir'] is empty, i.e. no project
+    was ever opened) writes nothing, matching flush_all()'s own guard: a
+    quit before Open never creates an empty segmentations.json over a real
+    one. An idle, unmutated session (_is_dirty() is False) also writes
+    nothing: before this guard existed, an idle annotator never wrote on its
+    own, and the expert-ID importer (MOD/scripts/_expertids/importer.py) can
+    rewrite the same project's segmentations.json while the annotator sits
+    open; skipping a no-op quit-time save keeps that true. The
+    save_segmentations() conflict check underneath this guard covers the
+    remaining case, a genuinely dirty session whose file changed on disk
+    since this process last saw it.
+
+    The session write lock is acquired with a bounded timeout rather than
+    blocked on forever, because a request thread already mid-write can hold
+    it when the signal arrives. When the lock is not free within
+    _QUIT_FLUSH_LOCK_TIMEOUT_S seconds, the flush is abandoned: one line
+    naming the export directory is logged, and the process is left to exit
+    anyway rather than hang on a save that cannot complete.
+    """
+    global _quit_flushed
+    if _quit_flushed:
         return
-    save_segmentations(export_dir, session['segmentations'])
-    save_manifest(export_dir, list(session['segmentations'].keys()))
-    if session['class_map']:
-        save_class_map(export_dir, session['class_map'])
+    export_dir = session.get('export_dir')
+    if not export_dir:
+        _quit_flushed = True
+        return
+    if not _is_dirty():
+        _quit_flushed = True
+        return
+    if not _store_write_lock.acquire(timeout=_QUIT_FLUSH_LOCK_TIMEOUT_S):
+        log(f"quit: session lock still busy after {_QUIT_FLUSH_LOCK_TIMEOUT_S}s, "
+            f"{export_dir} was NOT saved on exit")
+        return
+    try:
+        flush_all()
+    finally:
+        _store_write_lock.release()
+    _quit_flushed = True
+
+
+def _handle_quit_signal(signum, frame):
+    """SIGTERM/SIGINT handler: flush the session once, then exit.
+
+    Parameters:
+        signum: the signal number Python's signal module delivers.
+        frame: the interrupted stack frame; unused, required by the
+            signal-handler calling convention.
+
+    Returns:
+        None. sys.exit(0) raises SystemExit before this function would
+        otherwise return, so control never comes back to the caller.
+    """
+    flush_before_exit()
+    sys.exit(0)
 
 
 # ── Review helpers ───────────────────────────────────────────────
@@ -336,6 +877,7 @@ def _build_review_list():
     """
     import random as _random
     target_only = getattr(cfg, 'TARGET_SPECIES_ONLY', 0)
+    target_codes = _target_species()
     unexported = []
     for fn in sorted(session['segmentations']):
         seg = session['segmentations'][fn]
@@ -348,7 +890,7 @@ def _build_review_list():
             # so the no-target-mask skip must not hide them from review.
             if not seg.get('custom_import', False):
                 masks = seg.get('masks', [])
-                if not any(m.get('species', '') in TARGET_SPECIES for m in masks):
+                if not any(m.get('species', '') in target_codes for m in masks):
                     continue
         unexported.append(fn)
     if session.get('shuffle'):
@@ -389,6 +931,78 @@ def _find_segmentation(filename):
     return session['segmentations'].get(filename)
 
 
+# ── Wire serialization ───────────────────────────────────────────
+# A stored mask carries two heavy fields the browser never reads: the RLE blob
+# (`rle`, used by render_overlay / export / merge math on the server) and the
+# normalized polygon (`polygon_norm`, written to the YOLO label file at export).
+# The canvas draws from `polygon_px` only. On a dense frame those two fields are
+# most of the JSON, so every client-bound copy drops them. The disk store
+# (segmentations.json) keeps both: wire_mask copies, it never mutates.
+#
+# One deliberate exception: exemplar scan candidates are ephemeral on the client
+# and are POSTed back verbatim to /commit_mask, so those keep both fields.
+_WIRE_DROP_FIELDS = ('rle', 'polygon_norm')
+
+
+def wire_mask(mask):
+    """A client-bound copy of one mask, without the fields no client reads."""
+    if not isinstance(mask, dict):
+        return mask
+    return {k: v for k, v in mask.items() if k not in _WIRE_DROP_FIELDS}
+
+
+def wire_masks(masks):
+    """wire_mask over a list of masks."""
+    return [wire_mask(m) for m in (masks or [])]
+
+
+# ── Embedding warm-up ────────────────────────────────────────────
+# Opening a frame used to load only the pixels; the tracker's vision encoder
+# then ran on the operator's FIRST click, so that click paid encoder + decoder.
+# Opening a frame now kicks the encoder in the background, so the first click
+# pays only the decoder. The set below keeps a second GET for the same frame
+# from stacking a second thread behind the first.
+_prewarm_lock = threading.Lock()
+_prewarming = set()
+
+
+def _prewarm_embeddings_async(filename):
+    """Run the tracker vision encoder for the just-opened frame off-thread.
+
+    Takes the engine's own _prompt_lock, the same lock every prompt takes, so
+    the warm-up can never observe a half-switched frame: whichever frame is
+    current when the lock is granted is the one whose embeddings get cached,
+    and a prompt that arrives meanwhile simply waits and then finds them warm.
+    Never raises: a failed warm-up only costs the old first-click latency.
+    """
+    engine = session.get('sam_engine')
+    if engine is None:
+        return
+    with _prewarm_lock:
+        if filename in _prewarming:
+            return
+        _prewarming.add(filename)
+
+    def _run():
+        try:
+            with engine._prompt_lock:
+                # Best-effort staleness check: if the operator has already
+                # opened a different frame, skip the encoder pass rather than
+                # spend it on a frame nobody is looking at. This is not a
+                # guarantee (a switch can arrive right after the check), only
+                # a cheap way to drop the common wasted case.
+                if (getattr(engine, '_current_image', None) is not None
+                        and session.get('current_review_image') == filename):
+                    engine._ensure_embeddings()
+        except Exception as e:
+            log(f"[prewarm] embedding warm-up failed for {filename} (non-fatal): {e}")
+        finally:
+            with _prewarm_lock:
+                _prewarming.discard(filename)
+
+    threading.Thread(target=_run, name='prewarm-embeddings', daemon=True).start()
+
+
 def _ensure_image_embedded(filename):
     """Ensure the SAM3 engine has the given image embedded for refinement."""
     engine = session.get('sam_engine')
@@ -405,11 +1019,43 @@ def _ensure_image_embedded(filename):
 
     # Always verify engine has the right image loaded (don't trust session cache)
     if session.get('current_review_image') != filename or engine._current_image_path != image_path:
-        engine._current_image_path = None  # force reload
+        engine.clear_image()  # force reload, and free the old frame's embeddings
         engine.set_image(image_path)
         session['current_review_image'] = filename
 
     return True
+
+
+# ── Standalone session helpers ───────────────────────────────────
+
+# A standalone session name becomes a directory under cfg.STANDALONE_ROOT, so it
+# is restricted to a flat, path-safe token (no separators, no traversal).
+_SESSION_NAME_RE = re.compile(r'^[A-Za-z0-9._-]{1,64}$')
+
+
+def _default_session_name():
+    """Suggested standalone session name: AST date plus the operator initials,
+    e.g. 26-08-26_LO. All timestamps in this app are AST (house rule), so the
+    date comes from custom_imports' single AST clock, never a second one."""
+    return ci.now_ast().strftime('%y-%m-%d') + '_' + (cfg.REVIEWER or 'LO')
+
+
+def _read_master_codes():
+    """The species dictionary the standalone label picker offers.
+    [{code, name, category}, ...], empty when no master_codes CSV is resolvable."""
+    import csv as _csv
+    out = []
+    path = cfg.MASTER_CODES_CSV
+    if not path or not os.path.isfile(path):
+        return out
+    with open(path) as f:
+        for row in _csv.DictReader(f):
+            code = (row.get('species_code') or row.get('code') or '').strip()
+            if code:
+                out.append({'code': code,
+                            'name': (row.get('species_name') or row.get('name') or '').strip(),
+                            'category': (row.get('category') or '').strip()})
+    return out
 
 
 # ── Routes ───────────────────────────────────────────────────────
@@ -425,8 +1071,8 @@ def index():
                                "Coral", "Sponge", "Macroalgae", "Gorgonian",
                                "Dca", "Turf", "Non-living",
                            ],
-                           target_species=TARGET_SPECIES,
-                           target_labels=ALL_TARGET_LABELS,
+                           target_species=_target_species(),
+                           target_labels=_target_labels(),
                            default_review_dir=cfg.REVIEW_DIR,
                            default_contacts=cfg.REVIEW_CONTACTS,
                            target_species_only=bool(getattr(cfg, 'TARGET_SPECIES_ONLY', 1)),
@@ -444,10 +1090,18 @@ def index():
                            orchestrator_url=_orchestrator_url(),
                            orchestrated=(bool(os.environ.get('TCRMP_INPUT_DIR'))
                                          or request.args.get('orchestrated') == '1'),
-                           session_mode=getattr(cfg, 'SESSION_MODE', 'configure'))
+                           session_mode=getattr(cfg, 'SESSION_MODE', 'configure'),
+                           # Expert-review lock (2026-09-06): the page renders
+                           # its tooltip from this one string, so the wording an
+                           # operator reads and the wording a refused request
+                           # carries can never drift apart.
+                           review_locked_msg=REVIEW_LOCKED_MSG,
+                           review_tagging_enabled=REVIEW_TAGGING_ENABLED,
+                           default_session_name=_default_session_name())
 
 
 @app.route('/api/configure', methods=['POST'])
+@_dirty_on_success
 def configure():
     """Load sam_click_prompts.json for selected categories, build queue."""
     data = request.json or {}
@@ -474,7 +1128,7 @@ def configure():
     session['categories'] = categories
     session['review_batch_size'] = batch_size
     session['shuffle'] = bool(data.get('shuffle', False))
-    session['reviewer'] = (data.get('reviewer') or cfg.REVIEWER)
+    _seed_reviewer(data.get('reviewer'))
 
     # Expert-review settings: where to push the queue, and who gets the CSV.
     session['review_dir'] = (data.get('review_dir') or cfg.REVIEW_DIR)
@@ -529,12 +1183,13 @@ def configure():
             return p.get('non_target') is True or \
                 p.get('species', p.get('species_code', '')) == '?'
 
+        target_codes = _target_species()
         if target_sp_only:
             # Filter directly by target species codes
             # sam_click_prompts uses 'species' field, not 'species_code'
             selected_points = [
                 p for p in img_data.get('points', [])
-                if p.get('species', p.get('species_code', '')) in TARGET_SPECIES
+                if p.get('species', p.get('species_code', '')) in target_codes
                 or _is_non_target(p) or _is_review(p)
             ]
         elif real_categories:
@@ -547,7 +1202,7 @@ def configure():
             if getattr(cfg, 'TARGET_SPECIES_ONLY', 0):
                 selected_points = [
                     p for p in selected_points
-                    if p.get('species', p.get('species_code', '')) in TARGET_SPECIES
+                    if p.get('species', p.get('species_code', '')) in target_codes
                     or _is_non_target(p) or _is_review(p)
                 ]
         else:
@@ -638,13 +1293,14 @@ def configure():
 
 
 @app.route('/api/resume', methods=['POST'])
+@_dirty_on_success
 def resume():
     """Resume from existing segmentation output."""
     data = request.json
     session['export_dir'] = os.path.abspath(data['export_dir'])
     session['review_batch_size'] = data.get('review_batch_size', cfg.REVIEW_BATCH_SIZE)
     session['shuffle'] = bool(data.get('shuffle', False))
-    session['reviewer'] = (data.get('reviewer') or cfg.REVIEWER)
+    _seed_reviewer(data.get('reviewer'))
     session['review_dir'] = (data.get('review_dir') or cfg.REVIEW_DIR)
     _rc = data.get('contacts', cfg.REVIEW_CONTACTS)
     if isinstance(_rc, str):
@@ -684,6 +1340,7 @@ def resume():
 
 
 @app.route('/api/import_images', methods=['POST'])
+@_dirty_on_success
 def import_images():
     """Bring ANY custom image(s) into the active run's annotation queue.
 
@@ -738,6 +1395,132 @@ def import_images():
     })
 
 
+@app.route('/api/standalone/master_codes')
+def standalone_master_codes():
+    """Species dictionary for the standalone label picker."""
+    return jsonify({'codes': _read_master_codes()})
+
+
+@app.route('/api/standalone/start', methods=['POST'])
+@_dirty_on_success
+def standalone_start():
+    """Create a standalone session (no project): session dir, labels, images, queue.
+
+    Accepts multipart (fields `session`, `labels` as a comma list, repeatable
+    `images` file field, `reviewer` initials) or JSON {session, labels[],
+    paths[], reviewer}. Everything the session owns lives under
+    cfg.STANDALONE_ROOT/<session>: custom_imports/ for the frames,
+    segmentations/ for the masks, session.json for the header.
+
+    Initials are required: a standalone session has no project to inherit an
+    identity from, so without them every mask it produces would be
+    unattributed. They are refused with a 400 rather than defaulted.
+
+    A label that spells out the expert-review tag is refused with the shared
+    409 (Lauren Olinger, 2026-09-06): every frame of the session inherits this
+    list, so one REVIEW entry would arm the suspended flag for the whole
+    session.
+    """
+    if getattr(cfg, 'SESSION_MODE', '') != 'standalone':
+        return jsonify({'error': 'not a standalone session'}), 400
+
+    form = request.form if request.form else (request.get_json(silent=True) or {})
+    if not _seed_reviewer(form.get('reviewer')):
+        return jsonify({'error': 'your initials are required so this work is credited'}), 400
+    name = (form.get('session') or '').strip()
+    # name.strip('.') == '' rejects a name made only of dots ('.', '...'): the
+    # regex allows a dot, and '.' would resolve the session dir to the root.
+    if not _SESSION_NAME_RE.match(name) or '..' in name or name.strip('.') == '':
+        return jsonify({'error': 'session name: letters, digits, dot, dash, underscore only'}), 400
+
+    raw_labels = form.get('labels') or []
+    if isinstance(raw_labels, str):
+        raw_labels = [s.strip() for s in raw_labels.split(',')]
+    labels = [l for l in raw_labels if l]
+    if not labels:
+        return jsonify({'error': 'pick at least one label'}), 400
+    # The quick-add row is drawn from this list, so a label of REVIEW would put
+    # a live, armable REVIEW button beside the greyed locked one and offer the
+    # operator a control every add route answers with a 409. A person typed
+    # this list, so it is refused and named rather than silently edited. The
+    # template guards it ahead of the POST; this is what makes that guard true.
+    refused_labels = [l for l in labels if _review_tag_refused({'species': l})]
+    if refused_labels:
+        log(f"[review-lock] standalone session '{name}' refused: "
+            f"{len(refused_labels)} label(s) spell out the expert-review tag "
+            f"({', '.join(refused_labels)}). {REVIEW_LOCKED_MSG}")
+        return _review_locked_response(
+            detail=f"Remove {', '.join(refused_labels)} from the label list "
+                   f"to start this session.",
+            review_locked_labels=refused_labels)
+    lookup = {c['code']: c for c in _read_master_codes()}
+
+    session_dir = os.path.join(os.path.abspath(cfg.STANDALONE_ROOT), name)
+    os.makedirs(os.path.join(session_dir, 'segmentations'), exist_ok=True)
+    session['export_dir'] = session_dir
+    session['input_dir'] = session_dir
+    session['target_labels'] = [{'code': c,
+                                 'name': lookup.get(c, {}).get('name', ''),
+                                 'category': lookup.get(c, {}).get('category', 'Coral')}
+                                for c in labels]
+    session['categories'] = ['Target species only']
+    # Standalone sessions are not batched: one queue, exported when the operator
+    # says so. A single huge batch size keeps the batch machinery out of the way.
+    session['review_batch_size'] = 10 ** 9
+    session['shuffle'] = False
+    # session['reviewer'] is already in force: the required-initials check at
+    # the top of this route seeded it before anything was written.
+    session['review_dir'] = cfg.REVIEW_DIR
+    session['contacts'] = []
+    session['class_map'] = load_class_map(session_dir)
+    session['segmentations'] = load_segmentations(session_dir)
+    # Reopening a session name that already holds imports: backfill anything the
+    # segmentations store lost (same rule configure() uses for routed projects).
+    _merge_custom_imports()
+
+    items = []
+    for fs in request.files.getlist('images'):
+        if fs and fs.filename:
+            items.append((fs.filename, fs.read()))
+    raw_paths = form.get('paths') or []
+    if isinstance(raw_paths, str):
+        raw_paths = raw_paths.split(',')
+    for p in raw_paths:
+        p = str(p).strip()
+        if p:
+            items.append((os.path.basename(p), p))
+
+    entries, skipped = ([], [])
+    if items:
+        entries, skipped = ci.ingest_files(
+            session_dir, items, taken_names=set(session['segmentations'].keys()),
+            reviewer=session['reviewer'], log=log)
+        for e in entries:
+            session['segmentations'][e['filename']] = ci.seg_dict_for(session_dir, e)
+        flush_all()
+
+    with open(os.path.join(session_dir, 'session.json'), 'w') as f:
+        json.dump({'session': name,
+                   'labels': labels,
+                   'created': ci.now_ast().strftime('%Y-%m-%d %H:%M AST'),
+                   'reviewer': session['reviewer']}, f, indent=2)
+
+    session['phase'] = 'review'
+    session['processing_queue'] = []
+    session['processing_idx'] = 0
+    _build_review_list()
+    session['configured'] = True
+    log(f"[standalone] session '{name}' ready at {session_dir}: "
+        f"{len(entries)} image(s) imported, {len(skipped)} skipped, "
+        f"labels {','.join(labels)}")
+    return jsonify({'ok': True,
+                    'session_dir': session_dir,
+                    'imported': [e['filename'] for e in entries],
+                    'skipped': [{'name': n, 'reason': r} for n, r in skipped],
+                    'review_count': len(session.get('review_files', [])),
+                    'labels': labels})
+
+
 def _process_single_image(engine, item, export_dir):
     """Segment one image. Returns (filename, n_masks, n_points).
 
@@ -768,6 +1551,17 @@ def _process_single_image(engine, item, export_dir):
     neg_clicks = [(p['x'], p['y']) for p in negatives]
 
     raw_masks = []
+    # Lock (2026-09-06): build_mask_dict drops a review tag rather than raising
+    # (an exception in this loop would abandon the whole frame) and counts the
+    # drop on its own process-wide tally. This frame's own figure is counted
+    # here instead of read as a difference of that tally, because the tally is
+    # not this frame's alone: the exemplar scan route derives its point_info
+    # from an existing mask, so a scan seeded from one of the masks flagged
+    # before the lock builds a tagged point_info on its own request thread,
+    # outside _processing_lock, while this loop runs. Counting per call keeps
+    # the logged number exact whatever else the process is doing; the running
+    # total stays with mask_ops.review_tags_dropped().
+    review_tags_dropped_here = 0
     for pt in targets:
         if neg_clicks:
             # Multi-point prompt: [positive, *negatives] with labels [1, 0…0].
@@ -788,12 +1582,27 @@ def _process_single_image(engine, item, export_dir):
             if mask_dict is not None:
                 # REVIEW prompts produce a real mask, but it is flagged so YOLO
                 # export skips it and the batch export ships it to the expert.
-                if _is_review(pt):
+                # Lock (2026-09-06): under the lock this stamp is skipped
+                # whole. build_mask_dict has already dropped the tag, so the
+                # mask arrives with an empty species, which the existing
+                # empty-species accept guard handles, and the operator labels
+                # it. Flipping REVIEW_TAGGING_ENABLED restores the stamp.
+                if _is_review(pt) and REVIEW_TAGGING_ENABLED:
                     mask_dict['review'] = True
                     mask_dict['species'] = 'REVIEW'
                     mask_dict['category'] = 'Review'
+                elif not REVIEW_TAGGING_ENABLED and review_tag_requested(pt):
+                    # The same condition build_mask_dict counted its drop on,
+                    # applied to the same prompt and only where a mask was
+                    # actually built, so this frame's figure matches what the
+                    # lock dropped for this frame exactly.
+                    review_tags_dropped_here += 1
                 mask_dict['mask'] = result['mask']
                 raw_masks.append(mask_dict)
+
+    if review_tags_dropped_here > 0:
+        log(f"[review-lock] {filename}: {review_tags_dropped_here} review-flagged "
+            f"prompt(s) produced masks with no review tag. {REVIEW_LOCKED_MSG}")
 
     if raw_masks:
         raw_masks = resolve_overlaps(
@@ -825,6 +1634,11 @@ def _process_single_image(engine, item, export_dir):
     }
 
     session['segmentations'][filename] = seg_dict
+    # Runs on the background processing thread, outside any route's request
+    # cycle, so the @_dirty_on_success decorator never sees it; mark it here
+    # directly (the one sprinkled call site, everywhere else routes through
+    # the decorator).
+    _mark_dirty()
     render_segmentation_overlays(seg_dict, filename, export_dir, stage="auto")
 
     return filename, len(final_masks), len(points)
@@ -870,10 +1684,11 @@ def _background_process_all():
 
     flush_all()
 
-    # Clear engine's cached image so review forces a fresh set_image
+    # Clear engine's cached image so review forces a fresh set_image. The engine
+    # owns this: clearing the two private attributes here would leave its
+    # embedding caches pointing at the last processed frame.
     if engine is not None:
-        engine._current_image_path = None
-        engine._current_image = None
+        engine.clear_image()
     session['current_review_image'] = None
 
     session['phase'] = 'review'
@@ -925,10 +1740,41 @@ def process_status():
     })
 
 
+def _flush_result_fields(result, conflict_path):
+    """{'conflict': True, 'conflict_file': <basename>} when a save diverted
+    to a sibling file, else {}. Merged into a save route's own response dict
+    (which sets 'ok' itself, since a route may have real work to report even
+    when the flush underneath it diverted, e.g. an export that still wrote
+    its files) so the client always learns when its edit did not reach
+    segmentations.json."""
+    if result == 'conflict':
+        return {'conflict': True, 'conflict_file': os.path.basename(conflict_path)}
+    return {}
+
+
 @app.route('/api/flush', methods=['POST'])
 def force_flush():
-    flush_all()
-    return jsonify({'ok': True})
+    """Write the session to disk now: the client's 2s trailing debounce, an
+    explicit Ctrl+S, a tab's pagehide beacon, and the orchestrator's pre-kill
+    save before it stops this process all arrive here.
+
+    Writes only when something changed since the last successful save
+    (_is_dirty()); an idle session with nothing new answers ok with no disk
+    write, so a quiet pre-kill or trailing-timer call on a session nobody
+    touched can never race the expert-ID importer for segmentations.json.
+
+    Answers {ok: false, conflict: true, conflict_file: <name>} rather than
+    ok: true when save_segmentations() diverted the write to a conflict
+    sibling (the file changed on disk since this process last saw it, most
+    likely the expert-ID importer): the operator is never told their edit
+    saved when it did not.
+    """
+    if not _is_dirty():
+        return jsonify({'ok': True})
+    result, conflict_path = flush_all()
+    out = {'ok': result != 'conflict'}
+    out.update(_flush_result_fields(result, conflict_path))
+    return jsonify(out)
 
 
 @app.route('/api/review_batch')
@@ -1013,11 +1859,13 @@ def get_image_data(filename):
     if not seg:
         return jsonify({'error': 'not found'}), 404
 
-    # Pre-embed this image for fast refinement
-    _ensure_image_embedded(filename)
+    # Pre-embed this image for fast refinement. set_image only opens the pixels;
+    # the warm-up below runs the vision encoder so the first click is decoder-only.
+    if _ensure_image_embedded(filename):
+        _prewarm_embeddings_async(filename)
 
     return jsonify({
-        'masks': seg.get('masks', []),
+        'masks': wire_masks(seg.get('masks', [])),
         'image_width': seg.get('image_width', 0),
         'image_height': seg.get('image_height', 0),
         'reviewed': seg.get('reviewed', False),
@@ -1041,7 +1889,128 @@ def _needs_species(mask):
     return (mask.get('species', '') or '') == ''
 
 
+# ── Reviewer identity (D2) ───────────────────────────────────────
+# Who reviewed a mask is recorded as initials on the mask itself
+# (mask['reviewer']), in label_outcomes/label_provenance.csv, and in the
+# cross-project registry. The orchestrator seeds TCRMP_REVIEWER at launch and
+# POSTs /api/reviewer on every reuse of a live annotator, so the session value
+# tracks whoever opened the project last. Blank stays blank: nothing is
+# inferred into the data.
+
+# Initials are 1 to 4 letters, the same rule the VICARIUS launcher enforces on
+# the project it hands us. Nothing else counts as an identity: "1" or "!!"
+# would otherwise satisfy the accept guard while crediting nobody.
+_REVIEWER_RE = re.compile(r'^[A-Za-z]{1,4}$')
+
+
+def _norm_reviewer(value):
+    """Initials as stored everywhere: stripped and uppercased, and only when
+    they are 1 to 4 letters. Anything else normalizes to '' (unknown), which
+    the accept guard then refuses."""
+    raw = str(value or '').strip()
+    return raw.upper() if _REVIEWER_RE.match(raw) else ''
+
+
+def _current_reviewer():
+    """Session reviewer, else the TCRMP_REVIEWER env default; '' when unknown."""
+    return _norm_reviewer(session.get('reviewer') or cfg.REVIEWER)
+
+
+def _seed_reviewer(value):
+    """Boot-time rule for /api/configure, /api/resume and the standalone form.
+    Initials in the request replace the session value. A request without
+    them keeps whatever POST /api/reviewer set, because the orchestrator
+    pushes the latest opener to a reused process before the page boots and
+    the boot body carries no initials. Only an empty session falls back to
+    the TCRMP_REVIEWER launch default. Returns the value now in force."""
+    rv = _norm_reviewer(value)
+    if rv:
+        session['reviewer'] = rv
+    elif not session.get('reviewer'):
+        session['reviewer'] = _norm_reviewer(cfg.REVIEWER)
+    return session['reviewer']
+
+
+def _stamp_reviewer(mask):
+    """Record the current reviewer on a mask whose status or label just
+    changed. A blank reviewer leaves any earlier initials in place."""
+    rv = _current_reviewer()
+    if rv:
+        mask['reviewer'] = rv
+    return rv
+
+
+# An accepted mask is somebody's judgement, and a mask nobody can be credited
+# for is worthless downstream: it cannot be audited, questioned or counted per
+# reviewer. So every ACCEPT path refuses while the session has no initials.
+# Rejects, relabels and re-saves are untouched, so an operator who has not
+# named themselves is told what to do rather than trapped mid-frame.
+NEEDS_REVIEWER_MSG = 'Set your initials first (top bar) so this work is credited.'
+
+
+def _needs_reviewer_response():
+    """Refusal body for an accept attempted by an unnamed session. HTTP 200
+    with ok:false, the shape the client already reads for a refused accept."""
+    return jsonify({'ok': False, 'needs_reviewer': True,
+                    'error': NEEDS_REVIEWER_MSG})
+
+
+def _accepts_new_masks(seg, updates):
+    """True when this /masks PUT would flip at least one mask from
+    not-accepted to accepted. An update that re-states the status of an
+    already accepted mask (what a frame save sends) is not an accept."""
+    by_id = {str(m.get('id')): m for m in seg.get('masks', [])}
+    for mid, new_status in (updates or {}).items():
+        if new_status != 'accepted':
+            continue
+        if by_id.get(str(mid), {}).get('status') != 'accepted':
+            return True
+    return False
+
+
+def _relabels_accepted(seg, relabel):
+    """True when this /masks PUT would relabel a mask that is ALREADY accepted.
+
+    Changing the species of accepted work is a judgement on accepted work, so
+    it carries the same identity requirement as making it. Relabelling a
+    pending mask decides nothing yet and stays free."""
+    by_id = {str(m.get('id')): m for m in seg.get('masks', [])}
+    return any(by_id.get(str(mid), {}).get('status') == 'accepted'
+               for mid in (relabel or {}))
+
+
+@app.route('/api/reviewer', methods=['GET', 'POST'])
+def api_reviewer():
+    """GET -> {'reviewer'}; POST {'reviewer'} sets session['reviewer']
+    (normalized) and echoes it back."""
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        session['reviewer'] = _norm_reviewer(data.get('reviewer'))
+    return jsonify({'reviewer': _current_reviewer()})
+
+
+def _merge_yields_accepted(seg, ids):
+    """True when merging ``ids`` would leave an ACCEPTED survivor.
+
+    ``_merge_ids`` promotes the survivor to accepted as soon as ANY member is
+    accepted, so merging is a fourth way to create accepted work: a pending
+    mask merged with an accepted one comes out accepted, credited to nobody.
+    A merge whose result is still pending creates nothing and stays free.
+    """
+    by_id = {m.get('id'): m for m in seg.get('masks', [])}
+    return any((by_id.get(i) or {}).get('status') == 'accepted' for i in ids)
+
+
+def _frame_has_accepted(seg):
+    """True when the frame holds an accepted mask that a same-species merge
+    could absorb into or rebuild. Used by /merge_same_id, which decides what to
+    union inside mask_ops and mutates survivors in place, so its guard has to
+    be a cheap pre-check rather than an inspection of the result."""
+    return any(m.get('status') == 'accepted' for m in seg.get('masks', []))
+
+
 @app.route('/api/image/<path:filename>/masks', methods=['PUT'])
+@_dirty_on_success
 def update_masks(filename):
     """Bulk update mask statuses (accept/reject).
 
@@ -1051,14 +2020,35 @@ def update_masks(filename):
     its prior status (or 'pending' if it had none) and its id is reported
     back in `needs_species` so the client can prompt for a label instead of
     silently dropping the accept.
+
+    Reviewer guard: an accept, or a relabel of an ALREADY accepted mask, by a
+    session with no initials is refused whole (nothing in the request is
+    applied) with needs_reviewer. Rejects, relabels of pending masks and a
+    re-save of an already accepted mask are none of those and go through, so a
+    frame save is never lost.
     """
     seg = _find_segmentation(filename)
     if not seg:
         return jsonify({'error': 'not found'}), 404
 
-    data = request.json
+    data = request.json or {}
     updates = data.get('updates', {})  # {mask_id: status}
     relabel = data.get('relabel', {})  # {mask_id: {species, review, category, name}} (optional)
+
+    # Expert-review lock (2026-09-06): an entry that asks to ADD a review tag
+    # refuses the WHOLE request, before the reviewer guard and before any field
+    # is applied, so a body holding one offending entry is never half applied.
+    # An explicit review false is a CLEAR, not an add, and goes through below.
+    review_locked_ids = _review_locked_relabel_ids(relabel)
+    if review_locked_ids:
+        return _review_locked_response(
+            detail=(f"{len(review_locked_ids)} of {len(relabel)} relabel entries "
+                    f"asked for a review tag, so nothing in this request was applied."),
+            review_locked_ids=review_locked_ids)
+
+    if not _current_reviewer() and (_accepts_new_masks(seg, updates)
+                                    or _relabels_accepted(seg, relabel)):
+        return _needs_reviewer_response()
 
     needs_species = []
     for mask in seg.get('masks', []):
@@ -1067,6 +2057,7 @@ def update_masks(filename):
             info = relabel[mid] or {}
             if 'species' in info:
                 mask['species'] = info['species']
+                _stamp_reviewer(mask)
             if 'review' in info:
                 mask['review'] = bool(info['review'])
             if 'category' in info:
@@ -1080,6 +2071,7 @@ def update_masks(filename):
                 # Refused: leave status as-is (do not accept an unlabeled mask).
             else:
                 mask['status'] = new_status
+                _stamp_reviewer(mask)
 
     seg['reviewed'] = True
     _stamp_provenance(seg, filename)
@@ -1090,16 +2082,25 @@ def update_masks(filename):
 
 
 @app.route('/api/image/<path:filename>/accept_all', methods=['POST'])
+@_dirty_on_success
 def accept_all_masks(filename):
     """Accept all pending masks for an image.
 
     Guard: pending masks with no species assigned are skipped (left
     'pending') instead of being accepted unlabeled. Their ids are reported
     in `needs_species`. REVIEW masks are exempt (intentional label).
+
+    Reviewer guard: refused with needs_reviewer when the session has no
+    initials and there is anything pending to accept. With nothing pending
+    the call is a plain no-op and answers normally.
     """
     seg = _find_segmentation(filename)
     if not seg:
         return jsonify({'error': 'not found'}), 404
+
+    if not _current_reviewer() and any(
+            m.get('status') == 'pending' for m in seg.get('masks', [])):
+        return _needs_reviewer_response()
 
     count = 0
     needs_species = []
@@ -1109,6 +2110,7 @@ def accept_all_masks(filename):
                 needs_species.append(mask['id'])
                 continue
             mask['status'] = 'accepted'
+            _stamp_reviewer(mask)
             count += 1
     seg['reviewed'] = True
     _stamp_provenance(seg, filename)
@@ -1126,10 +2128,29 @@ def _commit_candidate_to_seg(seg, cand):
     + 1) so it never collides with a live mask, status='accepted' so it exports
     like any reviewed mask. Rejected candidates are dropped client-side and never
     reach this helper, so nothing dropped is ever persisted.
+
+    Expert-review lock (2026-09-06): the copy is wholesale, so a review tag on
+    the posted candidate, and any expert round-trip identifier a client sends
+    with it, would ride in. Both are stripped and the candidate is kept.
     """
     masks = seg.setdefault('masks', [])
     next_id = max((m['id'] for m in masks), default=-1) + 1
-    mask = dict(cand)
+    # Strip rather than refuse: this helper takes one candidate at a time out of
+    # a scan that can offer many, and refusing here would cost the operator the
+    # whole tray for one tagged candidate.
+    tag_dropped = _review_tag_refused(cand)
+    mask = strip_review_tag(cand) if tag_dropped else dict(cand)
+    ids_dropped = []
+    if not REVIEW_TAGGING_ENABLED:
+        ids_dropped = [k for k in CLIENT_REVIEW_PROVENANCE_KEYS if k in mask]
+        for key in ids_dropped:
+            mask.pop(key)
+    if tag_dropped or ids_dropped:
+        _record_candidate_stripped()
+        dropped = (['its review tag'] if tag_dropped else []) + [
+            f"a client-supplied {key}" for key in ids_dropped]
+        log(f"[review-lock] scan candidate committed as mask #{next_id} without "
+            f"{', '.join(dropped)}. {REVIEW_LOCKED_MSG}")
     mask['id'] = next_id
     mask['status'] = 'accepted'
     masks.append(mask)
@@ -1137,31 +2158,46 @@ def _commit_candidate_to_seg(seg, cand):
 
 
 @app.route('/api/image/<path:filename>/commit_mask', methods=['POST'])
+@_dirty_on_success
 def commit_mask(filename):
     """Keep a scan candidate: append it to seg['masks'] as an accepted mask.
 
     Guard: same as update_masks / accept_all_masks. A candidate with no
     species assigned (e.g. seeded from an unlabeled source mask via
-    exemplar_scan(mode='this')) is refused here too, so this third accept
+    exemplar_scan(mode='this')), or one left with none once the expert-review
+    lock strips its review tag, is refused here too, so this third accept
     path cannot bypass the label guard. The candidate is not committed and
     the response reports needs_species instead of a mask, so the client can
     prompt for a label rather than silently accepting it unlabeled.
+
+    Reviewer guard: this route only ever creates an ACCEPTED mask, so an
+    unnamed session is refused outright with needs_reviewer.
     """
     seg = _find_segmentation(filename)
     if not seg:
         return jsonify({'error': 'not found'}), 404
+    if not _current_reviewer():
+        return _needs_reviewer_response()
     cand = (request.json or {}).get('mask')
     if not cand:
         return jsonify({'error': 'no mask'}), 400
-    if _needs_species(cand):
+    # Expert-review lock (2026-09-06): the label guard judges the candidate as
+    # it will be STORED, with any review tag stripped. A candidate kept while
+    # REVIEW was armed therefore reads as unlabelled and the operator is asked
+    # for a species code, instead of the frame gaining an accepted mask with no
+    # species. The strip itself happens in _commit_candidate_to_seg, which is
+    # the backstop for every other caller of that helper.
+    if _needs_species(_review_locked_candidate(cand)):
         return jsonify({'ok': False, 'needs_species': True})
     mask = _commit_candidate_to_seg(seg, cand)
+    _stamp_reviewer(mask)
     seg['reviewed'] = True
     _stamp_provenance(seg, filename)
-    return jsonify({'ok': True, 'mask': mask})
+    return jsonify({'ok': True, 'mask': wire_mask(mask)})
 
 
 @app.route('/api/image/<path:filename>/refine', methods=['POST'])
+@_dirty_on_success
 def refine_mask(filename):
     """Refine a mask with an additional positive/negative click."""
     seg = _find_segmentation(filename)
@@ -1172,10 +2208,12 @@ def refine_mask(filename):
     if engine is None:
         return jsonify({'error': 'SAM3 engine not loaded'}), 500
 
-    data = request.json
+    data = request.json or {}
     mask_id = data['mask_id']
-    click_x = data['click_x']
-    click_y = data['click_y']
+    # click_x/click_y are optional on a rerun (the stored clicks are re-prompted
+    # as they are), so read them defensively.
+    click_x = data.get('click_x')
+    click_y = data.get('click_y')
     click_label = data.get('click_label', 1)  # 1=positive, 0=negative
 
     # Find the mask
@@ -1186,6 +2224,11 @@ def refine_mask(filename):
             break
     if target_mask is None:
         return jsonify({'error': 'mask not found'}), 404
+
+    # A merged mask is deliberately multi-part and has no click history that
+    # would reproduce it, so a SAM3 re-prompt would throw its other parts away.
+    if target_mask.get('source_type') == 'merged':
+        return jsonify({'error': 'Merged masks keep every part; edit them with Draw (D) or Shift+drag box redraw'}), 400
 
     # Ensure image is embedded
     if not _ensure_image_embedded(filename):
@@ -1199,11 +2242,16 @@ def refine_mask(filename):
         clicks.append((rc['x'], rc['y']))
         labels.append(rc['label'])
 
-    clicks.append((click_x, click_y))
-    labels.append(click_label)
+    # rerun: re-prompt exactly what is already stored (the mask-size slider fires
+    # this after switching variants). Nothing new is clicked, nothing is recorded.
+    rerun = bool(data.get('rerun'))
+    if not rerun:
+        clicks.append((click_x, click_y))
+        labels.append(click_label)
 
-    # Run SAM3 refinement
-    result = engine.refine_mask(clicks, labels)
+    # Run SAM3 refinement. A box-made mask keeps its box alongside the clicks so
+    # the re-prompt reproduces the shape the operator drew.
+    result = engine.refine_mask(clicks, labels, box=target_mask.get('source_box'))
     if result is None:
         return jsonify({'error': 'refinement produced no mask'}), 400
 
@@ -1212,28 +2260,11 @@ def refine_mask(filename):
     # because SAM3 regrew into that region. User asked for this explicitly.
     # Rejected masks are always ignored (they're "deleted" in the UI), including
     # ones the client just deleted whose status PUT may not have landed yet.
-    import numpy as np
-    from mask_ops import rle_decode
-    new_binary = np.asarray(result['mask'], dtype=bool)
-    h, w = new_binary.shape
-    rejected_ids = data.get('rejected_ids') or []
-    other_masks = [m for m in _blocking_masks(seg.get('masks', []), rejected_ids)
-                   if m.get('id') != mask_id]
-    if other_masks:
-        forbidden = np.zeros((h, w), dtype=bool)
-        for m in other_masks:
-            rle = m.get('rle')
-            if not rle:
-                continue
-            try:
-                forbidden |= np.asarray(rle_decode(rle, shape=(h, w)), dtype=bool)
-            except Exception:
-                continue
-        new_binary = new_binary & ~forbidden
-        if not new_binary.any():
-            blockers = _overlapping_blockers(np.asarray(result['mask'], dtype=bool), other_masks)
-            names = ', '.join(f"#{b['id']} ({b['species'] or '?'})" for b in blockers) or 'other masks'
-            return jsonify({'error': f'refinement fully overlapped {names}', 'blocked_by': blockers}), 400
+    new_binary, blockers = _clip_existing_to_neighbours(
+        seg, mask_id, result['mask'], data.get('rejected_ids'))
+    if new_binary is None:
+        names = ', '.join(f"#{b['id']} ({b['species'] or '?'})" for b in blockers) or 'other masks'
+        return jsonify({'error': f'refinement fully overlapped {names}', 'blocked_by': blockers}), 400
 
     # Update mask geometry
     updated = update_mask_geometry(
@@ -1242,20 +2273,22 @@ def refine_mask(filename):
         return jsonify({'error': 'mask disappeared after refinement'}), 400
     _overlap_delta = {'updated': [], 'removed': []}
 
-    # Record the refinement click
-    target_mask['refinement_clicks'].append({
-        'x': click_x, 'y': click_y, 'label': click_label,
-    })
+    # Record the refinement click (a rerun adds no click, so it records nothing)
+    if not rerun:
+        target_mask['refinement_clicks'].append({
+            'x': click_x, 'y': click_y, 'label': click_label,
+        })
     target_mask['score'] = round(result['score'], 4)
 
     return jsonify({
         'ok': True,
-        'mask': target_mask,
+        'mask': wire_mask(target_mask),
         'affected': _overlap_delta,
     })
 
 
 @app.route('/api/image/<path:filename>/rebox', methods=['POST'])
+@_dirty_on_success
 def rebox_mask(filename):
     """Redraw a mask from a bounding box prompt."""
     seg = _find_segmentation(filename)
@@ -1288,28 +2321,11 @@ def rebox_mask(filename):
     # Strict clip-to-neighbors (same rule as /refine and /add). Rejected
     # masks are ignored so you can redraw cleanly over a deleted one, including
     # ones the client just deleted whose status PUT may not have landed yet.
-    import numpy as np
-    from mask_ops import rle_decode
-    new_binary = np.asarray(result['mask'], dtype=bool)
-    h, w = new_binary.shape
-    rejected_ids = data.get('rejected_ids') or []
-    other_masks = [m for m in _blocking_masks(seg.get('masks', []), rejected_ids)
-                   if m.get('id') != mask_id]
-    if other_masks:
-        forbidden = np.zeros((h, w), dtype=bool)
-        for m in other_masks:
-            rle = m.get('rle')
-            if not rle:
-                continue
-            try:
-                forbidden |= np.asarray(rle_decode(rle, shape=(h, w)), dtype=bool)
-            except Exception:
-                continue
-        new_binary = new_binary & ~forbidden
-        if not new_binary.any():
-            blockers = _overlapping_blockers(np.asarray(result['mask'], dtype=bool), other_masks)
-            names = ', '.join(f"#{b['id']} ({b['species'] or '?'})" for b in blockers) or 'other masks'
-            return jsonify({'error': f'rebox fully overlapped {names}', 'blocked_by': blockers}), 400
+    new_binary, blockers = _clip_existing_to_neighbours(
+        seg, mask_id, result['mask'], data.get('rejected_ids'))
+    if new_binary is None:
+        names = ', '.join(f"#{b['id']} ({b['species'] or '?'})" for b in blockers) or 'other masks'
+        return jsonify({'error': f'rebox fully overlapped {names}', 'blocked_by': blockers}), 400
 
     updated = update_mask_geometry(
         target_mask, new_binary, cfg.POLYGON_SIMPLIFY_EPSILON)
@@ -1320,11 +2336,21 @@ def rebox_mask(filename):
     target_mask['refinement_clicks'] = []
     target_mask['score'] = round(result['score'], 4)
     target_mask['source_type'] = 'manual_box'
+    # The redraw replaces the whole shape, so the mask is no longer the union of
+    # the ids it once absorbed. Drop the stale lineage with the merged status.
+    target_mask.pop('merged_from', None)
+    # Keep the box so a later refine or mask-size rerun re-prompts with it, and
+    # move the source point to the box centre so it no longer points at wherever
+    # the mask used to start (parity with /add_box).
+    target_mask['source_box'] = [int(v) for v in box]
+    target_mask['source_x'] = int((target_mask['source_box'][0] + target_mask['source_box'][2]) / 2)
+    target_mask['source_y'] = int((target_mask['source_box'][1] + target_mask['source_box'][3]) / 2)
 
-    return jsonify({'ok': True, 'mask': target_mask})
+    return jsonify({'ok': True, 'mask': wire_mask(target_mask)})
 
 
 @app.route('/api/image/<path:filename>/draw_edit', methods=['POST'])
+@_dirty_on_success
 def draw_edit(filename):
     """TagLab-style freehand edit on the selected mask.
 
@@ -1410,8 +2436,18 @@ def draw_edit(filename):
     if not new_binary.any():
         return jsonify({'error': 'edit fully overlapped other masks — try a different stroke'}), 400
 
+    # A merged mask is deliberately multi-part, so a draw edit must not collapse
+    # it to its largest component (that is what /refine sends the operator here
+    # to avoid). Every other mask keeps the single-component rule.
+    # min_fragment=20 on the merged path rather than the merge default of 1: a
+    # subtract stroke, or the neighbour clip just above, can shave a few-pixel
+    # sliver off a part, and those are noise. Every real part of the merge is
+    # far above 20 px, since each one passed a 500 px gate when it was made.
+    _is_merged = target_mask.get('source_type') == 'merged'
     updated = update_mask_geometry(
-        target_mask, new_binary, cfg.POLYGON_SIMPLIFY_EPSILON)
+        target_mask, new_binary, cfg.POLYGON_SIMPLIFY_EPSILON,
+        keep_all_components=_is_merged,
+        min_fragment=20 if _is_merged else None)
     if updated is None:
         return jsonify({'error': 'mask disappeared after draw edit'}), 400
 
@@ -1427,13 +2463,14 @@ def draw_edit(filename):
 
     return jsonify({
         'ok': True,
-        'mask': target_mask,
+        'mask': wire_mask(target_mask),
         'op': 'subtract' if is_subtract else 'add',
         'affected': overlap_delta,
     })
 
 
 @app.route('/api/image/<path:filename>/undo_refine', methods=['POST'])
+@_dirty_on_success
 def undo_refine(filename):
     """Undo the last refinement click on a mask."""
     seg = _find_segmentation(filename)
@@ -1474,34 +2511,25 @@ def undo_refine(filename):
         all_clicks.append((rc['x'], rc['y']))
         all_labels.append(rc['label'])
 
-    result = engine.refine_mask(all_clicks, all_labels)
+    # Same box rule as /refine: a box-made mask re-prompts with its box so the
+    # undo reproduces the shape the operator drew.
+    result = engine.refine_mask(all_clicks, all_labels, box=target_mask.get('source_box'))
     if result is None:
         return jsonify({'error': 'undo produced no mask'}), 400
 
     # Same subtraction rule as /refine — the re-run can still re-grow into
     # neighboring masks.
     import numpy as np
-    from mask_ops import rle_decode
-    new_binary = np.asarray(result['mask'], dtype=bool)
-    h, w = new_binary.shape
-    # Exclude the mask being edited AND any rejected masks — rejected masks
-    # are "deleted" in the user's mental model, so they shouldn't block a
-    # refined neighbor from spilling into that region. Reuse _blocking_masks so
+    # Exclude the mask being edited AND any rejected masks: rejected masks are
+    # "deleted" in the user's mental model, so they shouldn't block a refined
+    # neighbor from spilling into that region. _blocking_masks honours the
     # client-side rejected_ids (a just-deleted mask whose 'rejected' PUT has not
-    # landed yet) are honored too, closing the same race the /add fix closes.
+    # arrived yet), closing the same race the /add fix closes. Unlike /refine,
+    # an undo that clips to nothing is NOT refused: it falls through to the
+    # "mask disappeared after undo" answer below.
     other_masks = [m for m in _blocking_masks(seg.get('masks', []), rejected_ids)
                    if m.get('id') != mask_id]
-    if other_masks:
-        forbidden = np.zeros((h, w), dtype=bool)
-        for m in other_masks:
-            rle = m.get('rle')
-            if not rle:
-                continue
-            try:
-                forbidden |= np.asarray(rle_decode(rle, shape=(h, w)), dtype=bool)
-            except Exception:
-                continue
-        new_binary = new_binary & ~forbidden
+    new_binary = _clip_to_neighbors(np.asarray(result['mask'], dtype=bool), other_masks)
 
     updated = update_mask_geometry(
         target_mask, new_binary, cfg.POLYGON_SIMPLIFY_EPSILON)
@@ -1509,10 +2537,12 @@ def undo_refine(filename):
         return jsonify({'error': 'mask disappeared after undo'}), 400
 
     target_mask['score'] = round(result['score'], 4)
-    return jsonify({'ok': True, 'mask': target_mask, 'remaining_undos': len(clicks)})
+    return jsonify({'ok': True, 'mask': wire_mask(target_mask),
+                    'remaining_undos': len(clicks)})
 
 
 @app.route('/api/image/<path:filename>/reset_mask', methods=['POST'])
+@_dirty_on_success
 def reset_mask(filename):
     """Reset a mask to its original SAM3 segmentation (discard all refinements)."""
     seg = _find_segmentation(filename)
@@ -1534,28 +2564,199 @@ def reset_mask(filename):
     if target_mask is None:
         return jsonify({'error': 'mask not found'}), 404
 
+    # A merged mask has no single prompt to reset to, and re-prompting would
+    # throw its other parts away. Same refusal and advice as /refine.
+    if target_mask.get('source_type') == 'merged':
+        return jsonify({'error': 'Merged masks keep every part; edit them with Draw (D) or Shift+drag box redraw'}), 400
+
     if not _ensure_image_embedded(filename):
         return jsonify({'error': 'could not embed image'}), 500
 
-    # Re-run SAM3 with just the original source point
-    result = engine.segment_point(target_mask['source_x'], target_mask['source_y'], label=1)
+    # Re-run the original prompt: the drawn box when the mask has one, else the
+    # source point. Resetting a box mask with a point would change its shape.
+    source_box = target_mask.get('source_box')
+    if source_box:
+        result = engine.segment_box(*source_box)
+    else:
+        result = engine.segment_point(target_mask['source_x'], target_mask['source_y'], label=1)
     if result is None:
         return jsonify({'error': 'reset produced no mask'}), 400
 
+    # Strict clip-to-neighbors, same rule as /refine, /rebox and /add. A mask
+    # that was clipped when it was made would otherwise regrow straight back
+    # into the neighbour that clipped it, because the reset re-runs the original
+    # unclipped prompt.
+    new_binary, blockers = _clip_existing_to_neighbours(
+        seg, mask_id, result['mask'], data.get('rejected_ids'))
+    if new_binary is None:
+        names = ', '.join(f"#{b['id']} ({b['species'] or '?'})" for b in blockers) or 'other masks'
+        return jsonify({'error': f'reset fully overlapped {names}', 'blocked_by': blockers}), 400
+
     updated = update_mask_geometry(
-        target_mask, result['mask'], cfg.POLYGON_SIMPLIFY_EPSILON)
+        target_mask, new_binary, cfg.POLYGON_SIMPLIFY_EPSILON)
     if updated is None:
         return jsonify({'error': 'mask disappeared after reset'}), 400
 
     target_mask['refinement_clicks'] = []
     target_mask['score'] = round(result['score'], 4)
-    target_mask['source_type'] = 'auto'
-    return jsonify({'ok': True, 'mask': target_mask})
+    target_mask['source_type'] = 'manual_box' if source_box else 'auto'
+    return jsonify({'ok': True, 'mask': wire_mask(target_mask)})
+
+
+class MergeError(Exception):
+    """A merge the operator asked for cannot be done.
+
+    `status` is the HTTP code the route should answer with, so a genuine bug
+    inside _merge_ids (a KeyError on a malformed seg, say) propagates as a 500
+    instead of being mistaken for "masks not found".
+    """
+
+    def __init__(self, message, status=400, ids=None):
+        super().__init__(message)
+        self.status = status
+        self.ids = list(ids or [])
+
+
+# Expert-review fields an absorbed mask can hand to the survivor. Mirrors the
+# policy mask_ops.merge_overlapping_same_id applies to automatic same-species
+# grouping, so a hand-picked merge does not quietly discard a pending expert ID.
+def _accepted_expert_code(mask):
+    """The expert-ACCEPTED species code on a mask, or None.
+
+    Same notion mask_ops._merge_review_state uses: only an expert_id dict whose
+    mode is EXPERT counts. A pending or auto-suggested id is not an accepted ID
+    and never conflicts with anything.
+    """
+    eid = (mask or {}).get('expert_id')
+    if isinstance(eid, dict) and eid.get('mode') == 'EXPERT':
+        return eid.get('code')
+    return None
+
+
+def _expert_id_conflict(by_id, ids):
+    """First pair in `ids` (ascending) whose accepted expert IDs disagree.
+
+    Returns (id_a, code_a, id_b, code_b) or None. Run BEFORE any geometry is
+    touched so a refused merge leaves the frame exactly as it was.
+    """
+    first_id = None
+    first_code = None
+    for i in ids:
+        code = _accepted_expert_code(by_id[i])
+        if code is None:
+            continue
+        if first_code is None:
+            first_id, first_code = i, code
+        elif code != first_code:
+            return first_id, first_code, i, code
+    return None
+
+
+def _merge_ids(seg, ids):
+    """Union the masks with these ids into the lowest id. Returns (survivor, removed_ids).
+
+    Every part survives (keep_all_components=True): a merge is deliberately
+    multi-part, unlike a single SAM3 prompt which is cleaned to one component.
+    Size is no longer a gate here: update_mask_geometry runs clean_mask with
+    min_fragment=1 for a merge, so every part is kept including sub-500 px ones,
+    because each input mask already passed its own 500 px gate when it was
+    created. Merging a speck into a colony preserves the speck.
+
+    The survivor inherits every absorbed mask's expert-review state via
+    mask_ops._merge_review_state (the same helper the automatic same-species
+    grouping uses, so a hand-picked merge and an automatic one treat review
+    state identically) and its merge lineage, so re-merging a merged mask
+    extends `merged_from` rather than overwriting it.
+
+    Raises MergeError (carrying the HTTP status the route should use) for every
+    condition the operator can fix: non-integer ids, fewer than two distinct
+    ids, an id that is not on the frame (404), a rejected mask, two masks
+    carrying different accepted expert IDs, two masks each awaiting their own
+    expert ID, or a union that cleans away to nothing.
+    """
+    from mask_ops import rle_decode, _merge_review_state
+    by_id = {m['id']: m for m in seg.get('masks', [])}
+    try:
+        ids = sorted({int(i) for i in ids})
+    except (TypeError, ValueError):
+        raise MergeError('mask_ids must be integers')
+    if len(ids) < 2:
+        raise MergeError('merge needs two different masks')
+    missing = [i for i in ids if i not in by_id]
+    if missing:
+        raise MergeError(f'masks not found: {missing}', status=404, ids=missing)
+    rejected = [i for i in ids if by_id[i].get('status') == 'rejected']
+    if rejected:
+        raise MergeError(f'cannot merge a rejected mask (#{rejected[0]})')
+    # Two different expert-accepted IDs cannot become one organism. Checked here,
+    # before any geometry changes, so the refusal leaves the frame untouched.
+    conflict = _expert_id_conflict(by_id, ids)
+    if conflict:
+        id_a, code_a, id_b, code_b = conflict
+        raise MergeError(f'masks #{id_a} and #{id_b} carry different expert IDs '
+                         f'({code_a} vs {code_b}); resolve that in Edit Masks before merging')
+    # Two masks each waiting on their OWN expert ID cannot become one organism
+    # either: a survivor carries a single review_uid, so the other round trip
+    # would be dropped without a trace. Same placeholder notion
+    # mask_ops.merge_overlapping_same_id uses when it passes REVIEW masks over,
+    # and checked in the same pre-pass so a refusal changes no geometry.
+    from mask_ops import PLACEHOLDER_SPECIES
+    awaiting = [i for i in ids if (by_id[i].get('species') or '') in PLACEHOLDER_SPECIES
+                and by_id[i].get('review_uid')]
+    if len({by_id[i]['review_uid'] for i in awaiting}) > 1:
+        a = awaiting[0]
+        b = next(i for i in awaiting if by_id[i]['review_uid'] != by_id[a]['review_uid'])
+        raise MergeError(f'masks #{a} and #{b} are each awaiting their own expert ID; '
+                         f'resolve those before merging')
+
+    h, w = seg['image_height'], seg['image_width']
+    parts = [rle_decode(by_id[i]['rle'], (h, w)) for i in ids]
+    survivor = by_id[ids[0]]
+    updated = update_mask_geometry(survivor, union_many(parts), cfg.POLYGON_SIMPLIFY_EPSILON,
+                                   keep_all_components=True, min_fragment=1)
+    if updated is None:
+        raise MergeError('merge produced empty mask')
+
+    if any(by_id[i].get('status') == 'accepted' for i in ids):
+        survivor['status'] = 'accepted'
+        # The merge produced (or preserved) accepted work, so credit whoever
+        # did the merge. The route refuses an unnamed session before we get
+        # here, so this always has initials to write.
+        _stamp_reviewer(survivor)
+    for i in ids[1:]:
+        # The pre-pass above already ruled out every conflict, so this cannot
+        # refuse. Raise rather than silently drop review state if it ever does.
+        if not _merge_review_state(survivor, by_id[i]):
+            raise MergeError(f'masks #{ids[0]} and #{i} carry different expert IDs; '
+                             f'resolve that in Edit Masks before merging')
+    survivor['source_type'] = 'merged'
+    # Lineage, not just this merge: a survivor that was already a merge keeps
+    # every id it has ever absorbed.
+    lineage = set()
+    for i in ids:
+        lineage.update(by_id[i].get('merged_from') or [])
+        lineage.add(i)
+    survivor['merged_from'] = sorted(lineage)
+    # The click history no longer reproduces this shape, so drop it: /refine
+    # refuses merged masks and points the operator at Draw instead.
+    survivor['refinement_clicks'] = []
+    # A merged shape has no single box that reproduces it, so drop the inherited
+    # one: /rebox would re-prompt from it and collapse every other part.
+    survivor.pop('source_box', None)
+    removed = ids[1:]
+    seg['masks'] = [m for m in seg['masks'] if m['id'] not in removed]
+    return survivor, removed
 
 
 @app.route('/api/image/<path:filename>/merge', methods=['POST'])
+@_dirty_on_success
 def merge_masks(filename):
-    """Merge two masks into one."""
+    """Merge two masks into one.
+
+    Reviewer guard: a merge whose survivor would be ACCEPTED is an accept, so
+    an unnamed session is refused with needs_reviewer and no geometry changes.
+    A merge of pending masks alone stays free.
+    """
     seg = _find_segmentation(filename)
     if not seg:
         return jsonify({'error': 'not found'}), 404
@@ -1564,36 +2765,42 @@ def merge_masks(filename):
     id_a = data['mask_id_a']
     id_b = data['mask_id_b']
 
-    mask_a = mask_b = None
-    for m in seg.get('masks', []):
-        if m['id'] == id_a:
-            mask_a = m
-        elif m['id'] == id_b:
-            mask_b = m
+    if not _current_reviewer() and _merge_yields_accepted(seg, [id_a, id_b]):
+        return _needs_reviewer_response()
 
-    if mask_a is None or mask_b is None:
-        return jsonify({'error': 'one or both masks not found'}), 404
+    try:
+        survivor, removed = _merge_ids(seg, [id_a, id_b])
+    except MergeError as e:
+        # Keep this route's long-standing not-found wording; every other
+        # condition reports the shared message.
+        msg = 'one or both masks not found' if e.status == 404 else str(e)
+        return jsonify({'error': msg}), e.status
 
-    # Reconstruct binary masks from RLE
-    h, w = seg['image_height'], seg['image_width']
-    bin_a = rle_decode(mask_a['rle'], (h, w))
-    bin_b = rle_decode(mask_b['rle'], (h, w))
+    return jsonify({'ok': True, 'mask': wire_mask(survivor), 'removed_id': removed[0]})
 
-    # Union
-    merged = union_masks(bin_a, bin_b)
 
-    # Update mask_a with merged geometry
-    updated = update_mask_geometry(mask_a, merged, cfg.POLYGON_SIMPLIFY_EPSILON)
-    if updated is None:
-        return jsonify({'error': 'merge produced empty mask'}), 400
-
-    # Remove mask_b from the list
-    seg['masks'] = [m for m in seg['masks'] if m['id'] != id_b]
-
-    return jsonify({'ok': True, 'mask': mask_a, 'removed_id': id_b})
+@app.route('/api/image/<path:filename>/merge_many', methods=['POST'])
+@_dirty_on_success
+def merge_many(filename):
+    """Union 2+ masks into one (lowest id survives, every part kept)."""
+    seg = _find_segmentation(filename)
+    if not seg:
+        return jsonify({'error': 'not found'}), 404
+    # No pre-guard on the id list here: set() raises on an unhashable id (a list,
+    # say) and answers 500. _merge_ids validates instead, and answers 400 for a
+    # non-integer id and for fewer than two distinct ids.
+    ids = (request.json or {}).get('mask_ids') or []
+    if not _current_reviewer() and _merge_yields_accepted(seg, ids):
+        return _needs_reviewer_response()
+    try:
+        survivor, removed = _merge_ids(seg, ids)
+    except MergeError as e:
+        return jsonify({'error': str(e)}), e.status
+    return jsonify({'ok': True, 'mask': wire_mask(survivor), 'removed_ids': removed})
 
 
 @app.route('/api/image/<path:filename>/merge_same_id', methods=['POST'])
+@_dirty_on_success
 def merge_same_id(filename):
     """Union OVERLAPPING masks that share the same species/label into one.
 
@@ -1614,15 +2821,26 @@ def merge_same_id(filename):
     if not h or not w:
         return jsonify({'error': 'missing image dimensions'}), 400
 
+    # merge_overlapping_same_id rebuilds survivors IN PLACE, so the reviewer
+    # guard has to run before it, not on its result: any accepted mask on the
+    # frame could be a survivor that absorbs a neighbour.
+    if not _current_reviewer() and _frame_has_accepted(seg):
+        return _needs_reviewer_response()
+
     masks = seg.get('masks', [])
+    before_area = {m.get('id'): m.get('area') for m in masks}
     new_masks, merged, refused = merge_overlapping_same_id(
         masks, h, w, simplify_epsilon=cfg.POLYGON_SIMPLIFY_EPSILON)
+    # Credit the merge on exactly the survivors it rebuilt: same id, new area.
+    for m in new_masks:
+        if m.get('status') == 'accepted' and m.get('area') != before_area.get(m.get('id')):
+            _stamp_reviewer(m)
     seg['masks'] = new_masks
     return jsonify({
         'ok': True,
         'merged': merged,
         'refused': refused,
-        'masks': new_masks,
+        'masks': wire_masks(new_masks),
     })
 
 
@@ -1650,6 +2868,12 @@ def _merge_imported_review_fields(current_masks, disk_masks):
 
     Returns (merged_count, expert_count): masks that gained imported fields,
     and of those how many carry an expert-accepted ID.
+
+    DELIBERATELY EXEMPT from the expert-review lock of 2026-09-06. Restoring a
+    tag that is already in the file on disk is preservation, not addition: it is
+    how the review tags written before the lock survive a reload, and how an
+    expert identification coming back from the review repo reaches the operator
+    without a restart. Do not add a refusal here.
     """
     def _key_index(masks):
         by_uid, by_id = {}, {}
@@ -1698,6 +2922,7 @@ def _merge_imported_review_fields(current_masks, disk_masks):
 
 
 @app.route('/api/reload_segmentations', methods=['POST'])
+@_dirty_on_success
 def reload_segmentations():
     """Re-read the current image's segmentations.json from disk and MERGE IN the
     imported review/expert fields (reviews[], expert_id, species-when-accepted)
@@ -1734,7 +2959,7 @@ def reload_segmentations():
         'ok': True,
         'merged': merged_count,
         'expert': expert_count,
-        'masks': seg.get('masks', []),
+        'masks': wire_masks(seg.get('masks', [])),
     })
 
 
@@ -1969,6 +3194,7 @@ def exemplar_scan(filename):
 
 
 @app.route('/api/image/<path:filename>/scrap', methods=['POST'])
+@_dirty_on_success
 def scrap_segmentation(filename):
     """Mark a frame as scrapped — excluded from review and export.
     Mirrors the step 4 scrap API so the two apps behave the same way.
@@ -1978,20 +3204,25 @@ def scrap_segmentation(filename):
         return jsonify({'error': 'not found'}), 404
     seg['scrapped'] = True
     seg['reviewed'] = True
-    flush_all()
+    result, conflict_path = flush_all()
     _build_review_list()
-    return jsonify({'ok': True, 'remaining': len(session['review_files'])})
+    out = {'ok': result != 'conflict', 'remaining': len(session['review_files'])}
+    out.update(_flush_result_fields(result, conflict_path))
+    return jsonify(out)
 
 
 @app.route('/api/image/<path:filename>/unscrap', methods=['POST'])
+@_dirty_on_success
 def unscrap_segmentation(filename):
     seg = _find_segmentation(filename)
     if not seg:
         return jsonify({'error': 'not found'}), 404
     seg['scrapped'] = False
-    flush_all()
+    result, conflict_path = flush_all()
     _build_review_list()
-    return jsonify({'ok': True, 'remaining': len(session['review_files'])})
+    out = {'ok': result != 'conflict', 'remaining': len(session['review_files'])}
+    out.update(_flush_result_fields(result, conflict_path))
+    return jsonify(out)
 
 
 def _blocking_masks(masks, rejected_ids=None):
@@ -2056,7 +3287,67 @@ def _overlapping_blockers(new_binary, blocking):
     return [h for _, h in hits]
 
 
+def _clip_existing_to_neighbours(seg, mask_id, binary, rejected_ids=None):
+    """Clip an EDITED mask against every live neighbour but itself.
+
+    The sibling of _new_mask_from_binary, for the routes that re-prompt a mask
+    that already exists (/refine, /rebox, /reset_mask). Returns
+    (clipped_binary, []) normally, or (None, blockers) when the clip leaves
+    nothing, so the caller can answer 400 with its own wording plus blocked_by.
+
+    Rejected masks never block: they are "deleted" in the operator's mental
+    model. `rejected_ids` carries the client's just-deleted set so a fast
+    delete then re-prompt is not blocked by a mask whose reject PUT has not
+    arrived yet.
+    """
+    import numpy as np
+    pre_clip = np.asarray(binary, dtype=bool)
+    blocking = [m for m in _blocking_masks(seg.get('masks', []), rejected_ids or [])
+                if m.get('id') != mask_id]
+    if not blocking:
+        return pre_clip, []
+    clipped = _clip_to_neighbors(pre_clip, blocking)
+    if not clipped.any():
+        return None, _overlapping_blockers(pre_clip, blocking)
+    return clipped, []
+
+
+def _new_mask_from_binary(seg, binary, point_info, source_type, rejected_ids, score):
+    """Clip a fresh SAM3 mask to live neighbours and build its dict, or return
+    (None, blockers) when nothing survives. Shared by /add and /add_box.
+
+    blockers is non-empty only when the clip emptied the mask; a None mask with
+    an empty blockers list means build_mask_dict rejected it as too small.
+    """
+    import numpy as np
+    from mask_ops import rle_decode
+    existing_masks = seg.get('masks', [])
+    blocking = _blocking_masks(existing_masks, rejected_ids or [])
+    new_binary = np.asarray(binary, dtype=bool)
+    pre_clip = new_binary.copy()
+    if blocking:
+        h, w = new_binary.shape
+        forbidden = np.zeros((h, w), dtype=bool)
+        for m in blocking:
+            rle = m.get('rle')
+            if not rle:
+                continue
+            try:
+                forbidden |= np.asarray(rle_decode(rle, shape=(h, w)), dtype=bool)
+            except Exception:
+                continue
+        new_binary = new_binary & ~forbidden
+        if not new_binary.any():
+            return None, _overlapping_blockers(pre_clip, blocking)
+    next_id = max((m['id'] for m in existing_masks), default=-1) + 1
+    mask_dict = build_mask_dict(mask_id=next_id, binary_mask=new_binary, score=score,
+                                point_info=point_info, source_type=source_type,
+                                simplify_epsilon=cfg.POLYGON_SIMPLIFY_EPSILON)
+    return mask_dict, []
+
+
 @app.route('/api/image/<path:filename>/add', methods=['POST'])
+@_dirty_on_success
 def add_mask(filename):
     """Add a new mask at a click point (SAM3 point prompt).
 
@@ -2076,7 +3367,12 @@ def add_mask(filename):
     if engine is None:
         return jsonify({'error': 'SAM3 engine not loaded'}), 500
 
-    data = request.json
+    data = request.json or {}
+    # Expert-review lock (2026-09-06): a body asking for a tag is refused here,
+    # before any segmentation runs, so no mask is created and the frame is left
+    # exactly as it was.
+    if _review_tag_refused(data):
+        return _review_locked_response()
     click_x = data['click_x']
     click_y = data['click_y']
     species = data.get('species', '')
@@ -2098,58 +3394,101 @@ def add_mask(filename):
     # Strict clip-to-neighbors: the new mask gets trimmed to stay on its side
     # of any LIVE (non-rejected) neighbor. Rejected masks are "deleted" in the
     # user's mental model and do NOT block a new overlapping mask.
-    existing_masks = seg.get('masks', [])
-    rejected_ids = data.get('rejected_ids') or []
-    blocking = _blocking_masks(existing_masks, rejected_ids)
-    if blocking:
-        from mask_ops import rle_decode
-        h, w = new_binary.shape
-        forbidden = np.zeros((h, w), dtype=bool)
-        for m in blocking:
-            rle = m.get('rle')
-            if not rle:
-                continue
-            try:
-                forbidden |= np.asarray(rle_decode(rle, shape=(h, w)), dtype=bool)
-            except Exception:
-                continue
-        pre_clip = np.asarray(result['mask'], dtype=bool)
-        new_binary = new_binary & ~forbidden
-        if not new_binary.any():
-            blockers = _overlapping_blockers(pre_clip, blocking)
+    point_info = {
+        'label': label, 'species': species, 'name': species,
+        'category': category, 'x': click_x, 'y': click_y,
+    }
+    mask_dict, blockers = _new_mask_from_binary(
+        seg, new_binary, point_info, 'manual_click',
+        data.get('rejected_ids'), result['score'])
+    if mask_dict is None:
+        if blockers:
             names = ', '.join(f"#{b['id']} ({b['species'] or '?'})" for b in blockers) or 'existing masks'
             return jsonify({
                 'error': f'new mask fully overlaps {names} — delete it or click a clearer spot',
                 'blocked_by': blockers,
             }), 400
-
-    next_id = max((m['id'] for m in existing_masks), default=-1) + 1
-    point_info = {
-        'label': label, 'species': species, 'name': species,
-        'category': category, 'x': click_x, 'y': click_y,
-    }
-
-    mask_dict = build_mask_dict(
-        mask_id=next_id,
-        binary_mask=new_binary,
-        score=result['score'],
-        point_info=point_info,
-        source_type='manual_click',
-        simplify_epsilon=cfg.POLYGON_SIMPLIFY_EPSILON,
-    )
-    if mask_dict is None:
         return jsonify({'error': 'mask too small or empty after clip'}), 400
 
     # REVIEW arming: flag the mask so YOLO export skips it and the batch export
     # ships it to the expert repo (parity with _process_single_image). The
-    # source_type stays manual_click — a human placed it.
+    # source_type stays manual_click, a human placed it. Reachable only while
+    # REVIEW_TAGGING_ENABLED is True: under the lock the request was refused at
+    # the top of this route.
     if is_review:
         mask_dict['review'] = True
         mask_dict['species'] = 'REVIEW'
         mask_dict['category'] = 'Review'
 
     seg['masks'].append(mask_dict)
-    return jsonify({'ok': True, 'mask': mask_dict})
+    return jsonify({'ok': True, 'mask': wire_mask(mask_dict)})
+
+
+@app.route('/api/image/<path:filename>/add_box', methods=['POST'])
+@_dirty_on_success
+def add_mask_box(filename):
+    """Add a new mask from a box prompt (Box mode, B). Same clip and provenance
+    rules as /add; source_type manual_box; the box is kept for later re-prompts."""
+    seg = _find_segmentation(filename)
+    if not seg:
+        return jsonify({'error': 'not found'}), 404
+    engine = session.get('sam_engine')
+    if engine is None:
+        return jsonify({'error': 'SAM3 engine not loaded'}), 500
+
+    data = request.json or {}
+    # Expert-review lock (2026-09-06): same refusal as /add, before the box is
+    # even read, so no mask is created and the frame is left exactly as it was.
+    if _review_tag_refused(data):
+        return _review_locked_response()
+    box = data.get('box') or []
+    try:
+        x0, y0, x1, y1 = [float(v) for v in box]
+    except (TypeError, ValueError):
+        return jsonify({'error': 'box must be [x0, y0, x1, y1]'}), 400
+    x0, x1 = sorted((x0, x1))
+    y0, y1 = sorted((y0, y1))
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        return jsonify({'error': 'box too small'}), 400
+
+    if not _ensure_image_embedded(filename):
+        return jsonify({'error': 'could not embed image'}), 500
+
+    result = engine.segment_box(x0, y0, x1, y1)
+    if result is None:
+        return jsonify({'error': 'no mask generated in this box'}), 400
+    import numpy as np
+    if not np.asarray(result['mask'], dtype=bool).any():
+        return jsonify({'error': 'no mask generated in this box'}), 400
+
+    species = data.get('species', '')
+    category = data.get('category', '')
+    is_review = bool(data.get('review'))
+    point_info = {'label': data.get('label', '?'), 'species': species, 'name': species,
+                  'category': category, 'x': int((x0 + x1) / 2), 'y': int((y0 + y1) / 2)}
+    mask_dict, blockers = _new_mask_from_binary(seg, result['mask'], point_info, 'manual_box',
+                                                data.get('rejected_ids'), result['score'])
+    if mask_dict is None:
+        if blockers:
+            names = ', '.join(f"#{b['id']} ({b['species'] or '?'})" for b in blockers) or 'existing masks'
+            return jsonify({'error': f'new mask fully overlaps {names}: delete it or draw a clearer box',
+                            'blocked_by': blockers}), 400
+        return jsonify({'error': 'mask too small or empty after clip'}), 400
+
+    # Keep the drawn box so /refine and the mask-size rerun re-prompt with it.
+    mask_dict['source_box'] = [int(x0), int(y0), int(x1), int(y1)]
+
+    # REVIEW arming: flag the mask so YOLO export skips it and the batch export
+    # ships it to the expert repo (parity with /add). The source_type stays
+    # manual_box, a human drew it. Reachable only while REVIEW_TAGGING_ENABLED
+    # is True: under the lock the request was refused at the top of this route.
+    if is_review:
+        mask_dict['review'] = True
+        mask_dict['species'] = 'REVIEW'
+        mask_dict['category'] = 'Review'
+
+    seg['masks'].append(mask_dict)
+    return jsonify({'ok': True, 'mask': wire_mask(mask_dict)})
 
 
 def _derive_project_id(export_dir):
@@ -2168,8 +3507,8 @@ def _stamp_provenance(seg, filename):
     """
     export_dir = session['export_dir']
     outcomes = compute_label_outcomes(
-        seg, TARGET_SPECIES, source=cfg.PROVENANCE_SOURCE,
-        reviewer=session.get('reviewer', cfg.REVIEWER))
+        seg, _target_species(), source=cfg.PROVENANCE_SOURCE,
+        reviewer=_current_reviewer())
     seg['label_outcomes'] = outcomes
     try:
         write_provenance_csv(
@@ -2181,20 +3520,52 @@ def _stamp_provenance(seg, filename):
         log(f"[provenance] csv write failed for {filename} (non-fatal): {e}")
 
 
+def _count_review_masks(to_export, batch_files):
+    """How many masks in this batch carry an expert-review tag.
+
+    Parameters:
+        to_export: {filename: segmentation dict} for the batch.
+        batch_files: the filenames in the batch, in export order.
+
+    Returns:
+        The number of tagged masks, counted with the same two spellings the
+        export selector itself reads: the review boolean, or a species of
+        REVIEW. A frame missing from to_export contributes nothing.
+    """
+    n_review = 0
+    for fn in batch_files:
+        seg = to_export.get(fn) or {}
+        for m in seg.get('masks', []):
+            if m.get('review') or m.get('species') == 'REVIEW':
+                n_review += 1
+    return n_review
+
+
 def _export_review_bundle(to_export, batch_files):
     """Ship this batch's REVIEW-flagged masks to the expert-review repo +
     library, and auto-relabel any that a past expert already identified.
-    Best-effort: any failure is logged and never breaks the YOLO export."""
+    Best-effort: any failure is logged and never breaks the YOLO export.
+
+    SUSPENDED while REVIEW_TAGGING_ENABLED is False (2026-09-06). This is the
+    one path that publishes outward: it mints a fresh review identifier onto
+    every already-flagged mask and pushes the bundle to a public GitHub Pages
+    repository. Publishing 130 masks outward while flagging is locked would
+    contradict the lock, so the function returns early with the count of masks
+    it did not publish, in the same shape it already uses when the exporter is
+    unavailable. Reversing it is the one constant, never the environment
+    variable TCRMP_REVIEW_GIT_PUSH, which any hand launch can flip back.
+    """
+    if not REVIEW_TAGGING_ENABLED:
+        n_review = _count_review_masks(to_export, batch_files)
+        log(f"[review-lock] expert-review export SUSPENDED: {n_review} flagged "
+            f"mask(s) in this batch were not published and not given a review "
+            f"identifier. {REVIEW_LOCKED_MSG}")
+        return {'disabled': True, 'review_masks_skipped': n_review}
     if not _REVIEW_OK:
         # Surface the disabled state instead of dropping REVIEW masks silently:
         # if any frame in this batch carries a REVIEW-flagged mask, the operator
         # must know it did not ship to the expert repo.
-        n_review = 0
-        for fn in batch_files:
-            seg = to_export.get(fn) or {}
-            for m in seg.get('masks', []):
-                if m.get('review') or m.get('species') == 'REVIEW':
-                    n_review += 1
+        n_review = _count_review_masks(to_export, batch_files)
         if n_review:
             log(f"[review] WARNING: expert-review export DISABLED (_reefreview "
                 f"import failed) but {n_review} REVIEW mask(s) in this batch were "
@@ -2219,7 +3590,7 @@ def _export_review_bundle(to_export, batch_files):
             library_dir=cfg.EXPERT_LIBRARY_DIR or None,
             master_codes=cfg.MASTER_CODES_CSV,
             contacts=contacts,
-            featured_codes=TARGET_SPECIES,
+            featured_codes=_target_species(),
             project_id=project_id,
             project_name=project_name,
             pad_px=cfg.REVIEW_CROP_PAD_PX,
@@ -2241,6 +3612,7 @@ def _export_review_bundle(to_export, batch_files):
 
 
 @app.route('/api/export_batch', methods=['POST'])
+@_dirty_on_success
 def do_export():
     """Export current batch to YOLO Segmentation format."""
     batch_size = session['review_batch_size']
@@ -2262,6 +3634,7 @@ def do_export():
     stats = export_batch(
         to_export, export_dir, session['class_map'],
         symlink=cfg.SYMLINK_IMAGES,
+        reviewer=_current_reviewer(),
     )
 
     # Ship REVIEW-flagged masks to the expert-review GitHub-Pages repo + the
@@ -2359,6 +3732,22 @@ def do_export():
     return jsonify(out)
 
 
+@app.route('/api/mask_size', methods=['POST'])
+@_dirty_on_success
+def set_mask_size():
+    """Pick which SAM3 tracker variant later prompts return: tight, medium, generous."""
+    engine = session.get('sam_engine')
+    size = (request.json or {}).get('size', '')
+    if engine is None:
+        return jsonify({'error': 'SAM3 engine not loaded'}), 500
+    try:
+        engine.set_mask_size(size)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    session['mask_size'] = size
+    return jsonify({'ok': True, 'size': size})
+
+
 @app.route('/api/status')
 def status():
     segs = session['segmentations']
@@ -2395,6 +3784,11 @@ def status():
         'batches_done': batches_done,
         'batches_remaining': batches_remaining,
         'orchestrator_url': _orchestrator_url(),
+        # Live SAM3 mask-size variant, the boot mode, and the labels this
+        # session offers (standalone picks its own at start).
+        'mask_size': getattr(session.get('sam_engine'), 'mask_size', cfg.SAM3_MASK_SIZE),
+        'session_mode': getattr(cfg, 'SESSION_MODE', 'configure'),
+        'target_labels': _target_labels(),
     })
 
 
@@ -2431,12 +3825,21 @@ def open_export_manifest():
 
 @app.route('/images/<path:filename>')
 def serve_image(filename):
-    """Serve raw image file."""
+    """Serve raw image file.
+
+    The frame bytes behind a given filename never change during a session, so
+    the browser is told it may keep them for an hour. That makes stepping back
+    to a frame, and the client's prefetch of the next frame, paint from cache
+    instead of re-downloading a multi-megabyte JPEG. `private` keeps the
+    imagery out of any shared proxy cache.
+    """
     seg = _find_segmentation(filename)
     if seg:
         path = seg.get('image_path_abs', '')
         if path and os.path.exists(path):
-            return send_file(path)
+            resp = send_file(path)
+            resp.headers['Cache-Control'] = 'private, max-age=3600'
+            return resp
     return jsonify({'error': 'not found'}), 404
 
 
@@ -2444,13 +3847,24 @@ def serve_image(filename):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='TCRMP Segment Images - SAM3 Review App')
+        description='Annotate Images - SAM3 segmentation + review')
     parser.add_argument('--port', type=int, default=cfg.PORT)
     args = parser.parse_args()
 
     print(f"Loading SAM3 model...")
     from sam_engine import SAM3Engine
     session['sam_engine'] = SAM3Engine(cfg)
+    # Load the exemplar model in the background so the first Scan does not stall.
+    session['sam_engine'].warm_exemplar_async()
+
+    # Save on quit (VEGA annotation safety net, 2026-09-27): a stop, a
+    # restart, or an operator's Ctrl+C must not drop the last un-flushed
+    # edit. SIGKILL cannot be caught, so the stop path that sends it (the
+    # orchestrator's kill path) flushes first itself; this covers every
+    # signal Python can intercept plus a normal interpreter exit.
+    signal.signal(signal.SIGTERM, _handle_quit_signal)
+    signal.signal(signal.SIGINT, _handle_quit_signal)
+    atexit.register(flush_before_exit)
 
     log("SAM3 model loaded, server starting")
     print(f"Server ready on http://localhost:{args.port}")
