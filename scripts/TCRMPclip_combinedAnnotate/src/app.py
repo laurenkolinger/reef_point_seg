@@ -384,6 +384,14 @@ session = {
     # Class registry for YOLO export
     'class_map': {},
 
+    # Cross-project no-rescreening data (VEGA annotator tidy-up, 2026-09-27):
+    # {stem: {'screened': {label: {...}}, 'masks': [{...}, ...]}} loaded from
+    # <export_dir>/prior_screening.json by load_prior_screening(), called from
+    # configure()/resume()/standalone_start(). Read-only: never written back
+    # into session['segmentations'], never exported, never touches the dirty
+    # counter. See _prior_screening_for and get_image_data.
+    'prior_screening': {},
+
     # Currently-embedded image for refinement
     'current_review_image': None,
 
@@ -538,6 +546,77 @@ def load_segmentations(export_dir):
     _seg_disk_identity.pop(path, None)
     _seg_disk_hash.pop(path, None)
     return {}
+
+
+# Version this file's own reader expects; bump alongside a documented shape
+# change to the contract in docs/superpowers/plans/
+# 2026-09-27-vega-annotator-tidy-and-no-rescreening.md.
+_PRIOR_SCREENING_VERSION = 1
+
+
+def load_prior_screening(export_dir):
+    """Load <export_dir>/prior_screening.json: what OTHER reef_point_seg
+    projects already screened on this project's images (no-rescreening rule,
+    VEGA annotator tidy-up, 2026-09-27). The orchestrator regenerates this
+    file, keyed by file stem, before every annotator launch, covering every
+    frame of this project that carries at least one label screened
+    elsewhere, partly or fully. A new Step 3 selection never includes a
+    fully screened frame, but a frame selected before that rule existed, or
+    screened elsewhere after selection, still needs its previews. See the
+    plan's Contract section for the exact upstream shape.
+
+    Args:
+        export_dir: the project's export directory (session['export_dir']).
+
+    Returns:
+        {stem: {'screened': {label_code: {...}}, 'masks': [{...}, ...]}},
+        keyed by file stem WITHOUT an extension (session['segmentations'] and
+        session['prior_screening'] use different keys for the same frame:
+        see _prior_screening_for). Never raises. A missing file, an unreadable
+        file, non-JSON content, or a top level that is not a {"version": 1,
+        "frames": {...}} object all become {} with exactly one log line, so a
+        broken or not-yet-deployed prior-screening file can never stop the
+        annotator from opening (W2's orchestrator half of this plan ships
+        separately; until it does, every project sees an absent file here).
+        A single malformed FRAME inside an otherwise valid file degrades to
+        {'screened': {}, 'masks': []} for that frame alone, without an extra
+        log line, so one bad entry never costs the rest of a good file.
+    """
+    path = os.path.join(export_dir, 'prior_screening.json')
+    if not os.path.exists(path):
+        log(f"[prior-screening] no prior_screening.json at {path}; every "
+            f"frame is treated as unscreened elsewhere")
+        return {}
+
+    try:
+        with open(path) as f:
+            payload = json.load(f)
+    except (OSError, ValueError) as e:
+        log(f"[prior-screening] could not read {path} ({e}); treating "
+            f"every frame as unscreened elsewhere")
+        return {}
+
+    valid_envelope = (isinstance(payload, dict)
+                       and payload.get('version') == _PRIOR_SCREENING_VERSION
+                       and isinstance(payload.get('frames'), dict))
+    if not valid_envelope:
+        log(f"[prior-screening] {path} is not a version "
+            f"{_PRIOR_SCREENING_VERSION} prior-screening file "
+            f"({{'version': 1, 'frames': {{...}}}} expected); ignoring it")
+        return {}
+
+    frames = {}
+    for stem, entry in payload['frames'].items():
+        if not isinstance(entry, dict):
+            continue
+        screened = entry.get('screened')
+        masks = entry.get('masks')
+        frames[stem] = {
+            'screened': screened if isinstance(screened, dict) else {},
+            'masks': ([m for m in masks if isinstance(m, dict)]
+                      if isinstance(masks, list) else []),
+        }
+    return frames
 
 
 # Every writer to the session's on-disk stores serializes here. Three callers
@@ -956,6 +1035,88 @@ def wire_masks(masks):
     return [wire_mask(m) for m in (masks or [])]
 
 
+# ── Prior screening (cross-project no-rescreening) ─────────────────
+# load_prior_screening() (above, near load_segmentations) fills
+# session['prior_screening'] at configure/resume/standalone_start. The
+# helpers below turn that per-stem record into what one frame's GET
+# /api/image response needs: prior_masks (this project's OWN pixel space,
+# since the source polygons are normalized 0..1) and prior_screened
+# (pass-through). Neither ever writes into session['segmentations'].
+_PRIOR_POLYGON_MIN_LEN = 6  # at least 3 (x, y) pairs, matching mask_to_polygon
+
+
+def _prior_screening_for(filename):
+    """This frame's prior-screening entry, or {} when there is none.
+
+    prior_screening.json keys its frames by file STEM (no extension);
+    session['segmentations'] keys by the full filename (extension included,
+    e.g. '.jpeg'). Every lookup here goes through os.path.splitext so the two
+    stores can disagree on that one point without either caller noticing.
+    {} covers both "no prior_screening.json was ever loaded" (session key
+    absent) and "this particular frame is fully unscreened elsewhere" (stem
+    not in the loaded map): both mean the same thing to every caller here.
+    """
+    stem = os.path.splitext(filename)[0]
+    return session.get('prior_screening', {}).get(stem, {})
+
+
+def _scale_prior_ring(ring_norm, image_width, image_height):
+    """One normalized polygon ring ([x0, y0, x1, y1, ...], 0..1) scaled to
+    this frame's own pixel dimensions and rounded to the nearest whole pixel.
+
+    Returns None, dropping the ring, when it is not a flat list of at least
+    3 numeric (x, y) pairs (an odd length, a non-numeric coordinate, or a
+    boolean masquerading as one): a hostile or truncated prior_screening.json
+    must never raise here, only lose the one ring that cannot be drawn.
+    """
+    if (not isinstance(ring_norm, list)
+            or len(ring_norm) < _PRIOR_POLYGON_MIN_LEN
+            or len(ring_norm) % 2 != 0):
+        return None
+    scaled = []
+    for coord, dim in zip(ring_norm, [image_width, image_height] * (len(ring_norm) // 2)):
+        if isinstance(coord, bool) or not isinstance(coord, (int, float)):
+            return None
+        scaled.append(round(coord * dim))
+    return scaled
+
+
+def _scale_prior_masks(masks, image_width, image_height):
+    """prior_screening.json's masks (normalized polygons from ANOTHER
+    project) scaled to THIS frame's own pixel dimensions, for the annotator
+    to draw as read-only, non-selectable previews. Ring-level validation
+    only: a mask with at least one drawable ring survives with just that
+    ring; a mask where every ring is malformed is dropped rather than sent
+    with an empty polygon list. These entries are never written into
+    seg['masks'] by any caller, so they can never reach segmentations.json,
+    an export, the cross-project mask registry, or the undo stack.
+    """
+    out = []
+    for m in (masks or []):
+        if not isinstance(m, dict):
+            continue
+        rings = m.get('polygon_norm')
+        if not isinstance(rings, list) or not rings:
+            continue
+        scaled_rings = [r for r in
+                        (_scale_prior_ring(ring, image_width, image_height)
+                         for ring in rings)
+                        if r is not None]
+        if not scaled_rings:
+            continue
+        out.append({
+            'label': m.get('label', ''),
+            'name': m.get('name', ''),
+            'polygon_px': scaled_rings,
+            'project_id': m.get('project_id', ''),
+            'project_name': m.get('project_name', ''),
+            'reviewer': m.get('reviewer', ''),
+            'at': m.get('at', ''),
+            'outcome': m.get('outcome', ''),
+        })
+    return out
+
+
 # ── Embedding warm-up ────────────────────────────────────────────
 # Opening a frame used to load only the pixels; the tracker's vision encoder
 # then ran on the operator's FIRST click, so that click paid encoder + decoder.
@@ -1142,6 +1303,10 @@ def configure():
     # Load existing class map
     session['class_map'] = load_class_map(session['export_dir'])
 
+    # No-rescreening cross-project preview (2026-09-27): read-only, never
+    # feeds segmentations/exports/the registry/undo/the dirty counter.
+    session['prior_screening'] = load_prior_screening(session['export_dir'])
+
     # Flat input: routed_input/ids/sam_click_prompts.json + routed_input/raw/
     input_dir_abs = session['input_dir']
     ids_path = os.path.join(input_dir_abs, 'ids', 'sam_click_prompts.json')
@@ -1314,6 +1479,10 @@ def resume():
     # Load class map
     session['class_map'] = load_class_map(export_dir)
 
+    # No-rescreening cross-project preview (2026-09-27): read-only, never
+    # feeds segmentations/exports/the registry/undo/the dirty counter.
+    session['prior_screening'] = load_prior_screening(export_dir)
+
     # Load flat segmentations (Task 2 will extend this to handle year-nested
     # legacy exports; for now load from the flat path only)
     if not os.path.exists(_seg_path(export_dir)):
@@ -1474,6 +1643,12 @@ def standalone_start():
     session['contacts'] = []
     session['class_map'] = load_class_map(session_dir)
     session['segmentations'] = load_segmentations(session_dir)
+    # A standalone session has no orchestrator-launched project to cross-check
+    # against, so it never carries a prior_screening.json of its own; loading
+    # it anyway (almost always {}) also clears out whatever a PREVIOUSLY open
+    # routed project left in this process-global session, so a standalone run
+    # started right after closing one never shows that project's previews.
+    session['prior_screening'] = load_prior_screening(session_dir)
     # Reopening a session name that already holds imports: backfill anything the
     # segmentations store lost (same rule configure() uses for routed projects).
     _merge_custom_imports()
@@ -1864,10 +2039,14 @@ def get_image_data(filename):
     if _ensure_image_embedded(filename):
         _prewarm_embeddings_async(filename)
 
+    image_width = seg.get('image_width', 0)
+    image_height = seg.get('image_height', 0)
+    prior = _prior_screening_for(filename)
+
     return jsonify({
         'masks': wire_masks(seg.get('masks', [])),
-        'image_width': seg.get('image_width', 0),
-        'image_height': seg.get('image_height', 0),
+        'image_width': image_width,
+        'image_height': image_height,
         'reviewed': seg.get('reviewed', False),
         'exported': seg.get('exported', False),
         'custom_import': seg.get('custom_import', False),
@@ -1876,6 +2055,12 @@ def get_image_data(filename):
              'species_code': p.get('species', '')}
             for p in seg.get('reference_points', [])
         ],
+        # Cross-project no-rescreening previews (2026-09-27): read-only masks
+        # and screened labels from OTHER reef_point_seg projects that already
+        # covered this same image, so an operator can see what is already
+        # done instead of re-screening it. Never fed back into this seg dict.
+        'prior_masks': _scale_prior_masks(prior.get('masks'), image_width, image_height),
+        'prior_screened': prior.get('screened') or {},
     })
 
 
@@ -3503,12 +3688,21 @@ def _stamp_provenance(seg, filename):
     """Compute per-(image,label) outcomes for a finished/exported frame and
     upsert the flat ledger. Stamps seg['label_outcomes'] in place. The CSV
     write is wrapped non-fatally so a provenance hiccup never blocks review or
-    export. Persistence of the block rides on the existing flush.
+    export.
+
+    No-rescreening (2026-09-27): a target label another project already
+    screened this same image for (session['prior_screening'][stem]['screened'])
+    is passed to compute_label_outcomes as screened_elsewhere, so a frame
+    left without a local mask for that label gets no fresh not_found row; a
+    label this project DOES find a mask for is unaffected. Persistence of the
+    block rides on the existing flush.
     """
     export_dir = session['export_dir']
+    screened_elsewhere = frozenset(
+        (_prior_screening_for(filename).get('screened') or {}).keys())
     outcomes = compute_label_outcomes(
         seg, _target_species(), source=cfg.PROVENANCE_SOURCE,
-        reviewer=_current_reviewer())
+        reviewer=_current_reviewer(), screened_elsewhere=screened_elsewhere)
     seg['label_outcomes'] = outcomes
     try:
         write_provenance_csv(

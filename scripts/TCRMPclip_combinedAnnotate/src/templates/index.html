@@ -1,17 +1,18 @@
-{#- Expert-review lock, 2026-09-06 (LO). Flagging a mask for expert review is
-    suspended platform-wide: the server refuses every write, and this page shows
-    the two REVIEW controls disabled rather than removing them. app.py passes
-    `review_tagging_enabled` (false) and `review_locked_msg`; the defaults below
-    keep the page rendering, and keep it locked, if either is ever absent.
-    Flipping `review_tagging_enabled` back to true restores every path here. -#}
+{#- Expert-review lock, 2026-09-06 (LO), quickadd control removed 2026-09-27
+    (LO review). Flagging a mask for expert review is suspended platform-wide:
+    the server refuses every write. The label popup's REVIEW chip stays on
+    screen, disabled, because it sits among species codes an operator is
+    actively choosing from; the quickadd bar's own REVIEW button, a control
+    nobody can click while the lock holds, is left out of that bar entirely
+    instead, and only renders once `review_tagging_enabled` is true again.
+    app.py passes `review_tagging_enabled` (false) and `review_locked_msg`;
+    the defaults below keep the page rendering, and keep it locked, if either
+    is ever absent. Flipping `review_tagging_enabled` back to true restores
+    every path here, quickadd button included. -#}
 {%- set review_tagging_enabled = review_tagging_enabled | default(false) -%}
 {%- set review_locked_msg = review_locked_msg | default(
       'Flagging for expert review is temporarily unavailable.'
       ~ ' VICARIUS is accepting no new review tags.') -%}
-{%- set review_locked_button_tooltip =
-      'VICARIUS has temporarily suspended expert-review flagging: the REVIEW'
-      ~ ' label cannot be armed, and the R key no longer arms it. Masks flagged'
-      ~ ' before 2026-09-06 keep their flag and are left unchanged.' -%}
 {%- set review_locked_chip_tooltip =
       'VICARIUS has temporarily suspended expert-review flagging, so the REVIEW'
       ~ ' label cannot be applied to a mask. Pick a species code instead, or press'
@@ -352,43 +353,45 @@ body::after {
 /* ── REVIEW SCREEN ── */
 #review { flex-direction: column; }
 
+/* Two stacked rows (2026-09-27, LO review: the single flex-wrap row was
+   patchy, an empty timer/status separator floated alone, and the screening
+   note added a third variable row): row 1 (.topbar-row1) is every nav and
+   status-adjacent control, laid out as its own flex-wrap group so it either
+   holds one line or wraps as a whole, never splitting a label from its own
+   value; row 2 is #status-text alone. flex-direction: column stacks exactly
+   these two children; neither reflows the other, so a status message can
+   never move row 1 and row 1's own wrap point (946px) can never move the
+   status row's height. */
 .review-topbar {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; flex-direction: column; gap: 4px;
   padding: 6px 14px; background: var(--bg-deep); border-bottom: 1px solid var(--border);
-  /* Was a hard 40px no-wrap row: at 1280 and below the batch counter,
-     "Unlabeled only" and the frame timer overlapped and Pause clipped off the
-     right edge. Same rule the Edit toolbar uses: wrap to a second row. */
-  min-height: 40px; flex-wrap: wrap; row-gap: 6px;
   user-select: none; flex-shrink: 0;
 }
-.review-topbar > * { flex-shrink: 0; white-space: nowrap; }
+.topbar-row1 {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap; row-gap: 6px;
+  min-height: 28px;
+}
+.topbar-row1 > * { flex-shrink: 0; white-space: nowrap; }
 .review-topbar #image-filename { flex-shrink: 1; min-width: 0; }
-/* The timer text grows through a session ("--" before the first frame, up to
-   "this 59m 59s (paused) . avg 59m 59s (n=999, target 15s)" deep into a
-   paused, tracked one), and the frame counter grows with batch position
-   ("1 / 120" to "117 / 120"). A fixed width (not just a floor) on each stops
-   the row's total content width from changing at all through the session:
-   the row that wraps at the start of a batch still wraps at the end, and the
-   row that fits still fits, so the image below never moves. 55ch is the
-   longest that string above runs (two-digit minutes, a three-digit review
-   count); a rarer, longer one ellipses rather than reflowing the bar. Space
-   Mono is monospaced, so tabular-nums is a no-op today, kept in case the
-   font ever changes under it. */
+/* The timer shows only the live reading ("this 1m 12s (paused)"); the
+   session average, the sample count, and the 15s target (already explained
+   by this span's own static title) moved into a dynamic title instead of the
+   always-visible text (_timerRender sets both), so a 22-character slot holds
+   the realistic worst case ("this 123m 45s (paused)") without ellipsis and
+   without the 55-character-wide reservation the row no longer needs. A fixed
+   width (not just a floor) still matters: it stops this element's own box
+   from changing size through a session, which is what kept the row's wrap
+   point identical from the first frame to the last. */
 #frame-timer {
-  margin-left: auto; width: 55ch; max-width: 55ch;
+  width: 23ch; max-width: 23ch;
   font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis;
 }
-/* Status is a full-width row of its own (flex-basis: 100% forces a flex-wrap
-   break both before and after it, and it is the topbar's last child, so
-   nothing else ever shares its line), fixed height whether the message is
-   empty or full, so the row never appears or disappears as setStatus fires
-   and clears (see setStatus). It gets the topbar's whole width
-   instead of a clipped slot, because a short useful prefix ("Blocked by
-   #14...") was being cut before the useful part; overflow ellipses only a
-   message that still does not fit, and setStatus mirrors the full text onto
-   the title attribute for that rarer case. */
+/* Fixed height whether the message is empty or full, so the row never
+   appears or disappears as setStatus fires and clears (see setStatus).
+   Overflow ellipses only a message that does not fit; setStatus mirrors the
+   full text onto the title attribute for that rarer case. */
 .review-topbar #status-text {
-  flex: 1 1 100%; height: 1.5em; line-height: 1.5em;
+  height: 1.5em; line-height: 1.5em;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .review-topbar h1 {
@@ -405,6 +408,12 @@ body::after {
   padding: 2px 7px; max-width: 260px; flex-shrink: 1; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* In a project window this chip is the widest thing in row 1 after the
+   filename (a real project folder name runs to the 260px cap above); a
+   narrower basis here, not just a shrink floor, is most of what lets row 1
+   hold one line at 1280px (2026-09-27 review: the row was still wrapping in
+   project mode). The full name stays one hover away on the chip's own title. */
+.topbar-row1 .topbar-session { flex-basis: 90px; max-width: 90px; }
 /* Keyboard-focusable help glyph: "?" beside a label, carrying its title. */
 .glyph {
   width: 18px; height: 18px; padding: 0; line-height: 1;
@@ -458,7 +467,6 @@ body::after {
   min-width: 80px; text-align: center; font-variant-numeric: tabular-nums;
   font-family: 'Space Mono', monospace;
 }
-.batch-info { font-size: 12px; color: var(--text-dim); font-family: 'Space Mono', monospace; }
 .status { font-size: 12px; color: var(--text-dim); font-family: 'Space Mono', monospace; }
 .status.flash { color: var(--success); }
 .status.conflict { color: var(--error); }
@@ -472,12 +480,15 @@ body::after {
 
 /* Toolbar row */
 .toolbar-bar {
-  display: flex; align-items: center; gap: 8px; padding: 5px 14px;
+  display: flex; align-items: center; gap: 6px; padding: 5px 14px;
   background: var(--bg-deep); border-bottom: 1px solid var(--border); flex-shrink: 0;
   font-size: 12px;
   /* Wrap instead of clipping: with Box + the mask-size slider the row no longer
      fits a narrow window, and a hidden Undo button is worse than a second row. */
   flex-wrap: wrap; row-gap: 6px;
+  /* Anchors the settings popover (position: absolute below), so opening it
+     never reflows this row or anything under it. */
+  position: relative;
 }
 .toolbar-bar label {
   color: var(--text); cursor: crosshair;
@@ -486,17 +497,80 @@ body::after {
 }
 .toolbar-bar label:hover { color: var(--pink); }
 .toolbar-bar input[type=checkbox] { accent-color: var(--magenta); }
-.toolbar-bar input[type=range] { width: 90px; accent-color: var(--magenta); }
-/* Three stops only, so it needs less travel than the opacity slider and the
-   Edit row still fits one line on a 1280-wide window. */
-.toolbar-bar input[type=range]#mask-size { width: 58px; }
+.toolbar-bar input[type=range] { width: 56px; accent-color: var(--magenta); }
+/* Three stops only, so it needs less travel than the opacity slider. */
+.toolbar-bar input[type=range]#mask-size { width: 50px; }
 .toolbar-bar .tool-label {
   color: var(--text-dim); letter-spacing: 0;
   font-size: 13px; margin-right: 4px;
   font-family: 'Inter', sans-serif; font-weight: 500;
 }
 .toolbar-bar .tool-val { color: var(--success); font-size: 12px; min-width: 40px; font-family: 'Space Mono', monospace; }
+/* "tight" (5 characters) to "generous" (8) is a real width change as the
+   mask-size slider moves mid-session; a fixed width (not just the shared
+   min-width above, which does nothing on an inline span) stops that from
+   ever shifting where the tool row wraps at 946px. */
+.toolbar-bar #mask-size-val { display: inline-block; width: 60px; }
+/* A label with the slider and value it belongs to (2026-09-27 review: at
+   946px "Mask size:" was wrapping away from its own "generous" reading,
+   which reads as nothing without the label in front of it). One flex item,
+   so a wrap moves the whole group to the next line together, never splitting
+   a label from the value it names. */
+.toolbar-bar .tool-group { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+/* Scoped, modest reduction (design tokens unchanged: same border, radius,
+   font) so the Edit buttons and Undo take a little less width each. The row
+   holds one line at 1280px; at 946px it still wraps, Undo and the gear
+   moving down together as one clean second line (2026-09-27 review: an
+   earlier comment here overstated this as one line down to 946px, which
+   measuring with fonts loaded showed was not true). */
+.toolbar-bar .btn { padding: 6px 6px; }
 .toolbar-bar .sep { width: 1px; height: 16px; background: var(--border); margin: 0 4px; }
+
+/* Settings gear + popover, 2026-09-27 (LO, VEGA annotator tidy-up plan). The
+   view toggles (Target points only, Ref points), the unlabeled-frame finder
+   and the two housekeeping tools moved off the tool row into here, so a
+   working session shows only what most clicks touch. position: absolute
+   anchors the popover to .settings-wrap, the small box around the gear alone
+   (never to .toolbar-bar itself, which spans the full window width above the
+   Masks panel too; anchoring there hung the popover over the panel instead
+   of under the gear that opens it), so opening or closing it never changes
+   the row's height or reflows the canvas under it (the same reserved-layout
+   discipline as #status-text above). */
+.settings-wrap { position: relative; display: inline-flex; }
+.toolbar-bar #btn-settings-gear {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 6px 10px;
+}
+.toolbar-bar #btn-settings-gear[aria-expanded="true"] {
+  border-color: var(--pink); color: var(--pink);
+}
+.toolbar-bar .gear-icon { display: block; }
+.settings-popover {
+  position: absolute; top: 100%; right: 0; z-index: 260; display: none;
+  margin-top: 4px; width: 268px;
+  background: var(--bg-deep); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 10px 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.8);
+}
+.settings-popover.visible { display: block; }
+.settings-popover .sp-head {
+  font-family: 'Syne', sans-serif; font-weight: 700; font-size: 13px;
+  color: var(--text); margin: 10px 0 6px;
+}
+.settings-popover .sp-group:first-child .sp-head { margin-top: 0; }
+.settings-popover .sp-opt {
+  display: flex; align-items: center; gap: 7px; min-height: 28px;
+  font-size: 14px; color: var(--text); cursor: crosshair;
+  font-family: 'Inter', sans-serif;
+}
+.settings-popover .sp-opt input[type=checkbox] { accent-color: var(--magenta); }
+.settings-popover .sp-opt:hover { color: var(--pink); }
+.settings-popover .sp-btn {
+  display: block; width: 100%; text-align: left; margin: 4px 0 0;
+}
+.settings-popover .sp-rule {
+  border: none; border-top: 1px solid var(--border-dim); margin: 8px 0;
+}
 
 .review-body { display: flex; flex: 1; overflow: hidden; }
 
@@ -579,20 +653,6 @@ body::after {
   background: hsl(40,92%,52%); border-color: hsl(40,92%,58%); color: #1a1205;
   box-shadow: 0 0 8px hsla(40,92%,55%,0.6);
 }
-/* Suspended quick-add control (the REVIEW button while expert-review flagging
-   is locked). Repeats the one disabled visual this app already uses, the greyed
-   setup Start button, so a suspended control never reads as armed. The amber
-   .qa-review rules above carry four classes, so these repeat the hover and key
-   colours at equal specificity and win by coming later. */
-.quickadd-bar .qa-btn:disabled,
-.quickadd-bar .qa-btn.qa-review:disabled,
-.quickadd-bar .qa-btn:disabled:hover,
-.quickadd-bar .qa-btn.qa-review:disabled:hover {
-  background: transparent; border-color: var(--border);
-  border-style: dashed; color: var(--text-dim); cursor: not-allowed;
-}
-.quickadd-bar .qa-btn.qa-review:disabled .qa-key,
-.quickadd-bar .qa-btn.qa-review:disabled .qa-name { color: var(--text-dim); }
 .quickadd-bar .qa-btn .qa-key {
   background: rgba(0,0,0,0.35); color: var(--success);
   padding: 1px 5px; border-radius: 1px; font-size: 12px; font-weight: 700;
@@ -618,6 +678,23 @@ body::after {
   z-index: 250;
 }
 #loupe.visible { display: block; }
+
+/* Prior-mask hover tooltip, 2026-09-27 (LO, VEGA annotator tidy-up plan). A
+   prior mask is a canvas polygon, not a DOM element, so it carries no title
+   attribute for the browser to show; this floating label stands in for one,
+   following the pointer the same way #loupe does. pointer-events: none keeps
+   it from ever intercepting the click that is meant for the canvas under it.
+   z-index 255, below the settings popover's 260 (2026-09-27 review): the tip
+   used to share 260 with the popover and could cover Merge same ID and
+   Reload IDs when both happened to be showing at once. */
+#prior-mask-tip {
+  position: fixed; z-index: 255; display: none; pointer-events: none;
+  background: var(--surface-light); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 5px 9px; max-width: 36ch;
+  font-family: 'Inter', sans-serif; font-size: 12px; line-height: 1.5;
+  color: var(--text); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.7);
+}
+#prior-mask-tip.visible { display: block; }
 
 /* Right panel */
 .panel {
@@ -648,6 +725,16 @@ body::after {
 }
 .panel-header .hide-rej:hover { color: var(--pink); }
 .panel-header .hide-rej input { accent-color: var(--magenta); cursor: crosshair; }
+/* Cross-project screening note, moved here 2026-09-27 (LO review) from a
+   fixed-height top-bar row that could only ever clip a real sentence. This
+   column is fixed-width and sits beside the canvas rather than above it, so
+   letting it wrap onto two or three lines never moves the image; :empty
+   collapses the row entirely when there is nothing to say. */
+.panel-header .prior-screened-note {
+  order: 4; flex: 0 0 100%; font-size: 12px; line-height: 1.5;
+  color: var(--warning); font-family: 'Inter', sans-serif;
+}
+.panel-header .prior-screened-note:empty { display: none; }
 
 /* Exemplar-scan sub-panel (a <details> that stacks beneath the main mask list
    inside the same column). Collapsed by default so the panel's lower half stays
@@ -1180,79 +1267,66 @@ body::after {
 <!-- ════════════ REVIEW ════════════ -->
 <div class="screen" id="review">
   <div class="review-topbar">
-    <h1>Annotate Images</h1>
-    <span class="topbar-session{% if not session_label %} hidden{% endif %}" id="topbar-session"
-          title="{{ session_label }}">{{ session_label }}</span>
-    <button type="button" class="glyph{% if not session_label %} hidden{% endif %}" id="topbar-session-help"
-            title="{{ session_label_tooltip }}">?</button>
-    <label class="reviewer-field"
-           title="Your initials, 1 to 4 letters, so every mask you accept is credited to you. They are stamped on the mask, the label ledger and the cross-project registry. Accepting a mask is refused while this is empty.">
-      Initials
-      <input type="text" id="reviewer-input" maxlength="4" autocomplete="off" spellcheck="false"
-             placeholder="--"
-             title="Your initials, 1 to 4 letters, so every mask you accept is credited to you. They are stamped on the mask, the label ledger and the cross-project registry. Accepting a mask is refused while this is empty."
-             onchange="setReviewer(this.value)"
-             onkeydown="if (event.key === 'Enter') { event.preventDefault(); this.blur(); }">
-    </label>
-    <span class="loop-banner-chip" id="loop-banner-chip" style="display:none"
-          title="This is an active-learning refine round: the model proposed masks for frames it had not seen labels for yet. Review each one like a normal mask: Enter to accept, x to reject, refine/draw to fix the boundary, and use a number key + click to add any coral the model missed entirely. Nothing here is final until you accept or reject it.">
-    </span>
-    <button class="btn" onclick="prevImage()" title="Previous frame (Left arrow)">&#9664; Prev</button>
-    <span class="img-counter" id="img-counter">0 / 0</span>
-    <button id="btn-next-frame" class="btn" onclick="advanceToNextFrame()" title="Go to the next frame (N or Right arrow). On the last frame of the batch, a dialog appears so you can export and finish.">Next (or finish) &#9654;</button>
-    <span class="batch-info" id="batch-info"></span>
-    <label style="font-size:12px; color:var(--text-dim); font-family:'Space Mono',monospace; display:flex; align-items:center; gap:4px; margin-left:10px;"
-           title="Filter frame navigation (Prev/Next/counter) to only frames that still have an unlabeled mask (species not yet assigned, accepted or pending). Untick to navigate every frame again.">
-      <input type="checkbox" id="chk-unlabeled-only" onchange="toggleUnlabeledOnly(this.checked)"> Unlabeled only
-    </label>
-    <button class="btn" onclick="jumpNextUnlabeled()"
-            title="Jump to the next frame in this batch that has an unlabeled mask (species not yet assigned). Useful for finding masks accepted before the species guard, or a hand-added mask still missing a label.">
-      Next unlabeled <span id="unlabeled-count" style="color:var(--text-dim)"></span>
-    </button>
-    <!-- Fixed width, not just a cap: 44ch fits a real frame filename
-         ("TCRMP20250612_video_BKP_T3_frame_004210.jpg" is 43) whole, and the
-         empty string the topbar starts on before a frame is selected
-         renders at the same width, so the first frame to appear does not
-         itself change the row's content width and move the image. A longer
-         name ellipses, and its title carries the full name. -->
-    <span id="image-filename" style="color:var(--success); font-family:'Space Mono',monospace; font-size:13px; margin-left:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; width:44ch; max-width:44ch;"></span>
-    <span id="custom-import-badge" style="display:none; font-size:12px; color:var(--bg); background:var(--magenta); padding:2px 8px; border-radius:var(--radius); font-family:'Space Mono',monospace; letter-spacing:0; font-weight:700;"
-          title="This frame is a custom import: an operator-supplied image, not a pipeline-routed TCRMP frame. It lives in custom_imports/ inside this run and exports through the normal batch export like any other frame.">Custom</span>
-    <!-- Reserves its width whether the background SAM3 pass is running or not
-         (visibility:hidden, not display:none), and the width is fixed at the
-         longest realistic "Processing 999/999..." text (24ch: the width includes
-         the 8px side padding; tabular-nums, then
-         ellipsis for the rarer batch that runs past 999), so the 5s poll in
-         startReviewWhileProcessing that fills this badge in and out never
-         changes the row's content width or moves the image below it. -->
-    <span id="bg-processing-badge" style="font-size:12px; color:var(--bg); background:var(--success); padding:2px 8px; border-radius:var(--radius); visibility:hidden; width:24ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-variant-numeric:tabular-nums; font-family:'Space Mono',monospace; letter-spacing:0; font-weight:700;">Processing</span>
-    <span class="spacer"></span>
-    {% if session_mode == 'standalone' %}
-    <input type="file" id="import-file-input" accept=".jpg,.jpeg,.png" multiple style="display:none"
-           title="Choose one or more images (jpg or png) to import into this run."
-           onchange="handleImportFiles(this.files)">
-    <button class="btn" id="btn-import-images" onclick="document.getElementById('import-file-input').click()"
-            title="Add more of your images to this session. Anything over 1920px on the long edge is downscaled to the annotation standard; each image joins the queue.">
-      Import Images
-    </button>
-    {% endif %}
-    <span id="frame-timer"
-          style="font-family:'Space Mono',monospace; font-size:12px; color:var(--text-dim); margin-right:8px"
-          title="This frame: target 15.0s. Average is the rolling mean for this session.">:</span>
-    <button class="btn" id="frame-timer-pause"
-            onclick="_timerTogglePause()" title="Pause / resume the timer (P)"
-            style="padding:4px 10px;margin-right:8px">Pause</button>
+    <div class="topbar-row1">
+      <h1>Annotate Images</h1>
+      <span class="topbar-session{% if not session_label %} hidden{% endif %}" id="topbar-session"
+            title="{{ session_label }}">{{ session_label }}</span>
+      <button type="button" class="glyph{% if not session_label %} hidden{% endif %}" id="topbar-session-help"
+              title="{{ session_label_tooltip }}">?</button>
+      <label class="reviewer-field"
+             title="Your initials, 1 to 4 letters, so every mask you accept is credited to you. They are stamped on the mask, the label ledger and the cross-project registry. Accepting a mask is refused while this is empty.">
+        Initials
+        <input type="text" id="reviewer-input" maxlength="4" autocomplete="off" spellcheck="false"
+               placeholder="--"
+               title="Your initials, 1 to 4 letters, so every mask you accept is credited to you. They are stamped on the mask, the label ledger and the cross-project registry. Accepting a mask is refused while this is empty."
+               onchange="setReviewer(this.value)"
+               onkeydown="if (event.key === 'Enter') { event.preventDefault(); this.blur(); }">
+      </label>
+      <span class="loop-banner-chip" id="loop-banner-chip" style="display:none"
+            title="This is an active-learning refine round: the model proposed masks for frames it had not seen labels for yet. Review each one like a normal mask: Enter to accept, x to reject, refine/draw to fix the boundary, and use a number key + click to add any coral the model missed entirely. Nothing here is final until you accept or reject it.">
+      </span>
+      <button class="btn" onclick="prevImage()" title="Previous frame (Left arrow)">Prev</button>
+      <span class="img-counter" id="img-counter"
+            title="Frame number within this batch, then the batch size."
+            >0 / 0</span>
+      <button id="btn-next-frame" class="btn" onclick="advanceToNextFrame()" title="Go to the next frame (N or Right arrow). On the last frame of the batch, a dialog appears so you can export and finish.">Next</button>
+      <!-- Fixed width, not just a cap, so the first frame to appear (an empty
+           string before one is selected) never changes the row's content
+           width and moves the image. A longer name ellipses; its title
+           carries the full name (see selectImage). -->
+      <span id="image-filename" style="color:var(--success); font-family:'Space Mono',monospace; font-size:13px; margin-left:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex: 3 1 22ch; min-width: 22ch; max-width: 44ch;"></span>
+      <span id="custom-import-badge" style="display:none; font-size:12px; color:var(--bg); background:var(--magenta); padding:2px 8px; border-radius:var(--radius); font-family:'Space Mono',monospace; letter-spacing:0; font-weight:700;"
+            title="This frame is a custom import: an operator-supplied image, not a pipeline-routed TCRMP frame. It lives in custom_imports/ inside this run and exports through the normal batch export like any other frame.">Custom</span>
+      <span class="spacer"></span>
+      {% if session_mode == 'standalone' %}
+      <input type="file" id="import-file-input" accept=".jpg,.jpeg,.png" multiple style="display:none"
+             title="Choose one or more images (jpg or png) to import into this run."
+             onchange="handleImportFiles(this.files)">
+      <button class="btn" id="btn-import-images" onclick="document.getElementById('import-file-input').click()"
+              title="Add more of your images to this session. Anything over 1920px on the long edge is downscaled to the annotation standard; each image joins the queue.">
+        Import Images
+      </button>
+      {% endif %}
+      <!-- Empty until _timerStart runs (selectImage, on the first frame): no
+           placeholder glyph, since a bare separator with nothing to separate
+           reads as a rendering defect, not a state. -->
+      <span id="frame-timer"
+            style="font-family:'Space Mono',monospace; font-size:12px; color:var(--text-dim); margin-right:8px"
+            title="This frame: target 15.0s. Average is the rolling mean for this session."></span>
+      <button class="btn" id="frame-timer-pause"
+              onclick="_timerTogglePause()" title="Pause / resume the timer (P)"
+              style="padding:4px 10px;margin-right:8px">Pause</button>
+    </div>
     <span class="status" id="status-text"></span>
   </div>
   <div class="toolbar-bar">
-    <span class="tool-label">Opacity:</span>
-    <input type="range" id="opacity-slider" min="0" max="100" value="50"
-           title="Mask fill opacity. Drag, or press O to cycle 30/60/90 percent. Keyboard shortcuts keep working while this slider is focused."
-           oninput="setOpacity(this.value)" onchange="this.blur()">
-    <span class="tool-val" id="opacity-val">50%</span>
-    <div class="sep"></div>
-    <label title="Show only the target-species masks and their cyan reference points; hide non-target masks and non-target reference points. On by default. Untick to show everything (T)."><input type="checkbox" id="chk-target-only" checked onchange="toggleTargetOnly(this.checked)"> Target points only</label>
-    <label title="Show the step 4 points as read-only cyan markers (G). They guide placement and are never segmented, selected, or exported."><input type="checkbox" id="chk-show-reference" {{ 'checked' if reference_default else '' }} onchange="toggleShowReference(this.checked)"> Ref points (G)</label>
+    <span class="tool-group">
+      <span class="tool-label">Opacity:</span>
+      <input type="range" id="opacity-slider" min="0" max="100" value="50"
+             title="Mask fill opacity. Drag, or press O to cycle 30/60/90 percent. Keyboard shortcuts keep working while this slider is focused."
+             oninput="setOpacity(this.value)" onchange="this.blur()">
+      <span class="tool-val" id="opacity-val">50%</span>
+    </span>
     <div class="sep"></div>
     <span class="tool-label">Edit:</span>
     <button class="btn" id="btn-mode-refine" onclick="setInteractionMode('refine')"
@@ -1266,19 +1340,74 @@ body::after {
     <button class="btn" id="btn-mode-draw" onclick="setInteractionMode('draw')"
             title="Draw mode (D): freehand-edit the selected mask; drag inside to carve, outside to extend. Pick a mask first.">Draw (D)</button>
     <div class="sep"></div>
-    <span class="tool-label">Mask size:</span>
-    <input type="range" id="mask-size" min="0" max="2" step="1" value="{{ {'tight':0,'medium':1,'generous':2}.get(default_mask_size, 2) }}"
-           title="How much of the object SAM3 includes for the next click or box. Generous is best for large colonies; tight for a small piece inside a larger one. Moving it re-runs the selected mask's prompt right away."
-           oninput="setMaskSize(this.value)" onchange="this.blur()">
-    <span class="tool-val" id="mask-size-val">{{ default_mask_size }}</span>
-    <div class="sep"></div>
-    <button class="btn" id="btn-undo" onclick="undoRefine()"
-            title="Undo the last refine edit (add or remove region) on the selected mask (U).">Undo (U)</button>
-    <div class="sep"></div>
-    <button class="btn" id="btn-merge-same-id" onclick="mergeSameId()"
-            title="Merge same ID: union every pair of overlapping masks on this frame that carry the same species label, so a colony split across two clicks becomes one mask.">Merge same ID</button>
-    <button class="btn" id="btn-reload-ids" onclick="reloadSegmentations()"
-            title="Reload IDs: re-read imported expert IDs for this frame from disk and show them here, without restarting the app. Your unsaved accept/reject decisions are kept.">Reload IDs</button>
+    <span class="tool-group">
+      <span class="tool-label">Mask size:</span>
+      <input type="range" id="mask-size" min="0" max="2" step="1" value="{{ {'tight':0,'medium':1,'generous':2}.get(default_mask_size, 2) }}"
+             title="How much of the object SAM3 includes for the next click or box. Generous is best for large colonies; tight for a small piece inside a larger one. Moving it re-runs the selected mask's prompt right away."
+             oninput="setMaskSize(this.value)" onchange="this.blur()">
+      <span class="tool-val" id="mask-size-val">{{ default_mask_size }}</span>
+    </span>
+    {#- Undo and the gear travel as one group (2026-09-27 review): at 946px
+        the separator right after Mask size used to stay behind on line 1
+        with nothing left to separate, once Undo and the gear wrapped to
+        line 2 on their own. Grouped, a wrap carries the whole trailing
+        cluster, its own separators included, down together. -#}
+    <span class="tool-group">
+      <button class="btn" id="btn-undo" onclick="undoRefine()"
+              title="Undo the last refine edit (add or remove region) on the selected mask (U).">Undo (U)</button>
+      <div class="sep"></div>
+      {#- Settings gear, 2026-09-27 (LO, VEGA annotator tidy-up plan). Holds the
+        view toggles, the missing-species frame finder and the two
+        housekeeping tools that used to sit loose on the top bar and this row;
+        see the popover markup below for what moved in. The wrapper (not
+        .toolbar-bar) is the popover's positioning anchor: .toolbar-bar spans
+        the full window width, above the Masks panel too, so anchoring the
+        popover to ITS right edge hung the popover over the panel instead of
+        under the gear that opens it. -#}
+    <div class="settings-wrap">
+      <button type="button" class="btn" id="btn-settings-gear"
+              aria-haspopup="true" aria-expanded="false" aria-controls="settings-popover"
+              aria-label="Open the settings menu: what to show, the missing-species finder, and the two mask tools."
+              onclick="toggleSettingsPopover()"
+              title="Open the settings menu: what to show, the missing-species finder, and the two mask tools.">
+        <svg class="gear-icon" viewBox="0 0 24 24" width="14" height="14" fill="none"
+             stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 9 19.37a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.63 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.63 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.63a1.7 1.7 0 0 0 1.04-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.37 9a1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.04z"></path>
+        </svg>
+      </button>
+      <div class="settings-popover" id="settings-popover" aria-label="Settings menu">
+        <div class="sp-group">
+          <div class="sp-head">Show</div>
+          <label class="sp-opt" title="Show only the target-species masks and their cyan reference points; hide non-target masks and non-target reference points. On by default. Untick to show everything (T).">
+            <input type="checkbox" id="chk-target-only" checked onchange="toggleTargetOnly(this.checked)"> Target points only
+          </label>
+          <label class="sp-opt" title="Show the step 4 points as read-only cyan markers (G). They guide placement and are never segmented, selected, or exported.">
+            <input type="checkbox" id="chk-show-reference" {{ 'checked' if reference_default else '' }} onchange="toggleShowReference(this.checked)"> Ref points (G)
+          </label>
+        </div>
+        <hr class="sp-rule">
+        <div class="sp-group">
+          <div class="sp-head">Find</div>
+          <label class="sp-opt" title="Tick this to step only through frames that still hold a mask with no species. The annotator refuses to export such a mask, so these frames need a species or a reject.">
+            <input type="checkbox" id="chk-unlabeled-only" onchange="toggleUnlabeledOnly(this.checked)"> Frames with a mask missing its species
+          </label>
+          <button type="button" class="btn sp-btn" onclick="jumpNextUnlabeled()"
+                  title="Jump to the next frame in this batch that has a mask missing its species. Useful for finding masks accepted before the species guard, or a hand-added mask still missing a label.">
+            Next such frame <span id="unlabeled-count" style="color:var(--text-dim)"></span>
+          </button>
+        </div>
+        <hr class="sp-rule">
+        <div class="sp-group">
+          <div class="sp-head">Tools</div>
+          <button class="btn sp-btn" id="btn-merge-same-id" onclick="mergeSameId()"
+                  title="Merge same ID: union every pair of overlapping masks on this frame that carry the same species label, so a colony split across two clicks becomes one mask.">Merge same ID</button>
+          <button class="btn sp-btn" id="btn-reload-ids" onclick="reloadSegmentations()"
+                  title="Reload IDs: re-read imported expert IDs for this frame from disk and show them here, without restarting the app. Your unsaved accept/reject decisions are kept.">Reload IDs</button>
+        </div>
+      </div>
+    </div>
+    </span>
   </div>
   <div class="quickadd-bar" id="quickadd-bar">
     <span class="qa-label">Tap a number to arm a label</span>
@@ -1293,28 +1422,30 @@ body::after {
       <span class="qa-code code-chip">{{ lbl.code }}</span>
     </button>
     {% endfor %}
+    {%- if review_tagging_enabled %}
     <button class="qa-btn qa-review" id="qa-btn-review" data-code="REVIEW"
-            {%- if review_tagging_enabled %}
             onclick="toggleQuickReview()"
-            title="Tap R to flag the next placed mask for expert REVIEW. It ships to the review portal on export and is never adjudicated here."
-            {%- else %}
-            disabled aria-disabled="true"
-            title="{{ review_locked_button_tooltip }}"
-            {%- endif %}>
-      {%- if review_tagging_enabled %}<span class="qa-key">R</span>{% endif %}
-      <span class="qa-name">{{ 'Flag for expert review' if review_tagging_enabled else 'Expert review (unavailable)' }}</span>
+            title="Tap R to flag the next placed mask for expert REVIEW. It ships to the review portal on export and is never adjudicated here.">
+      <span class="qa-key">R</span>
+      <span class="qa-name">Flag for expert review</span>
       <span class="qa-code code-chip">REVIEW</span>
     </button>
+    {%- endif %}
   </div>
   <div class="review-body">
     <div class="canvas-wrap" id="canvas-wrap">
       <canvas id="canvas"></canvas>
+      <!-- A chip on the top-right corner of the image area, positioned
+           absolutely, so the 5s poll in startReviewWhileProcessing can show and
+           hide it without taking space in the top bar or moving the image. -->
+      <span id="bg-processing-badge" style="position:absolute; top:8px; right:8px; z-index:5; pointer-events:none; font-size:12px; color:var(--bg); background:var(--success); padding:2px 8px; border-radius:var(--radius); visibility:hidden; white-space:nowrap; font-variant-numeric:tabular-nums; font-family:'Space Mono',monospace; letter-spacing:0; font-weight:700;">Processing</span>
       <div id="box-overlay"></div>
       <div id="loupe"><canvas id="loupe-canvas" width="180" height="180"></canvas></div>
       <div id="lockin-hint" class="lockin-hint" style="display:none"
            title="Commit the new mask: double-click it or press Enter.">
         Double-click or press <kbd>Enter</kbd> to lock in this mask
       </div>
+      <div id="prior-mask-tip"></div>
     </div>
     <div class="panel">
       <div class="panel-header">
@@ -1325,6 +1456,12 @@ body::after {
         <label class="hide-rej" title="Tick this to keep rejected masks out of the list. A rejected mask is left out of the export but is not deleted: untick this, click its row and press Enter to accept it again.">
           <input type="checkbox" id="chk-hide-rejected" checked onchange="hideRejected = this.checked; renderMaskList();"> hide rejected
         </label>
+        <!-- Filled in by _updatePriorScreenedNote whenever another project
+             already recorded an outcome for one of this project's target
+             labels on this frame (currentData.prior_screened). Empty and
+             collapsed when there is nothing to say; wraps freely otherwise,
+             since this column sits beside the canvas, never above it. -->
+        <span class="prior-screened-note" id="prior-screened-note" title=""></span>
       </div>
       <ul class="mask-list" id="mask-list"></ul>
       <details class="panel-sub" id="exemplar-panel">
@@ -1440,6 +1577,8 @@ body::after {
         <div class="kh-row"><span class="kh-keys"><kbd>H</kbd></span><span class="kh-desc">toggle magnifier loupe</span></div>
         <div class="kh-row"><span class="kh-keys"><kbd>Shift</kbd>+drag</span><span class="kh-desc">box redraw of the selected mask (turn Box off first, in Box mode a drag makes a new mask)</span></div>
         <div class="kh-row"><span class="kh-keys">Mask size</span><span class="kh-desc">slider (toolbar): tight / medium / generous for the next click or box</span></div>
+        <div class="kh-row"><span class="kh-keys">Gear icon</span><span class="kh-desc">Show (target points, ref points), Find (frames with a mask missing its species) and Tools (merge same ID, reload IDs)</span></div>
+        <div class="kh-row"><span class="kh-keys">Dashed outline</span><span class="kh-desc">a mask another project already screened here; hover it to see which project, who, and when</span></div>
       </div>
 
     </div>
@@ -1934,13 +2073,16 @@ async function loadReviewBatch() {
   images = data.images || [];
   currentIdx = -1;
 
-  const infoEl = document.getElementById('batch-info');
+  // Which batch this is, out of how many, and its image range: set once per
+  // batch load (2026-09-27 top-bar tidy-up removed the standing #batch-info
+  // span from the row; updateCounter folds this into #img-counter's title,
+  // next to the per-frame position that span already shows).
   if (data.total_batches > 0) {
     const start = data.offset + 1;
     const end = Math.min(data.offset + data.batch_size, data.total_images);
-    infoEl.textContent = `Batch ${data.batch_number}/${data.total_batches} (${start}-${end} of ${data.total_images})`;
+    _batchInfoText = `Batch ${data.batch_number}/${data.total_batches} (${start}-${end} of ${data.total_images})`;
   } else {
-    infoEl.textContent = 'No images to review';
+    _batchInfoText = 'No images to review';
   }
   updateCounter();
   _updateLoopBanner(data.total_images || 0);
@@ -2027,10 +2169,11 @@ function _updateUnlabeledCountBadge() {
   if (el) el.textContent = unlabeledSet.size > 0 ? `(${unlabeledSet.size})` : '';
 }
 
-// "Unlabeled only" restricts Prev/Next/counter to the subset of the current
-// batch's `images` that are in unlabeledSet, without reinventing the frame
-// loop: selectImage/prevImage/nextImage still walk the same `images` array
-// and `currentIdx`, this just skips indices that are not unlabeled.
+// "Frames with a mask missing its species" (the gear popover's renamed
+// Unlabeled-only toggle) restricts Prev/Next/counter to the subset of the
+// current batch's `images` that are in unlabeledSet, without reinventing the
+// frame loop: selectImage/prevImage/nextImage still walk the same `images`
+// array and `currentIdx`, this just skips indices that are not unlabeled.
 function toggleUnlabeledOnly(on) {
   unlabeledOnly = !!on;
   const chk = document.getElementById('chk-unlabeled-only');
@@ -2043,28 +2186,28 @@ function toggleUnlabeledOnly(on) {
         jumpNextUnlabeled();
       }
     });
-    setStatus('Unlabeled only');
+    setStatus('Frames with a mask missing its species');
   } else {
     setStatus('Showing all frames');
   }
 }
 
 // Jump to the next frame (in the currently loaded batch's `images` array)
-// that has an unlabeled mask, wrapping around from the end. Reuses
+// that has a mask missing its species, wrapping around from the end. Reuses
 // selectImage for the actual navigation/save, same as prevImage/nextImage.
 function jumpNextUnlabeled() {
   if (!images.length) { setStatus('No frames loaded'); return; }
-  if (unlabeledSet.size === 0) { setStatus('No unlabeled masks in this batch'); return; }
+  if (unlabeledSet.size === 0) { setStatus('No frame in this batch has a mask missing its species'); return; }
   const n = images.length;
   for (let step = 1; step <= n; step++) {
     const idx = (currentIdx + step) % n;
     if (unlabeledSet.has(images[idx].filename)) {
       selectImage(idx);
-      setStatus(`Unlabeled frame ${idx + 1}/${n}`);
+      setStatus(`Frame ${idx + 1}/${n}: has a mask missing its species`);
       return;
     }
   }
-  setStatus('No unlabeled frames left in this batch');
+  setStatus('No frame in this batch has a mask missing its species left to find');
 }
 
 // Active-learning refine-round banner: only shown when this session booted in
@@ -2126,6 +2269,10 @@ async function selectImage(idx) {
 
   const [, data] = await Promise.all([savePrev, fetchData]);
   currentData = data;
+  _updatePriorScreenedNote();
+  // The tip names a specific prior polygon at a specific screen position; both
+  // are stale the instant the frame changes, so it never survives a switch.
+  hidePriorMaskTip();
 
   // A cached or prefetched JPEG can finish BEFORE the JSON resolves, so onload
   // may already have run while currentData still held the previous frame (or
@@ -2599,6 +2746,155 @@ function toggleShowReference(on) {
   setStatus(showReference ? 'Reference points ON' : 'Reference points OFF');
 }
 
+// ══════════════════════════════════════════════
+// PRIOR-PROJECT MASKS (2026-09-27, LO: VEGA annotator tidy-up, no re-screening)
+// ══════════════════════════════════════════════
+// currentData.prior_masks holds every accepted mask another project already
+// recorded for one of THIS project's partly-screened frames (the contract in
+// docs/superpowers/plans/2026-09-27-vega-annotator-tidy-and-no-rescreening.md),
+// already scaled to this image's pixel space by the server. They are a read-
+// only echo, the same idea as drawReferencePoints: never in currentData.masks,
+// so findMaskAt, the mask list, undo and export never see them.
+
+// A stable colour per LABEL CODE (not per mask.id, since a prior mask's id
+// belongs to another project's numbering and carries no meaning here), so
+// every prior PA outline reads the same hue across the frame and the session.
+function priorMaskColor(label, alpha) {
+  const s = String(label || '');
+  let hue = 0;
+  for (let i = 0; i < s.length; i++) hue = (hue * 31 + s.charCodeAt(i)) % 360;
+  return `hsla(${hue}, 70%, 55%, ${alpha})`;
+}
+
+function drawPriorMasks(ctx) {
+  const priors = (currentData && currentData.prior_masks) || [];
+  if (!priors.length) return;
+  ctx.save();
+  ctx.setLineDash([6 / scale, 4 / scale]);
+  for (const pm of priors) {
+    const polygons = pm.polygon_px || [];
+    ctx.globalAlpha = maskOpacity * 0.35;
+    ctx.fillStyle = priorMaskColor(pm.label, 1.0);
+    for (const poly of polygons) {
+      if (poly.length < 6) continue;
+      ctx.beginPath();
+      ctx.moveTo(poly[0], poly[1]);
+      for (let j = 2; j < poly.length; j += 2) ctx.lineTo(poly[j], poly[j + 1]);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = priorMaskColor(pm.label, 0.85);
+    ctx.lineWidth = 1.5 / scale;
+    for (const poly of polygons) {
+      if (poly.length < 6) continue;
+      ctx.beginPath();
+      ctx.moveTo(poly[0], poly[1]);
+      for (let j = 2; j < poly.length; j += 2) ctx.lineTo(poly[j], poly[j + 1]);
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1.0;
+}
+
+// The prior mask under an image-space point, topmost first, or null. Mirrors
+// findMaskAt's own polygon walk but reads prior_masks, never currentData.masks,
+// so a prior outline is never selectable and never competes with an own mask
+// for a click; callers check findMaskAt first so an own mask always wins.
+function findPriorMaskAt(imgX, imgY) {
+  const priors = (currentData && currentData.prior_masks) || [];
+  for (let i = priors.length - 1; i >= 0; i--) {
+    const polys = priors[i].polygon_px || [];
+    for (const poly of polys) {
+      if (pointInPolygon(imgX, imgY, poly)) return priors[i];
+    }
+  }
+  return null;
+}
+
+// The ISO timestamp's date only ("2026-04-22T14:35:02-04:00" -> "2026-04-22").
+// Backend timestamps are already written in Atlantic Standard Time, so no
+// timezone conversion is needed: the first 10 characters are the AST date.
+function _formatDateOnly(isoTimestamp) {
+  return String(isoTimestamp || '').slice(0, 10);
+}
+
+// What the floating tooltip says about one prior mask, full name first: e.g.
+// "Porites astreoides (PA): screened in AT_PA_750img_26-09-18 by AT on
+// 2026-09-25".
+function priorMaskTipText(pm) {
+  const code = pm.label || '';
+  const name = pm.name || labelNameFor(code, pm.name);
+  const head = name ? `${name} (${code})` : (code || 'unlabeled');
+  const project = pm.project_name || pm.project_id || 'another project';
+  const date = _formatDateOnly(pm.at);
+  // A blank reviewer (an older record, or one imported without one) drops
+  // the whole "by X" clause instead of printing a placeholder like "by ?",
+  // which reads as a person, not as missing data.
+  const reviewer = String(pm.reviewer || '').trim();
+  const by = reviewer ? ` by ${reviewer}` : '';
+  return `${head}: screened in ${project}${by} on ${date}`;
+}
+
+// Follows the cursor like #loupe; shown only while the pointer sits over a
+// prior mask AND no own mask is under it (findMaskAt takes priority, so an
+// operator's own overlapping work is never shadowed by another project's echo).
+function updatePriorMaskHover(clientX, clientY, imgX, imgY) {
+  const tip = document.getElementById('prior-mask-tip');
+  if (!tip) return;
+  if (!currentData || !(currentData.prior_masks || []).length
+      || findMaskAt(imgX, imgY) !== -1) {
+    tip.classList.remove('visible');
+    return;
+  }
+  const hit = findPriorMaskAt(imgX, imgY);
+  if (!hit) { tip.classList.remove('visible'); return; }
+  tip.textContent = priorMaskTipText(hit);
+  tip.style.left = (clientX + 14) + 'px';
+  tip.style.top = (clientY + 14) + 'px';
+  tip.classList.add('visible');
+}
+
+function hidePriorMaskTip() {
+  const tip = document.getElementById('prior-mask-tip');
+  if (tip) tip.classList.remove('visible');
+}
+
+// The line under the Masks panel's "x/y accepted, n pending" count: "Already
+// screened here: Porites astreoides PA (AT_PA_750img_26-09-18)" for every
+// target label another project already recorded an outcome for on this
+// frame, full name first and the code riding after it as the same chip a
+// mask-list row gives one. Lives in the Masks panel (2026-09-27 review; moved
+// out of the top bar, where a variable-length note could only ever be a
+// clipped one-liner), so wrapping onto more than one line is fine here: the
+// panel is a fixed-width column beside the canvas, never above it, so
+// nothing this element does can move the image. Empty when nothing was
+// screened elsewhere, so it takes no space in the header at all.
+function _updatePriorScreenedNote() {
+  const el = document.getElementById('prior-screened-note');
+  if (!el) return;
+  const screened = (currentData && currentData.prior_screened) || {};
+  const codes = Object.keys(screened);
+  if (!codes.length) {
+    el.innerHTML = '';
+    el.title = '';
+    return;
+  }
+  const parts = codes.map(code => {
+    const info = screened[code] || {};
+    const name = labelNameFor(code, '');
+    const nameHtml = name
+      ? (isScientificName(name) ? `<i class="sci-name">${escHtml(name)}</i> ` : `${escHtml(name)} `)
+      : '';
+    const project = escHtml(info.project_name || info.project_id || 'another project');
+    return `${nameHtml}<span class="code-chip">${escHtml(code)}</span> (${project})`;
+  });
+  el.innerHTML = `Already screened here: ${parts.join(', ')}`;
+  el.title = el.textContent;
+}
+
 function render() {
   if (!img || !currentData) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -2611,6 +2907,11 @@ function render() {
 
   // Read-only reference points (step 4 guide) under the user's work.
   drawReferencePoints(ctx);
+
+  // Other projects' accepted masks for this frame's partly-screened labels,
+  // drawn under this project's own masks so an operator's live work is never
+  // obscured by another project's echo.
+  drawPriorMasks(ctx);
 
   const masks = currentData.masks || [];
 
@@ -3882,6 +4183,63 @@ function hideCatPopup() {
 }
 
 // ══════════════════════════════════════════════
+// SETTINGS POPOVER (2026-09-27, LO: VEGA annotator tidy-up plan)
+// ══════════════════════════════════════════════
+// The gear button's popover: position: absolute in the stylesheet keeps it out
+// of the tool row's flow, so opening or closing it never moves the canvas.
+// Closed by the gear itself, Escape (see the keydown switch), a click outside
+// it, or the window losing focus.
+function toggleSettingsPopover() {
+  const popover = document.getElementById('settings-popover');
+  if (!popover) return;
+  if (popover.classList.contains('visible')) closeSettingsPopover();
+  else openSettingsPopover();
+}
+
+function openSettingsPopover() {
+  const popover = document.getElementById('settings-popover');
+  const gear = document.getElementById('btn-settings-gear');
+  if (!popover) return;
+  // The popover can cover Merge same ID and Reload IDs at the bottom of the
+  // canvas; a lingering hover tip from just before the click would sit above
+  // it (2026-09-27 review moved the tip below the popover's own z-index, but
+  // hiding it here too means it never has a reason to reappear stale).
+  hidePriorMaskTip();
+  // The stylesheet's default (right: 0, hanging off the gear's own right
+  // edge) is right for the common case, the gear near the tool row's right
+  // end; reset it before measuring, since a previous open may have flipped it.
+  popover.style.left = '';
+  popover.style.right = '0';
+  popover.classList.add('visible');
+  if (gear) gear.setAttribute('aria-expanded', 'true');
+  // At 946px the tool row wraps, and the gear can sit close enough to the
+  // left edge that a right-anchored 268px popover would run off-screen (the
+  // same edge case showCatPopup already guards against for the label popup).
+  const box = popover.getBoundingClientRect();
+  if (box.left < POPUP_VIEWPORT_MARGIN_PX) {
+    popover.style.right = 'auto';
+    popover.style.left = '0';
+  }
+}
+
+function closeSettingsPopover() {
+  const popover = document.getElementById('settings-popover');
+  const gear = document.getElementById('btn-settings-gear');
+  if (popover) popover.classList.remove('visible');
+  if (gear) gear.setAttribute('aria-expanded', 'false');
+}
+
+// A click anywhere outside the popover and its gear closes it, the same
+// dismissal every native disclosure control offers.
+document.addEventListener('click', e => {
+  const popover = document.getElementById('settings-popover');
+  const gear = document.getElementById('btn-settings-gear');
+  if (!popover || !popover.classList.contains('visible')) return;
+  if (popover.contains(e.target) || (gear && gear.contains(e.target))) return;
+  closeSettingsPopover();
+});
+
+// ══════════════════════════════════════════════
 // LABEL NAMES
 // ══════════════════════════════════════════════
 // A mask carries a code; the operator reads a name. These three helpers are the
@@ -4282,6 +4640,7 @@ canvas.addEventListener('mousemove', e => {
 
   // Active draw gesture: append to path and re-render to show the trail.
   if (isDrawing) {
+    hidePriorMaskTip();
     const rect = canvas.getBoundingClientRect();
     const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
     const {x: imgX, y: imgY} = screenToImage(sx, sy);
@@ -4295,6 +4654,7 @@ canvas.addEventListener('mousemove', e => {
 
   // Active pan drag
   if (isPanning) {
+    hidePriorMaskTip();
     offsetX = e.clientX - panStartX;
     offsetY = e.clientY - panStartY;
     render();
@@ -4314,12 +4674,19 @@ canvas.addEventListener('mousemove', e => {
     }
     // Keep updating loupe even while deciding
     updateLoupe(e.clientX, e.clientY, e.clientX - (canvas.getBoundingClientRect().left), e.clientY - (canvas.getBoundingClientRect().top));
+    hidePriorMaskTip();
     return;
   }
 
   // Loupe follow-cursor for all other move events
   const rect = canvas.getBoundingClientRect();
-  updateLoupe(e.clientX, e.clientY, e.clientX - rect.left, e.clientY - rect.top);
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+  updateLoupe(e.clientX, e.clientY, sx, sy);
+
+  // Prior-mask hover: shows only while idle over the canvas, the same window
+  // the loupe above already follows in.
+  const {x: hoverImgX, y: hoverImgY} = screenToImage(sx, sy);
+  updatePriorMaskHover(e.clientX, e.clientY, hoverImgX, hoverImgY);
 
   if (isDrawingBox) {
     boxEndX = e.clientX - rect.left;
@@ -4565,6 +4932,18 @@ document.addEventListener('keydown', e => {
       return;
     }
   }
+  // Escape closes the settings popover on its own (2026-09-27 review): the
+  // general case 'Escape' below also clears the selected mask and ends the
+  // sticky Add/Box loops, which is one keypress doing two unrelated things
+  // when the popover happens to be open. Only other keys fall through.
+  if (e.key === 'Escape') {
+    const popover = document.getElementById('settings-popover');
+    if (popover && popover.classList.contains('visible')) {
+      closeSettingsPopover();
+      e.preventDefault();
+      return;
+    }
+  }
 
   // When species popup is showing: number keys assign species, letter keys assign
   // category. The popup may be labeling a mask (pendingAddMaskIdx) or a refused
@@ -4783,6 +5162,7 @@ document.addEventListener('keydown', e => {
       break;
     case 'Escape':
       hideCatPopup();
+      closeSettingsPopover();
       selectedMask = -1;
       setInteractionMode('select');   // also ends the sticky Add / Box loops
       renderMaskList(); render();
@@ -4812,6 +5192,7 @@ window.addEventListener('blur', () => {
   }
   const kh = document.getElementById('kbd-help');
   if (kh) kh.classList.remove('visible');
+  closeSettingsPopover();
 });
 
 // ══════════════════════════════════════════════
@@ -4876,6 +5257,7 @@ function updateLoupe(clientX, clientY, sx, sy) {
 canvas.addEventListener('mouseleave', () => {
   const loupe = document.getElementById('loupe');
   if (loupe) loupe.classList.remove('visible');
+  hidePriorMaskTip();
 });
 
 // ══════════════════════════════════════════════
@@ -5030,14 +5412,17 @@ function _timerRender() {
   const nowStr = _frameStartMs > 0 ? _timerFmt(now) : '--';
   const avgStr = isFinite(avg) ? _timerFmt(avg) : '--';
   const color = _timerColor(now);
-  const avgColor = isFinite(avg) ? _timerColor(avg) : '#b0a7ab';
   const paused = _framePausedAtMs > 0;
+  // Only the live reading is always visible (2026-09-27 top-bar tidy-up: the
+  // fixed slot shrank from 55ch to 23ch so the row fits one line at 1280px);
+  // the session average, the sample count, and the 15s target (already named
+  // in this span's own title) move into a dynamic title instead, read the
+  // same way an ellipsised status message or filename already is on this bar.
   el.innerHTML =
     '<span style="color:var(--text-dim)">this </span>' +
-    `<span style="color:${paused ? 'var(--text-dim)' : color};font-weight:700">${nowStr}${paused ? ' (paused)' : ''}</span>` +
-    ' <span style="color:var(--text-dim)">· avg </span>' +
-    `<span style="color:${avgColor}">${avgStr}</span>` +
-    ` <span style="color:var(--text-dim)">(n=${_frameTimesSec.length}, target ${FRAME_TIMER_TARGET_S.toFixed(0)}s)</span>`;
+    `<span style="color:${paused ? 'var(--text-dim)' : color};font-weight:700">${nowStr}${paused ? ' (paused)' : ''}</span>`;
+  el.title = `This frame: ${nowStr}${paused ? ', paused' : ''}, target ${FRAME_TIMER_TARGET_S.toFixed(1)}s. `
+    + `Session average: ${avgStr} over ${_frameTimesSec.length} frame${_frameTimesSec.length === 1 ? '' : 's'}.`;
   const btn = document.getElementById('frame-timer-pause');
   if (btn) btn.textContent = paused ? 'Resume' : 'Pause';
 }
@@ -5091,15 +5476,22 @@ function advanceToNextFrame() {
 // ══════════════════════════════════════════════
 // UI HELPERS
 // ══════════════════════════════════════════════
+// Set once per batch by loadReviewBatch, read by updateCounter: which batch
+// this is, out of how many, and its image range. Kept out of the counter's
+// own visible text (which stays a tight "N / M") and out of a standing span
+// of its own, so the top bar's first row fits one line at 1280px.
+let _batchInfoText = '';
+
 function updateCounter() {
   const el = document.getElementById('img-counter');
   el.textContent = images.length > 0 ? `${currentIdx + 1} / ${images.length}` : '0 / 0';
+  const titleParts = [];
+  if (_batchInfoText) titleParts.push(_batchInfoText);
   if (unlabeledOnly) {
     const remaining = images.filter(im => unlabeledSet.has(im.filename)).length;
-    el.title = `${remaining} unlabeled frame${remaining === 1 ? '' : 's'} left in this batch`;
-  } else {
-    el.title = '';
+    titleParts.push(`${remaining} frame${remaining === 1 ? '' : 's'} with a mask missing its species left in this batch`);
   }
+  el.title = titleParts.join('. ');
 }
 
 let statusTimer = null;

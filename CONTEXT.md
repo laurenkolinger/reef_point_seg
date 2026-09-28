@@ -34,6 +34,10 @@ _Avoid_: annotation (a mask is the annotation), click, marker.
 A species or category code (for example PA) with its full name (Porites astreoides), drawn from the master codes table; the target of a mask and of Step 3 selection. A label can be a coarse category such as Sponge, so "label" is the neutral word.
 _Avoid_: species (when the label may be a category), class (the YOLO class id is derived from the label), target species.
 
+**Screened**:
+A frame is screened for a label when a project recorded an outcome for that label on it (found by a person, by the model, by an expert, pending an expert, or not found). Step 3 skips a frame another project screened for every target label; a frame screened for only some target labels stays in, and the annotator shows the other project's accepted masks for those labels as locked previews. Built by `scripts/_reefreview/screening.py` on the coverage matrix's cells; archived, standalone, composite and box-training projects never count.
+_Avoid_: reviewed (a frame can be reviewed for one label and not another), done.
+
 ### Masks and stores
 
 **Mask**:

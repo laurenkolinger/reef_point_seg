@@ -123,14 +123,31 @@ def test_smoke_index_renders_200():
     body = r.get_data(as_text=True)
     # New UI affordances are present in the rendered page.
     check('Target points only' in body, 'target-only toggle missing from page')
-    check('id="qa-btn-review"' in body, 'REVIEW quick-arm button missing from page')
-    check('return to main menu' in body, 'done-return button missing from page')
-    check('remove / shrink region' in body, 'refine hint missing from page')
+    # The REVIEW quick-arm button is left out of the markup entirely while
+    # expert-review flagging is locked (2026-09-27 review of the VEGA
+    # annotator tidy-up plan: a control nobody can click is not shown
+    # disabled, it is not shown); REVIEW_TAGGING_ENABLED is False by default,
+    # so the smoke render here is the locked page. It renders again, live,
+    # the moment that flag is true (proven directly in
+    # test_review_lock_ui.py::test_review_button_is_live_once_unlocked).
+    check('id="qa-btn-review"' not in body,
+          'REVIEW quick-arm button should be absent while locked')
+    check('id="exemplar-panel"' in body, 'exemplar-scan sub-panel missing from page')
+    check('id="btn-undo"' in body, 'toolbar Undo button missing from page')
     # Relics removed in the one-way / cleanup pass must be GONE.
-    check('Merge same-ID masks' not in body, 'merge-same-id button should be removed')
-    check('Reload IDs' not in body, 'reload-ids button should be removed')
+    # Merge same ID and Reload IDs are BACK (2026-09-01 polish sweep). A prior
+    # cleanup pass took the buttons out but left mergeSameId/reloadSegmentations
+    # in the template with no caller, so two working features were unreachable
+    # while app.py's own docstring still told the operator to "hit Reload IDs".
+    # Both are toolbar buttons again, matching the segmentImages fork.
+    check('Merge same ID' in body, 'merge-same-id button missing from page')
+    check('id="btn-merge-same-id"' in body, 'merge-same-id button id missing')
+    check('Reload IDs' in body, 'reload-ids button missing from page')
+    check('id="btn-reload-ids"' in body, 'reload-ids button id missing')
     check('Accept All Pending' not in body, 'accept-all button should be removed')
     check('Export Batch' not in body, 'export-batch button should be removed')
+    check('Scrap Frame' not in body, 'scrap-frame button should be removed')
+    check('Fit View (F)' not in body, 'fit-view button should be removed')
 
 
 def test_smoke_status_exposes_batches():
@@ -155,7 +172,7 @@ def test_smoke_template_js_node_check():
         except Exception:
             continue
     if node is None:
-        print('    (node unavailable — skipping JS node --check)')
+        print('    (node unavailable, skipping JS node --check)')
         return
     tpl = os.path.join(_SRC, 'templates', 'index.html')
     src = open(tpl).read()
@@ -426,7 +443,13 @@ def test_s_triggers_scan_this():
     html = open(os.path.join(_SRC, 'templates', 'index.html')).read()
     block = html[html.index("case 's':"):html.index("case 's':") + 240]
     check("doExemplarScan('this')" in block, "plain s runs scan-this")
-    check("saveCurrentMasks" in block, "Ctrl+S still saves")
+    # Ctrl+S goes through saveFrameNow: it pushes this frame's statuses AND
+    # flushes the session to disk, so "save this frame now" really writes.
+    check("saveFrameNow()" in block, "Ctrl+S still saves")
+    sfn = html[html.index('async function saveFrameNow('):]
+    sfn = sfn[:sfn.index('\n}') + 2]
+    check("saveCurrentMasks()" in sfn and "flushNow()" in sfn,
+          "saveFrameNow pushes the statuses and flushes to disk")
 
 
 # ── STRUCTURAL: scan-candidate review loop (Task 13) ────────────────
@@ -656,19 +679,137 @@ def test_recently_deleted_feeds_rejected_ids():
 
     # selectImage must clear the set on frame load so deletions never leak across
     # frames (an id would otherwise wrongly free a region on a different image).
-    si = html[html.index('function selectImage'):html.index('function selectImage') + 1600]
+    si_start = html.index('async function selectImage(')
+    si = html[si_start:html.index('\n}', si_start) + 2]
     check('recentlyDeletedIds.clear' in si, 'selectImage clears recentlyDeletedIds on frame change')
 
+
+# ── STRUCTURAL: right-panel cleanup + font purge (Task 6) ───────────
+def test_panel_cleanup_and_fonts():
+    tpl = open(os.path.join(_SRC, 'templates', 'index.html')).read()
+    for bad in ('Silkscreen', 'Scrap Frame', 'btn-done-return', 'class="refine-hint"',
+                'Fit View (F)', 'id="scan-panel"'):
+        check(bad not in tpl, f"removed: {bad}")
+    for good in ('id="btn-undo"', 'id="exemplar-panel"', 'id="btn-scan-this"', 'id="btn-scan-all"',
+                 'id="scan-threshold"', 'Similarity', 'Press <kbd>K</kbd> for keyboard shortcuts'):
+        check(good in tpl, f"present: {good}")
+    check("{% if session_mode == 'standalone' %}" in tpl
+          and tpl.index("{% if session_mode == 'standalone' %}") < tpl.index('id="btn-import-images"'),
+          "Import button gated on standalone")
+    check('function scrapFrame' not in tpl, 'scrapFrame JS removed')
+
+
+# ── STRUCTURAL: Box mode, arrow keys, mask-size slider (Task 7) ─────
+def test_box_mode_arrows_mask_size():
+    tpl = open(os.path.join(_SRC, 'templates', 'index.html')).read()
+    for good in ('id="btn-mode-box"', 'async function doBoxAdd(', "case 'ArrowLeft':", "case 'ArrowRight':",
+                 'id="mask-size"', 'function setMaskSize(', "/merge_many`", "/add_box`", 'BOX MODE'):
+        check(good in tpl, f"present: {good}")
+    kd = tpl[tpl.index("case 'b': case 'B':"):]
+    kd = kd[:kd.index('break;')]
+    check("prevImage" not in kd and "'box'" in kd, "B toggles box mode, not previous frame")
+    kh = tpl[tpl.index('id="kbd-help"'):tpl.index('id="export-confirm-overlay"')]
+    check('<kbd>B</kbd>' in kh and 'box' in kh.lower() and '&larr;' in kh and '&rarr;' in kh,
+          "K sheet lists Box and both arrows")
+    check('previous frame</span>' in kh and '<kbd>B</kbd></span><span class="kh-desc">previous' not in kh,
+          "K sheet no longer says B = previous")
+    check("Mask size" in kh, "K sheet mentions the mask-size slider")
+    check('>Loading the annotator<' in tpl, "veil copy continues the popup loader")
+    check('Orchestrator-driven view' not in tpl, "old veil hint removed")
+
+
+# ── STRUCTURAL: review header wraps; standalone label list escapes CSV text ──
+def test_header_wrap_and_label_escaping():
+    # 2026-09-27 review of the VEGA annotator tidy-up plan split the header
+    # into two stacked rows (.review-topbar, now flex-direction: column, holds
+    # exactly .topbar-row1 and #status-text); the wrap-instead-of-clip rule
+    # this test was written for now lives on .topbar-row1, the nav-and-status
+    # cluster, not on the outer .review-topbar.
+    tpl = open(os.path.join(_SRC, 'templates', 'index.html')).read()
+    rule = tpl[tpl.index('.topbar-row1 {'):]
+    rule = rule[:rule.index('}') + 1]
+    check('flex-wrap: wrap' in rule, f'.topbar-row1 wraps instead of clipping: {rule!r}')
+    check('min-height: 28px' in rule and 'row-gap: 6px' in rule,
+          'a min-height with a wrap row-gap, not a hard height')
+    check('.review-topbar #image-filename' in tpl, 'the filename is the only shrinkable cell')
+    # The timer no longer holds the right edge with its own margin-left: auto
+    # (2026-09-27 review: that duplicated .spacer's job and, on a wrapped
+    # line with nothing after the timer but Pause, pushed the two of them
+    # off alone into a wide empty band). .spacer alone does that now; the
+    # timer keeps only a fixed width, so its own box never changes size.
+    rule = tpl[tpl.index('#frame-timer {'):]
+    rule = rule[:rule.index('}') + 1]
+    check('margin-left: auto' not in rule, 'the timer no longer duplicates .spacer\'s job')
+    check('width: 23ch' in rule, 'the timer box is a fixed width')
+    check('function escHtml(' in tpl, 'escHtml helper present')
+    rl = tpl[tpl.index('const renderList = (q) =>'):]
+    rl = rl[:rl.index('renderList(\'\');')]
+    check('escHtml(c.code)' in rl and 'escHtml(c.name' in rl,
+          'renderList escapes the master-code text before it becomes markup')
+    check('${c.code}' not in rl and '${c.name || c.code}' not in rl,
+          'no raw master-code interpolation is left in renderList')
+
+
+# ── STRUCTURAL: sticky-loop exclusivity + reset clip (Task 7 fix round 1) ──
+def test_sticky_flags_and_reset_clip():
+    tpl = open(os.path.join(_SRC, 'templates', 'index.html')).read()
+
+    # 1. Leaving a mode through the toolbar (setInteractionMode('select')) must
+    #    end BOTH sticky loops, or the next accept/frame change silently
+    #    re-enters Box. Entering box arms the box loop and clears sticky Add.
+    sim = tpl[tpl.index('function setInteractionMode('):tpl.index('function updateModeButtons(')]
+    reset = sim[sim.index("if (mode === 'select')"):]
+    check('stickyBoxMode = false' in reset and 'stickyAddMode = false' in reset,
+          'select hard-reset ends both sticky loops')
+    check("if (mode === 'box')" in sim and 'stickyBoxMode = true' in sim
+          and 'stickyAddMode = false' in sim,
+          'entering box arms the box loop and clears sticky Add')
+
+    # 2. B must stop the loop from the refine sub-step too (mode is 'refine'
+    #    right after a box add, which is exactly when the status says B to stop).
+    kd = tpl[tpl.index("case 'b': case 'B':"):]
+    kd = kd[:kd.index('break;')]
+    check("interactionMode === 'box' || stickyBoxMode" in kd,
+          'B stops the box loop from the refine sub-step')
+
+    # 3. The mask-size label follows the POST (not the drag), a refused switch
+    #    restores the slider, and the success copy waits on the re-run result.
+    sms = tpl[tpl.index('async function setMaskSize('):tpl.index('async function rerunPrompt(')]
+    check('valEl.textContent = size' in sms
+          and sms.index("'/api/mask_size'") < sms.index('valEl.textContent = size'),
+          'mask-size label is written only after the POST succeeds')
+    check('restore()' in sms, 'a refused mask size restores the slider position')
+    check('const ok = await doBoxRedraw(' in sms and 'const ok = await rerunPrompt(' in sms
+          and 'if (ok) setStatus(' in sms,
+          'setMaskSize claims a re-run only when the re-run succeeded')
+    dbr = tpl[tpl.index('async function doBoxRedraw('):tpl.index('// MASK SIZE')]
+    check('return true;' in dbr and 'return false;' in dbr, 'doBoxRedraw reports success')
+    rp = tpl[tpl.index('async function rerunPrompt('):tpl.index('// MERGE')]
+    check('return true;' in rp and 'return false;' in rp, 'rerunPrompt reports success')
+
+    # 4. A rejected mask must leave the checked set, or a later merge blocks on
+    #    a row the list is hiding.
+    rm = tpl[tpl.index('function rejectMask'):tpl.index('function rejectMask') + 900]
+    check('checkedMaskIds.delete(m.id)' in rm, 'rejectMask unchecks the rejected mask')
+
+    # 5. The resetMask CLIENT function is gone (a relic: no caller since Ctrl+Z
+    #    reset was removed). The /reset_mask ROUTE stays, and still clips to live
+    #    neighbours and answers blocked_by, so the contract is checked in app.py.
+    check('resetMask' not in tpl, 'the dead resetMask client function is gone')
+    src = open(os.path.join(_SRC, 'app.py')).read()
+    rs = src[src.index('def reset_mask('):src.index('def reset_mask(') + 3000]
+    check('rejected_ids' in rs, '/reset_mask still honours the client rejected set')
+    check('blocked_by' in rs, '/reset_mask still answers blocked_by')
 
 # ── main ────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     print('Step-5 Segment app tests')
-    print('— smoke —')
+    print('-- smoke --')
     run(test_smoke_import_app)
     run(test_smoke_index_renders_200)
     run(test_smoke_status_exposes_batches)
     run(test_smoke_template_js_node_check)
-    print('— unit: merge_overlapping_same_id —')
+    print('-- unit: merge_overlapping_same_id --')
     run(test_union_merge_two_overlapping_same_species)
     run(test_union_merge_leaves_different_species_alone)
     run(test_union_merge_skips_non_overlapping_same_species)
@@ -679,31 +820,39 @@ if __name__ == '__main__':
     run(test_union_merge_absorbed_expert_id_and_reviews_survive)
     run(test_union_merge_pending_survivor_keeps_absorbed_accepted_state)
     run(test_union_merge_refuses_conflicting_expert_ids)
-    print('— unit: _merge_imported_review_fields —')
+    print('-- unit: _merge_imported_review_fields --')
     run(test_field_merge_imports_expert_without_clobbering_edits)
     run(test_field_merge_pending_no_expert_does_not_promote_species)
     run(test_field_merge_matches_by_id_when_no_uid)
     run(test_field_merge_no_disk_match_is_noop)
-    print('— combined annotator: manual-mode backend —')
+    print('-- combined annotator: manual-mode backend --')
     run(test_manual_mode_configure_reference_points_and_provenance)
-    print('— add/refine clip: client-authoritative rejected set —')
+    print('-- add/refine clip: client-authoritative rejected set --')
     run(test_blocking_masks_excludes_client_rejected_ids)
-    print('— structural: merge button wired to mergeAction() —')
+    print('-- structural: merge button wired to mergeAction() --')
     run(test_merge_button_uses_merge_action)
-    print('— structural: s key triggers scan-this —')
+    print('-- structural: s key triggers scan-this --')
     run(test_s_triggers_scan_this)
-    print('— structural: scan-candidate review loop (Task 13) —')
+    print('-- structural: scan-candidate review loop (Task 13) --')
     run(test_scan_review_loop_present_and_keydown_delegates)
-    print('— structural: scan-candidate overlay + commit guard (Task 13b) —')
+    print('-- structural: scan-candidate overlay + commit guard (Task 13b) --')
     run(test_scan_candidate_overlay_and_commit_guard)
-    print('— structural: hide-rejected toggle (Task 14) —')
+    print('-- structural: hide-rejected toggle (Task 14) --')
     run(test_hide_rejected_default_on)
-    print('— structural: lock-in hint (Task 16) —')
+    print('-- structural: lock-in hint (Task 16) --')
     run(test_lockin_hint_present)
-    print('— structural: recentlyDeletedIds feeds rejectedMaskIds (Task 17) —')
+    print('-- structural: recentlyDeletedIds feeds rejectedMaskIds (Task 17) --')
     run(test_recently_deleted_feeds_rejected_ids)
-    print('— structural: draw_edit sends rejected_ids (Task B2) —')
+    print('-- structural: draw_edit sends rejected_ids (Task B2) --')
     run(test_draw_edit_sends_rejected_ids)
+    print('-- structural: right-panel cleanup + font purge (Task 6) --')
+    run(test_panel_cleanup_and_fonts)
+    print('-- structural: box mode, arrow keys, mask-size slider (Task 7) --')
+    run(test_box_mode_arrows_mask_size)
+    print('-- structural: sticky-loop exclusivity + reset clip (Task 7 fix 1) --')
+    run(test_sticky_flags_and_reset_clip)
+    print('-- structural: review header wrap + label escaping (fix wave) --')
+    run(test_header_wrap_and_label_escaping)
 
     n_fail = sum(1 for _, ok, _ in _RESULTS if not ok)
     n_pass = sum(1 for _, ok, _ in _RESULTS if ok)

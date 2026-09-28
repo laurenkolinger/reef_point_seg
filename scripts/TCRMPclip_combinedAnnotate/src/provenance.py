@@ -22,7 +22,14 @@ Outcome rules (computed from a finished image's masks):
                    literal 'REVIEW' when there is none. Never overrides a
                    found_* outcome for the same code; beats not_found only.
   not_found      : the image is reviewed and a TARGET species has no accepted
-                   mask. Only emitted for codes in target_species.
+                   mask. Only emitted for codes in target_species. Suppressed
+                   for a code in screened_elsewhere (VEGA annotator tidy-up,
+                   2026-09-27): another reef_point_seg project already
+                   recorded an outcome for that label on this same image, so
+                   this project emits no not_found row for it and leaves the
+                   code out of the result entirely, rather than having the
+                   operator re-screen an image someone else already covered.
+                   A found_* outcome for the code is unaffected either way.
 """
 
 import csv
@@ -70,7 +77,8 @@ def pending_labels(m):
     return codes or ['REVIEW']
 
 
-def compute_label_outcomes(seg_dict, target_species, source, reviewer=''):
+def compute_label_outcomes(seg_dict, target_species, source, reviewer='',
+                            screened_elsewhere=None):
     """Return the label_outcomes block for one finished image.
 
     Args:
@@ -78,6 +86,15 @@ def compute_label_outcomes(seg_dict, target_species, source, reviewer=''):
         target_species: iterable of target species codes for this project.
         source: 'step4test' | 'step4loop' | 'step5' | 'model' | 'edit'.
         reviewer: operator initials (may be '').
+        screened_elsewhere: iterable of target codes another reef_point_seg
+            project already recorded an outcome for on this same image (the
+            no-rescreening rule; see the module docstring's not_found entry).
+            A code in this set that finds no accepted mask HERE is left out
+            of the result rather than getting not_found. A code that DOES
+            find an accepted or pending mask here is unaffected: found_* and
+            pending_expert are reported exactly as they would be without this
+            argument. Optional and defaults to none excluded, so every
+            existing caller's behaviour is unchanged.
 
     Returns:
         {code: {outcome, reviewed, source, reviewer, at}} where outcome is
@@ -86,6 +103,7 @@ def compute_label_outcomes(seg_dict, target_species, source, reviewer=''):
     """
     at = ast_now()
     targets = set(target_species or [])
+    screened = frozenset(screened_elsewhere or ())
 
     accepted = [m for m in seg_dict.get('masks', [])
                 if _is_accepted(m) and not _is_review(m)]
@@ -119,6 +137,10 @@ def compute_label_outcomes(seg_dict, target_species, source, reviewer=''):
         elif code in pending_codes:
             outcome = 'pending_expert'
         elif code in targets:
+            if code in screened:
+                # Already screened for this label in another project, and
+                # nothing accepted here: no fresh not_found, no re-screening.
+                continue
             outcome = 'not_found'
         else:
             continue

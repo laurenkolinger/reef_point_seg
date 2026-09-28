@@ -269,6 +269,8 @@ def _badge_probe_js():
       top: Math.round(wrapEl.getBoundingClientRect().top),
       badgeWidth: Math.round(badge.getBoundingClientRect().width),
       textFits: badge.scrollWidth <= badge.clientWidth,
+      absolute: getComputedStyle(badge).position === 'absolute',
+      inCanvas: !!badge.closest('#canvas-wrap'),
     });
   }
   const pre = document.createElement('pre');
@@ -280,11 +282,11 @@ def _badge_probe_js():
 
 
 def test_the_processing_badge_never_moves_the_image_shown_or_hidden():
-    """#bg-processing-badge reserves its width whether it is idle or busy.
+    """#bg-processing-badge floats over the image, so it never moves it.
 
     The 5s poll in startReviewWhileProcessing toggles this badge on and off
-    and grows its digits through a run; visibility (not display) plus a fixed
-    width means none of that changes the row's content width.
+    and grows its digits through a run; it is positioned absolutely inside
+    #canvas-wrap, so none of that touches the top bar or the image top.
     """
     js = _badge_probe_js()
     for width in _WIDTHS:
@@ -294,13 +296,9 @@ def test_the_processing_badge_never_moves_the_image_shown_or_hidden():
         check(len(tops) == 1,
               "%dpx: the image top is the same idle, short, and long, saw %s"
               % (width, tops))
-        widths = sorted({r["badgeWidth"] for r in rows})
-        check(len(widths) == 1,
-              "%dpx: the badge's own rendered width does not change either, "
-              "saw %s" % (width, widths))
-        check(by_name["idle"]["badgeWidth"] > 0,
-              "%dpx: hidden means invisible, not collapsed (visibility, not "
-              "display), so it still occupies its slot" % width)
+        check(all(r["absolute"] and r["inCanvas"] for r in rows),
+              "%dpx: the badge floats over the image area, outside the top "
+              "bar, so it takes no row space" % width)
         for name in ("short", "full", "long"):
             check(by_name[name]["textFits"],
                   "%dpx: the badge shows %s whole, no digit cut off"
@@ -413,6 +411,84 @@ def test_a_realistic_project_filename_does_not_move_the_image():
               "%dpx, project mode: the image top is the same with no "
               "filename and with %r, saw %s"
               % (width, _LONG_FILENAME, tops))
+
+
+def _prior_screened_note_probe_js():
+    """Toggle #prior-screened-note through _updatePriorScreenedNote() itself.
+
+    Task: VEGA annotator tidy-up and no re-screening, 2026-09-27 (LO), moved
+    2026-09-27 (LO review) from a fixed-height top-bar row into the Masks
+    panel header, under the "x/y accepted, n pending" count. The note names
+    labels another project already screened on this frame
+    (currentData.prior_screened); most frames have none, some have one, a
+    hostile frame could have every target label screened elsewhere. The panel
+    is a fixed-width column beside the canvas, not above it, so none of the
+    three cases can move the image; this probe proves that directly rather
+    than asserting a reserved height the element no longer needs.
+    """
+    cases = json.dumps([
+        {"name": "none", "screened": {}},
+        {"name": "one", "screened": {
+            "PA": {"outcome": "found_manual", "project_name": "AT_PA_750img_26-09-18",
+                   "project_id": "run_1", "reviewer": "AT", "at": "2026-09-25T09:00:00-04:00"},
+        }},
+        {"name": "several", "screened": {
+            "PA": {"outcome": "found_manual", "project_name": "AT_PA_750img_26-09-18",
+                   "project_id": "run_1", "reviewer": "AT", "at": "2026-09-25T09:00:00-04:00"},
+            "BALL": {"outcome": "found_ai", "project_name": "LO_BALL_sweep_26-09-10",
+                     "project_id": "run_2", "reviewer": "LO", "at": "2026-09-10T09:00:00-04:00"},
+            "OFAV": {"outcome": "not_found", "project_name": "AT_OFAV_500img_26-08-30",
+                     "project_id": "run_3", "reviewer": "AT", "at": "2026-08-30T09:00:00-04:00"},
+        }},
+    ])
+    return """
+<script>
+(function() {
+  showScreen('review');
+  const wrapEl = document.getElementById('canvas-wrap');
+  const cases = %s;
+  const out = [];
+  for (const c of cases) {
+    currentData = {masks: [], prior_screened: c.screened};
+    _updatePriorScreenedNote();
+    const el = document.getElementById('prior-screened-note');
+    out.push({
+      name: c.name,
+      top: Math.round(wrapEl.getBoundingClientRect().top),
+      hasText: el.textContent.length > 0,
+      collapsed: getComputedStyle(el).display === 'none',
+    });
+  }
+  const pre = document.createElement('pre');
+  pre.textContent = '%s' + JSON.stringify(out) + '%s';
+  document.body.appendChild(pre);
+})();
+</script>
+""" % (cases, _MARK_START, _MARK_END)
+
+
+def test_the_prior_screened_note_never_moves_the_image():
+    """No screening, one label, and three labels never move the canvas.
+
+    Complements test_prior_mask_render.py's content checks: this suite only
+    proves the geometry. The note lives in the Masks panel, a fixed-width
+    column beside the canvas rather than a row above it, so this also proves
+    the architectural claim (moving it there structurally cannot move the
+    image) rather than relying on a reserved height the way #status-text
+    still does.
+    """
+    js = _prior_screened_note_probe_js()
+    for width in _WIDTHS:
+        rows = _run_probe(js, width)
+        tops = sorted({r["top"] for r in rows})
+        check(len(tops) == 1,
+              "%dpx: the image top is the same with no screening, one label, "
+              "and several, saw %s" % (width, tops))
+        by_name = {r["name"]: r for r in rows}
+        check(by_name["none"]["collapsed"] and not by_name["none"]["hasText"],
+              "the note collapses to nothing when nothing was screened")
+        check(by_name["one"]["hasText"] and by_name["several"]["hasText"],
+              "the note shows once at least one label was screened elsewhere")
 
 
 def test_the_status_line_shows_at_least_80_characters_at_1280():
@@ -622,7 +698,7 @@ def test_a_draw_or_box_gesture_commits_exactly_once():
     a draw or box gesture that already has enough content to save is saved
     rather than thrown away on an off-canvas release. This proves the count:
     a real /draw_edit or /add_box call fires exactly once per gesture,
-    whether the release lands on the canvas or off it, and a redundant
+    whether the release happens on the canvas or off it, and a redundant
     mousemove afterwards (the buttons === 0 self-heal) never adds a second.
     """
     result = _run_probe(_COMMIT_ONCE_PROBE_JS, width=1280)

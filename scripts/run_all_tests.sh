@@ -118,6 +118,10 @@ SUITES=(
   "py _ablation/tests/test_fish_ablation.py"
   "py TCRMPclip_combinedAnnotate/tests/test_annotator_design.py"
   "py TCRMPclip_combinedAnnotate/tests/test_annotator_layout_stability.py"
+  # VEGA annotator tidy-up and no re-screening, 2026-09-27 (LO, task W1): the
+  # gear settings popover and the cross-project prior-mask echo.
+  "py TCRMPclip_combinedAnnotate/tests/test_annotator_settings_menu.py"
+  "py TCRMPclip_combinedAnnotate/tests/test_prior_mask_render.py"
   "py _reefreview/tests/test_reefreview.py"
   "py _reefreview/tests/test_review_schema.py"
   "py _reefreview/tests/test_project_identity.py"
@@ -129,6 +133,13 @@ SUITES=(
   # H/N2): composite and bbox source contracts, run-dir naming, symlink-not-
   # copy rule, collision suffix, bad-initials/unknown-source guards.
   "py _reefreview/tests/test_training_projects.py"
+  # No-re-screening ledger (2026-09-27 VEGA annotator tidy-up plan):
+  # screened_by_stem's full/partial/none cases, project exclusion by id and
+  # by directory, archive/standalone/composite-training all ignored,
+  # write_prior_screening's contract (screened labels, other projects'
+  # accepted masks, polygon normalisation, master_codes name resolution),
+  # and a read-only reconciliation against the real inprocess tree.
+  "py _reefreview/tests/test_screening.py"
   "js _reefreview/tests/test_viewer_core.js"
   "js _reefreview/tests/test_viewer_dom.js"
   "py TCRMPcvr_chooseImages/tests/test_selection_topup.py"
@@ -145,6 +156,11 @@ SUITES=(
   # Site-balance regressions (2026-09-01, quality-sweep Task 2): small-site-count
   # convergence, per-species targets (no cross-species crosstalk), honest shortfall reasons.
   "py TCRMPcvr_chooseImages/tests/test_site_balance_regressions.py"
+  # No-re-screening at Step 3 (2026-09-27 VEGA annotator tidy-up plan):
+  # --prior-screening drops a frame fully screened elsewhere from selection
+  # and reserve alike, never touches a partly-screened one, and behaves
+  # byte-identically to before this flag existed when it is omitted.
+  "py TCRMPcvr_chooseImages/tests/test_prior_screening_exclusion.py"
   "js TCRMPclip_placePoints/tests/test_pp_core.js"
   "py TCRMPclip_placePoints/tests/verify_apps.py"
   "py TCRMPclip_placePoints/tests/test_review_lock_points.py"
@@ -170,6 +186,10 @@ SUITES=(
   "py TCRMPclip_combinedAnnotate/tests/test_draw_clip.py"
   "py TCRMPclip_combinedAnnotate/tests/test_batch_flow.py"
   "py TCRMPclip_combinedAnnotate/tests/test_provenance.py"
+  # No-rescreening cross-project preview (2026-09-27): prior_screening.json
+  # load, scaling, provenance exclusion, and the export/registry/undo/dirty
+  # boundaries it must never cross.
+  "py TCRMPclip_combinedAnnotate/tests/test_prior_screening_server.py"
   "py TCRMPclip_combinedAnnotate/tests/test_batch_all.py"
   # Export, manifest, exemplar, commit-mask, delete-remask, export-completeness.
   "py TCRMPclip_combinedAnnotate/tests/test_export_negatives.py"
@@ -406,6 +426,13 @@ SUITES=(
   # the annotator/Edit Masks process (POST /api/flush) before it kills it,
   # including the step4loop/run reorder (flush + stop precede the seeder).
   "py pipeline_orchestrator/tests/test_flush_before_kill.py"
+  # No-re-screening at the orchestrator layer (2026-09-27 VEGA annotator
+  # tidy-up plan): _run_step3 writes prior_screening_input.json and passes
+  # --prior-screening; every annotator launch (configure via step4test,
+  # resume via step4loop, and editmasks) refreshes prior_screening.json in
+  # the project's step4test export dir; a screening or write failure is
+  # logged and never blocks Step 3 or a launch.
+  "py pipeline_orchestrator/tests/test_prior_screening_launch.py"
   "py _matrix/tests/test_registry_matrix_e2e.py"
   # Matrix cell drill-down, preferences, composite export, stats (2026-08-26).
   "py _matrix/tests/test_matrix_cell.py"

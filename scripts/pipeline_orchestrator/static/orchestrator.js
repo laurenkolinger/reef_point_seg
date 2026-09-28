@@ -2102,6 +2102,11 @@ function renderStep3SiteSummary(step, summary) {
                     title="${escAttr(s.species)} reached ${s.achieved} of its ${s.target}-instance target: ${escAttr(reasonText)}.">${vegaSpeciesNameHtml(s.species)}: ${s.achieved}/${s.target} (${escHtmlNav(reasonText)})</div>`;
             }).join('')}
         </div>` : '';
+    // No-re-screening line (2026-09-27 VEGA annotator tidy-up plan): present
+    // only on a run made with --prior-screening (both keys set, even when a
+    // count is 0), so a legacy run or one made before this feature shipped
+    // shows nothing extra here (no filler status for a flag that never ran).
+    const screeningHtml = step3ScreeningLineHtml(summary);
     el.innerHTML = `
         <div style="margin-top:12px" title="Per-site frame counts from this run's selection_summary.json (${total.toLocaleString()} frames selected total).">
             <table class="remap-table">
@@ -2114,7 +2119,47 @@ function renderStep3SiteSummary(step, summary) {
             </table>
         </div>
         ${capBadge}
-        ${shortfallHtml}`;
+        ${shortfallHtml}
+        ${screeningHtml}`;
+}
+
+/**
+ * The no-re-screening line for the Step 3 completion panel (2026-09-27 VEGA
+ * annotator tidy-up plan): how many eligible images this run skipped because
+ * every target label was already screened for them in another project, and
+ * how many of the CHOSEN images carry a partial screening (some labels
+ * already covered) and so show another project's masks as locked previews
+ * in the annotator.
+ *
+ * @param {object} summary - this run's selection_summary.json.
+ * @returns {string} one hint-line <div>, or '' when Step 3 ran without
+ *   --prior-screening (both keys absent) or found nothing to report (both
+ *   counts are 0).
+ */
+function step3ScreeningLineHtml(summary) {
+    if (summary.skipped_fully_screened == null && summary.partly_screened == null) return '';
+    const skipped = summary.skipped_fully_screened || 0;
+    const partly = (summary.partly_screened && summary.partly_screened.count) || 0;
+    if (skipped === 0 && partly === 0) return '';
+    const clauses = [];
+    if (skipped > 0) {
+        clauses.push(`Skipped ${skipped.toLocaleString()} image${skipped === 1 ? '' : 's'} `
+            + `already screened for every target label in other projects`);
+    }
+    if (partly > 0) {
+        // "results", not "outlines": a screened label can mean another
+        // project found and drew a mask, or looked and found nothing there
+        // (not_found) - the second case has no outline to preview, only the
+        // fact that it was already checked, so the annotator shows whichever
+        // is true rather than promising a mask that may not exist.
+        clauses.push(`${partly.toLocaleString()} chosen image${partly === 1 ? '' : 's'} `
+            + `${partly === 1 ? 'was' : 'were'} screened for some labels in other `
+            + `projects and ${partly === 1 ? 'shows' : 'show'} those results in the `
+            + `annotator`);
+    }
+    const text = clauses.join('; ') + '.';
+    return `<div class="hint" tabindex="0" style="margin-top:8px"
+        title="VICARIUS checked the label coverage matrix before selecting frames, so nobody is asked to redo a screening another project already recorded.">${escHtmlNav(text)}</div>`;
 }
 
 // ── Open service step (single-button flow: run-if-needed -> open tab) ──────

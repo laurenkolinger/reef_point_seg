@@ -77,6 +77,11 @@ from _reefreview.training_projects import (
     COMPOSITE_PROJECT_TYPE as _COMPOSITE_PROJECT_TYPE,
     TRAINING_PROJECT_TYPES,
 )
+# The 2026-09-27 VEGA annotator tidy-up plan's no-re-screening ledger: builds
+# {stem: [labels]} from the coverage matrix for Step 3's --prior-screening
+# flag (screened_by_stem) and prior_screening.json for the combined
+# annotator, refreshed before every launch (write_prior_screening).
+from _reefreview import screening as _screening
 
 # ---------------------------------------------------------------------------
 # Asset cache-bust + user-facing step numbering
@@ -4855,6 +4860,41 @@ def create_app():
             return 1.0, True
         return v, False
 
+    def _write_prior_screening_input(step_dir):
+        """Write <step_dir>/prior_screening_input.json ({stem: [labels]}),
+        from the coverage matrix, for Step 3's --prior-screening flag: which
+        labels are already screened, in another project, for a frame this
+        project might select (2026-09-27 VEGA annotator tidy-up plan).
+        Excludes the open project by both id and directory (see
+        _reefreview.screening.screened_by_stem).
+
+        Never raises: a matrix read problem, or having no project open at
+        all, is logged via vic.note and answered with "", which
+        _run_step3 reads as "skip the flag, run exactly as before this
+        feature existed."
+
+        Parameters:
+            step_dir: Step 3's output directory (already created by the
+                caller); the file is written directly under it.
+        Returns:
+            str: the path written, or "" on any failure.
+        """
+        if current_project is None:
+            return ""
+        try:
+            mapping = _screening.screened_by_stem(
+                _inprocess_root(),
+                exclude_project_id=current_project.get("id", ""),
+                exclude_project_dir=current_project.get("project_dir", ""),
+            )
+            path = os.path.join(step_dir, "prior_screening_input.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(mapping, fh, indent=2)
+            return path
+        except Exception as e:
+            vic.note(f"[orch] failed to write prior_screening_input.json for step 3: {e}")
+            return ""
+
     def _run_step3(step, cfg, step_dir):
         py = PYTHON_PATHS.get(3, "python3")
         if not os.path.isfile(py):
@@ -4885,6 +4925,14 @@ def create_app():
             vic.note(f"[orch] step 3 max_site_frac {raw_max_site_frac!r} is not a usable "
                      f"value in (0, 1]; using {max_site_frac} instead")
         cmd += ["--max-site-frac", str(max_site_frac)]
+
+        # No-re-screening gate (2026-09-27 VEGA annotator tidy-up plan): a
+        # write failure is already logged inside the helper and answered
+        # with "", so a matrix problem here degrades to "run Step 3 exactly
+        # as it ran before this feature existed" rather than blocking it.
+        prior_screening_path = _write_prior_screening_input(step_dir)
+        if prior_screening_path:
+            cmd += ["--prior-screening", prior_screening_path]
 
         env_extra = {"TCRMP_OUTPUT_DIR": step_dir}
         return runner.run_cli_stage(step, cmd, cwd=WORKING_DIRS[3], env_extra=env_extra)
@@ -5529,6 +5577,48 @@ def create_app():
                     break
         return _mc if (_mc and os.path.isfile(_mc)) else ""
 
+    def _selected_frame_stems():
+        """Every basename Step 3 selected for the open project, read from
+        its own selected_frames.csv (the 'basename' column select_images.py
+        writes). Empty list when Step 3 has not produced one yet or the file
+        cannot be read; never raises, so a missing selection never blocks an
+        annotator launch, it just means prior_screening.json covers zero
+        frames this time."""
+        path = _resolve_path(3, "selected_frames", "selected_frames")
+        if not path or not os.path.isfile(path):
+            return []
+        try:
+            with open(path, newline="", encoding="utf-8") as fh:
+                return [row["basename"] for row in csv.DictReader(fh) if row.get("basename")]
+        except (OSError, csv.Error, KeyError) as e:
+            vic.note(f"[orch] failed to read {path} for prior_screening.json: {e}")
+            return []
+
+    def _write_prior_screening_for_launch():
+        """Refresh <step4test export dir>/prior_screening.json before an
+        annotator launch (2026-09-27 VEGA annotator tidy-up plan): which of
+        this project's selected frames are already screened, in another
+        project, for some but not all of its target labels, and every
+        accepted mask another project holds for those labels.
+
+        Never raises: a matrix read problem, a missing selected_frames.csv,
+        or an unwritable export dir is logged via vic.note and the launch
+        proceeds regardless, with whatever prior_screening.json (possibly
+        none, or a now-stale one from an earlier launch) already sits on
+        disk. Called for every mode (step4test, step4loop, editmasks) from
+        the one shared launch path below."""
+        if current_project is None:
+            return
+        try:
+            _screening.write_prior_screening(
+                current_project["project_dir"],
+                _selected_frame_stems(),
+                _inprocess_root(),
+                master_codes_csv=_resolve_master_codes() or PATHS.get("master_codes_csv", ""),
+            )
+        except Exception as e:
+            vic.note(f"[orch] failed to write prior_screening.json: {e}")
+
     def _launch_step4test_ui(mode="step4test", cfg=None):
         """Launch the combined annotator (TCRMPclip_combinedAnnotate) pointed at
         routed_input/ (the routed-prompts dir, NOT step 4's output dir).
@@ -5698,6 +5788,13 @@ def create_app():
         _mc = _resolve_master_codes()
         if _mc:
             env_extra["TCRMP_MASTER_CODES"] = _mc
+
+        # No-re-screening ledger (2026-09-27 VEGA annotator tidy-up plan):
+        # refreshed before every annotator launch, configure or resume alike,
+        # so a partly-screened frame's locked previews are never more than
+        # one launch stale. A write failure is logged inside the helper and
+        # never blocks the launch (see its docstring).
+        _write_prior_screening_for_launch()
 
         cmd = [py, entry, "--port", str(port)]
         result = runner.run_flask_stage(runner_key, cmd, port, cwd=cwd, env_extra=env_extra)

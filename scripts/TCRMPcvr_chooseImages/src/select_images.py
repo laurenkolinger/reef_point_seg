@@ -205,6 +205,92 @@ def frame_eligibility(binary, clip_index, cpc_basenames, name_fn):
     return keep, excl
 
 
+def load_prior_screening(path):
+    """{stem: [labels]} from a prior_screening_input.json file, or {} when
+    `path` is falsy, the file is missing or unreadable, or its contents do
+    not parse to a JSON object.
+
+    The orchestrator writes this file from the coverage matrix
+    (_reefreview.screening.screened_by_stem) before every Step 3 run and
+    passes it with --prior-screening, so a frame this project has not
+    touched yet can still be skipped when another project already screened
+    it for every target label (2026-09-27 VEGA annotator tidy-up plan: "I
+    don't want people retreading each other's work"). A missing or broken
+    file degrades to {} rather than raising, which in turn makes
+    fully_screened_frame_ids() drop nothing: a missing or broken file must
+    never block a Step 3 run, only skip the no-re-screening filter for it.
+    `path` itself being falsy (no --prior-screening flag given at all) is
+    the one silent case; a path that WAS given but could not be read or
+    parsed, or parsed to something other than a JSON object, prints a
+    one-line [WARN] to stderr naming the path and the reason before
+    returning {}, so a broken file is visible in the run's console output
+    rather than silently doing nothing.
+
+    Parameters:
+        path: the JSON file's path, or None/"" when no --prior-screening
+            flag was given.
+    Returns:
+        dict[str, list[str]]: stem -> the labels already screened for it in
+        some other project. A malformed value under a key (anything other
+        than a JSON array) is dropped rather than raising.
+    """
+    if not path:
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError) as e:
+        print(f"[WARN] --prior-screening {path}: could not read or parse it ({e}); "
+              f"proceeding as if no prior-screening data exists", file=sys.stderr)
+        return {}
+    if not isinstance(doc, dict):
+        print(f"[WARN] --prior-screening {path}: expected a JSON object at the top "
+              f"level, got {type(doc).__name__}; proceeding as if no prior-screening "
+              f"data exists", file=sys.stderr)
+        return {}
+    out = {}
+    for stem, labels in doc.items():
+        if isinstance(labels, list):
+            out[str(stem)] = [str(v) for v in labels if v]
+    return out
+
+
+def fully_screened_frame_ids(binary, name_fn, prior_screening, species_list):
+    """binary.index values whose basename is, per prior_screening, already
+    screened for EVERY label in species_list by some other project.
+
+    Pure and side-effect free: prior_screening is the already-loaded
+    {stem: [labels]} mapping (load_prior_screening's return), never a path.
+    A frame absent from prior_screening entirely is never fully screened
+    (there is nothing to subtract from species_list). An empty species_list
+    or an empty prior_screening both short-circuit to "drop nothing", since
+    a project with no target labels or nothing known to be screened
+    anywhere has nothing to skip.
+
+    Parameters:
+        binary: the frame x species presence DataFrame, indexed by frame_id,
+            carrying the date/site/transect/frame columns name_fn needs.
+        name_fn: builds a frame's basename from (date, site, transect,
+            frame); callers pass build_image_filename.
+        prior_screening: {stem: [labels]}, as load_prior_screening returns.
+        species_list: this project's target label codes.
+    Returns:
+        set: the frame_ids to drop before selection and before the reserve
+        pool is built (both draw from the same filtered binary).
+    """
+    target = set(species_list or ())
+    if not target or not prior_screening:
+        return set()
+    drop = set()
+    for fid in binary.index:
+        r = binary.loc[fid]
+        base = name_fn(str(r["date"]), r["site"], int(r["transect"]), int(r["frame"]))
+        screened = set(prior_screening.get(base, ()))
+        if target <= screened:
+            drop.add(fid)
+    return drop
+
+
 def _load_species_remap():
     """Load old_code -> new_code mapping from recodeSpecies remap_log."""
     import json as _json
@@ -909,7 +995,8 @@ def build_summary_lines(candidates, eligible, selected, reserve,
 
 
 def build_selection_summary(species_list, achieved, target, per_site,
-                            pool_totals, alloc_totals, cap_frac, n_selected):
+                            pool_totals, alloc_totals, cap_frac, n_selected,
+                            skipped_fully_screened=None, partly_screened=None):
     """Machine-readable twin of selection_summary.txt.
 
     Written as output/selection_summary.json beside the text summary. Step 4's
@@ -925,6 +1012,20 @@ def build_selection_summary(species_list, achieved, target, per_site,
       n_selected    total frames selected
       shortfalls    [{species, target, achieved, reason}] for every label whose
                     reason is not "ok"
+      skipped_fully_screened  present only when the caller passed a value
+                    (a --prior-screening run): count of eligible frames
+                    dropped before selection because every target label was
+                    already screened for them in another project.
+      partly_screened         present only when the caller passed a value: an
+                    object {count, stems} naming the CHOSEN frames that were
+                    screened for some but not all target labels elsewhere,
+                    and so carry another project's masks as previews.
+
+    Both new keys are omitted entirely (not written as 0 / empty) when their
+    argument is None, which is the default: a caller that never touches
+    --prior-screening gets byte-identical JSON to before this feature
+    existed, matching the plan's "without the flag, behaviour is byte-
+    identical to today" requirement.
     """
     per_species = {}
     shortfalls = []
@@ -950,7 +1051,7 @@ def build_selection_summary(species_list, achieved, target, per_site,
     cap_satisfiable = bool(
         cap_frac > 0 and n_sites >= math.ceil(1 / cap_frac)) if n_sites else True
 
-    return {
+    doc = {
         "per_site": per_site,
         "per_species": per_species,
         "cap_frac": float(cap_frac),
@@ -959,6 +1060,14 @@ def build_selection_summary(species_list, achieved, target, per_site,
         "n_selected": total,
         "shortfalls": shortfalls,
     }
+    if skipped_fully_screened is not None:
+        doc["skipped_fully_screened"] = int(skipped_fully_screened)
+    if partly_screened is not None:
+        doc["partly_screened"] = {
+            "count": len(partly_screened),
+            "stems": list(partly_screened),
+        }
+    return doc
 
 
 def build_reserve_rows(binary, selected, species_list, name_fn, clip_index):
@@ -1038,6 +1147,15 @@ def main():
     parser.add_argument("--max-site-frac", type=float, default=0.25,
                         help="Max share of the selected frames any one site may "
                              "hold when site-balance is on (default: 0.25).")
+    parser.add_argument("--prior-screening", default=None,
+                        help="Path to a {stem: [labels]} JSON (written by the "
+                             "orchestrator from the coverage matrix, "
+                             "_reefreview.screening.screened_by_stem) naming which "
+                             "labels are already screened for a frame in another "
+                             "project. A frame screened for every target label is "
+                             "dropped from both the selection and the reserve pool. "
+                             "Omitted: behaviour is unchanged from before this flag "
+                             "existed.")
     args = parser.parse_args()
 
     species_list = args.species or config.TARGET_SPECIES
@@ -1162,6 +1280,25 @@ def main():
           f"(excluded image_missing={exclusions['image_missing']}, "
           f"cpc_missing={exclusions['cpc_missing']}, pts_missing={exclusions['pts_missing']})")
 
+    # ── No-re-screening gate (2026-09-27 VEGA annotator tidy-up plan): drop
+    # any eligible frame already screened, in another project, for every one
+    # of THIS project's target labels. Runs only when --prior-screening was
+    # given and resolved to at least one entry; skipped_fully_screened stays
+    # None (never written to selection_summary.json) otherwise, so a run
+    # without the flag is byte-identical to one from before this gate
+    # existed.
+    prior_screening = load_prior_screening(args.prior_screening)
+    skipped_fully_screened = None
+    if prior_screening:
+        drop_ids = fully_screened_frame_ids(
+            binary, build_image_filename, prior_screening, species_list)
+        skipped_fully_screened = len(drop_ids)
+        if drop_ids:
+            binary = binary.drop(index=drop_ids)
+        print(f"  No-re-screening gate: dropped {skipped_fully_screened:,} frame(s) "
+              f"already screened for every target label ({', '.join(species_list)}) "
+              f"in another project")
+
     # Recompute years after filtering
     years = sorted(binary["year_int"].unique())
     years = [y for y in years if config.MIN_YEAR <= y <= config.MAX_YEAR]
@@ -1220,6 +1357,15 @@ def main():
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
 
     # clip_index was built above during the eligibility gate; reuse it here.
+    # Chosen frames that are PARTLY screened (some but not all target labels
+    # already covered in another project): never dropped from selection, but
+    # named here so the orchestrator can tell Lauren how many of what she is
+    # about to review already carries another reviewer's masks as previews.
+    # A frame here never duplicates skipped_fully_screened's frames: the gate
+    # above already removed every fully-screened frame before selection ran,
+    # so nothing left in `selected` can be full.
+    partly_screened_stems = []
+
     rows_out = []
     for frame_id in selected:
         r = sel.loc[frame_id]
@@ -1229,6 +1375,10 @@ def main():
         frame = int(r["frame"])
         year_int = int(r["year_int"])
         basename = build_image_filename(date_str, site, transect, frame)
+        if prior_screening:
+            screened_here = set(prior_screening.get(basename, ())) & set(species_list)
+            if screened_here:
+                partly_screened_stems.append(basename)
 
         # Which target species are in this frame?
         spp_present = [sp for sp in species_list if int(r[sp]) == 1]
@@ -1438,6 +1588,8 @@ def main():
         alloc_totals=alloc_totals,
         cap_frac=max_site_frac if use_site_balance else 1.0,
         n_selected=n_sel_total,
+        skipped_fully_screened=skipped_fully_screened,
+        partly_screened=(partly_screened_stems if prior_screening else None),
     )
     summary_json_path = os.path.join(config.OUTPUT_DIR, "selection_summary.json")
     with open(summary_json_path, "w") as f:
