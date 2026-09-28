@@ -18,8 +18,11 @@ Covers:
   1. render() draws prior masks (drawPriorMasks) between the reference points
      and this project's own masks, so an operator's live work always paints
      over another project's echo, never under it.
-  2. drawPriorMasks fills at 35% of the current mask opacity and strokes with
-     a dashed line, distinct per label code.
+  2. drawPriorMasks fills every prior mask at a flat 10% alpha in one fixed
+     colour (2026-09-27 pixel review, defect 2: a per-label hue at low
+     contrast read as nearly invisible against real coral), strokes a dark
+     underlay then a bright dash on top for the ordinary case, and a single
+     solid line for whichever prior mask is under the pointer.
   3. A prior mask is never selectable: findMaskAt (which drives every click,
      refine, merge and box path) never sees currentData.prior_masks, even
      when a prior polygon sits exactly where the operator clicks.
@@ -32,8 +35,9 @@ Covers:
      project, the reviewer and the date; hovering elsewhere, or hovering an
      own mask that overlaps it, shows nothing.
   6. The "Already screened here" note fills in from currentData.prior_screened
-     with the full name, the code and the source project for every label, and
-     its slot holds one fixed height whether or not there is anything to say.
+     with the full name, the code, the source project and the date for every
+     label, its tooltip names the outcome and who, and its slot holds one
+     fixed height whether or not there is anything to say.
 
 No pytest. Run with the unified env python:
     env/bin/python scripts/TCRMPclip_combinedAnnotate/tests/test_prior_mask_render.py
@@ -174,113 +178,102 @@ def test_render_draws_prior_masks_under_own_masks():
 
 # ── 2. Fill and stroke style ─────────────────────────────────────────────────
 
-def _draw_style_probe_js():
-    prior = json.dumps([_PRIOR_MASK])
+def _draw_style_probe_js(prior_masks, hovered_index=None):
+    """Render drawPriorMasks against a fake ctx that records every fill and
+    stroke call: its alpha, style, line width and dash pattern at the moment
+    the call fires. hovered_index, if given, sets _hoveredPriorMask to that
+    entry of prior_masks before drawing, exercising the hover-highlight path.
+    """
+    prior = json.dumps(prior_masks)
+    hover_setup = (
+        "_hoveredPriorMask = currentData.prior_masks[%d];" % hovered_index
+        if hovered_index is not None else "_hoveredPriorMask = null;"
+    )
     return """
 <script>
 (function() {
   showScreen('review');
   currentData = {masks: [], prior_masks: %s};
-  maskOpacity = 0.5;
   scale = 1;
-  // Records only what this test asserts: the fill alpha at the moment
-  // fillStyle is set (canvas has no "this call is a fill" event, so the
-  // alpha is captured at the point the following draw call will read it),
-  // the dash pattern, and the two style strings.
-  const calls = {fillAlpha: null, lastAlpha: null, dashes: [],
-                fillStyle: null, strokeStyle: null};
+  %s
+  let dash = [], fillStyle = null, strokeStyle = null, lineWidth = null, alpha = 1;
+  const calls = {fills: [], strokes: []};
   const fakeCtx = {
-    save() {}, restore() {}, beginPath() {}, closePath() {},
-    moveTo() {}, lineTo() {}, fill() {}, stroke() {},
-    setLineDash(d) { calls.dashes.push(d); },
-    set globalAlpha(v) { calls.lastAlpha = v; },
-    get globalAlpha() { return calls.lastAlpha; },
-    set fillStyle(v) { calls.fillStyle = v; calls.fillAlpha = calls.lastAlpha; },
-    get fillStyle() { return calls.fillStyle; },
-    set strokeStyle(v) { calls.strokeStyle = v; },
-    get strokeStyle() { return calls.strokeStyle; },
-    set lineWidth(v) {}, get lineWidth() { return 1; },
+    save() {}, restore() {}, beginPath() {}, closePath() {}, moveTo() {}, lineTo() {},
+    fill() { calls.fills.push({alpha, style: fillStyle}); },
+    stroke() { calls.strokes.push({alpha, style: strokeStyle, width: lineWidth, dash: dash.slice()}); },
+    setLineDash(d) { dash = d; },
+    set globalAlpha(v) { alpha = v; }, get globalAlpha() { return alpha; },
+    set fillStyle(v) { fillStyle = v; }, get fillStyle() { return fillStyle; },
+    set strokeStyle(v) { strokeStyle = v; }, get strokeStyle() { return strokeStyle; },
+    set lineWidth(v) { lineWidth = v; }, get lineWidth() { return lineWidth; },
   };
   drawPriorMasks(fakeCtx);
-  const out = {
-    fillAlpha: calls.fillAlpha,
-    dashed: calls.dashes.length > 0 && calls.dashes[0].some(v => v > 0),
-    fillStyle: calls.fillStyle, strokeStyle: calls.strokeStyle,
-  };
   const pre = document.createElement('pre');
-  pre.textContent = '%s' + JSON.stringify(out) + '%s';
+  pre.textContent = '%s' + JSON.stringify(calls) + '%s';
   document.body.appendChild(pre);
 })();
 </script>
-""" % (prior, _MARK_START, _MARK_END)
+""" % (prior, hover_setup, _MARK_START, _MARK_END)
 
 
-def _hsla_hue(hsla_string):
-    """Pull the hue number out of an "hsla(H, S%, L%, A)" string."""
-    return hsla_string.split("(", 1)[1].split(",", 1)[0].strip()
+def test_draw_prior_masks_fills_faintly_and_strokes_a_dark_underlay_then_a_bright_dash():
+    """Not hovered: one 10%%-alpha fill, then a dark underlay stroke (3.5px,
+    dashed) and a bright stroke on top (2px, same dash), both in the one
+    fixed prior-mask colour, never a per-label hue (2026-09-27 pixel review,
+    defect 2)."""
+    result = _run_probe(_draw_style_probe_js([_PRIOR_MASK]))
+    check(len(result["fills"]) == 1, "exactly one fill call for one prior mask")
+    fill = result["fills"][0]
+    check(abs(fill["alpha"] - 0.10) < 1e-9,
+          "the fill alpha is a flat 10%%, got %r" % fill["alpha"])
+    check(fill["style"] == "#F5EDF0",
+          "the fill uses the one fixed prior-mask colour, got %r" % fill["style"])
+    check(len(result["strokes"]) == 2,
+          "two strokes for a non-hovered prior mask (dark underlay, bright dash), "
+          "got %d" % len(result["strokes"]))
+    underlay, bright = result["strokes"]
+    check(underlay["style"] == "rgba(0, 0, 0, 0.7)",
+          "the underlay is a dark, semi-opaque outline, got %r" % underlay["style"])
+    check(abs(underlay["width"] - 3.5) < 1e-9,
+          "the underlay is 3.5 canvas units wide at scale 1, got %r" % underlay["width"])
+    check(bright["style"] == "#F5EDF0",
+          "the top stroke uses the one fixed prior-mask colour, got %r" % bright["style"])
+    check(abs(bright["width"] - 2.0) < 1e-9,
+          "the top stroke is 2 canvas units wide at scale 1, got %r" % bright["width"])
+    for stroke, label in ((underlay, "underlay"), (bright, "bright dash")):
+        check(stroke["dash"] == [8.0, 5.0],
+              "the %s stroke uses the agreed dash pattern, got %r" % (label, stroke["dash"]))
+        check(abs(stroke["alpha"] - 1.0) < 1e-9,
+              "the %s stroke is drawn at full opacity, got %r" % (label, stroke["alpha"]))
 
 
-def test_draw_prior_masks_fills_at_35_percent_and_strokes_dashed():
-    """The fill alpha is 35%% of the live opacity slider; the stroke is dashed.
-
-    Fill and stroke deliberately carry different alphas (1.0 and 0.85, the
-    same fill-then-stroke pattern maskColor/maskStrokeColor use for this
-    project's own masks), so the two style strings differ; what must match is
-    the hue, since both come from the one label-keyed colour.
-    """
-    result = _run_probe(_draw_style_probe_js())
-    check(abs(result["fillAlpha"] - 0.5 * 0.35) < 1e-9,
-          "the fill alpha is 35%% of maskOpacity, got %r" % result["fillAlpha"])
-    check(result["dashed"], "the stroke uses a dash pattern")
-    check(_hsla_hue(result["fillStyle"]) == _hsla_hue(result["strokeStyle"]),
-          "the fill and the stroke share one hue for a given label (fill=%r, "
-          "stroke=%r)" % (result["fillStyle"], result["strokeStyle"]))
-    check(result["fillStyle"].startswith("hsla("),
-          "the colour is computed, not a literal swatch: %r" % result["fillStyle"])
+def test_draw_prior_masks_highlights_the_hovered_one_with_a_solid_line():
+    """The hovered prior mask gets one solid 2px line, not the dashed pair."""
+    result = _run_probe(_draw_style_probe_js([_PRIOR_MASK], hovered_index=0))
+    check(len(result["strokes"]) == 1,
+          "one stroke call for the hovered prior mask, got %d" % len(result["strokes"]))
+    stroke = result["strokes"][0]
+    check(stroke["dash"] == [], "the hovered outline is solid, not dashed, got %r" % stroke["dash"])
+    check(stroke["style"] == "#F5EDF0",
+          "the hovered outline uses the same fixed colour, got %r" % stroke["style"])
+    check(abs(stroke["width"] - 2.0) < 1e-9,
+          "the hovered outline is 2 canvas units wide at scale 1, got %r" % stroke["width"])
+    check(abs(stroke["alpha"] - 1.0) < 1e-9, "the hovered outline is full opacity")
 
 
-def test_prior_mask_color_is_stable_per_label_and_differs_across_labels():
-    """Two masks with the same label match; two different labels do not."""
-    src = _template_source()
-    fn = _extract_function("priorMaskColor", src)
-    harness = """
-%s
-const pa1 = priorMaskColor('PA', 1.0);
-const pa2 = priorMaskColor('PA', 1.0);
-const ball = priorMaskColor('BALL', 1.0);
-console.log(JSON.stringify({pa1, pa2, ball}));
-""" % fn
-    out = _run_node(harness)
-    check(out["pa1"] == out["pa2"], "the same label code always gets the same colour")
-    check(out["pa1"] != out["ball"], "a different label code gets a different colour")
-
-
-def _find_node():
-    for candidate in ("node", "/usr/bin/node"):
-        try:
-            subprocess.run([candidate, "--version"], capture_output=True, check=True)
-            return candidate
-        except Exception:
-            continue
-    return None
-
-
-def _run_node(harness):
-    """Run a bare JavaScript harness under node and parse its one JSON line."""
-    node = _find_node()
-    if node is None:
-        print("    (node unavailable, skipping)")
-        return {"pa1": None, "pa2": None, "ball": None}
-    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as handle:
-        handle.write(harness)
-        path = handle.name
-    try:
-        result = subprocess.run([node, path], capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError("node failed: %s" % result.stderr)
-        return json.loads(result.stdout.strip().splitlines()[-1])
-    finally:
-        os.unlink(path)
+def test_prior_mask_color_is_the_same_fixed_colour_for_every_label():
+    """Every prior mask reads the same fixed colour, regardless of its label
+    (2026-09-27 pixel review, defect 2: the old per-label hue was replaced
+    because it was reading as nearly invisible against real coral photos)."""
+    ball_mask = dict(_PRIOR_MASK, label="BALL", name="Ball sponge")
+    result = _run_probe(_draw_style_probe_js([_PRIOR_MASK, ball_mask]))
+    fill_styles = {f["style"] for f in result["fills"]}
+    stroke_styles = {s["style"] for s in result["strokes"]}
+    check(fill_styles == {"#F5EDF0"},
+          "every prior mask fills with the one fixed colour, got %r" % fill_styles)
+    check(stroke_styles == {"rgba(0, 0, 0, 0.7)", "#F5EDF0"},
+          "no label-specific hue appears in any stroke, got %r" % stroke_styles)
 
 
 # ── 3. Never selectable ──────────────────────────────────────────────────────
@@ -363,7 +356,10 @@ def _hover_probe_js():
   const out = {};
 
   updatePriorMaskHover(300, 300, 60, 60);
-  out.overPrior = {visible: tip.classList.contains('visible'), text: tip.textContent};
+  out.overPrior = {
+    visible: tip.classList.contains('visible'), text: tip.textContent,
+    nameIsItalic: !!tip.querySelector('i.sci-name'),
+  };
 
   updatePriorMaskHover(300, 300, 500, 500);
   out.awayFromPrior = tip.classList.contains('visible');
@@ -396,6 +392,8 @@ def test_hovering_a_prior_mask_shows_a_floating_tooltip_naming_it():
     ), "the tooltip text matches the agreed copy exactly, got %r" % over["text"])
     check(over["text"].startswith("Porites astreoides (PA)"),
           "the full species name leads, with the code beside it in parens")
+    check(over["nameIsItalic"],
+          "the species name in the floating tip is in italics (2026-09-27 pixel review)")
     check(not result["awayFromPrior"],
           "the tooltip hides once the pointer leaves the prior mask")
     check(not result["ownMaskWins"],
@@ -536,8 +534,10 @@ def _note_probe_js():
 """ % (screened, _MARK_START, _MARK_END)
 
 
-def test_the_already_screened_note_names_the_label_and_project():
-    """The note reads the full name, the code as a chip, and the source project."""
+def test_the_already_screened_note_names_the_label_project_and_date():
+    """The note reads the full name, the code as a chip, the source project
+    and the date (2026-09-27 pixel review, defect 11); its tooltip names the
+    outcome and who, not just the visible text repeated."""
     result = _run_probe(_note_probe_js())
     hidden = result["hiddenWhenEmpty"]
     check(hidden["collapsed"], "the note collapses to nothing when nothing was screened")
@@ -549,10 +549,15 @@ def test_the_already_screened_note_names_the_label_and_project():
           "the note gives the full name before the code")
     check(shown["hasCodeChip"] and shown["chipText"] == "PA",
           "the code rides as the same .code-chip style a mask-list row uses")
-    check("(AT_PA_750img_26-09-18)" in shown["text"],
-          "the note names the source project in parentheses")
-    check(shown["title"] == shown["text"],
-          "the full text is on the title too, for when it wraps or ellipses")
+    check("in AT_PA_750img_26-09-18" in shown["text"],
+          "the note names the source project, got %r" % shown["text"])
+    check("2026-09-25" in shown["text"],
+          "the note names the date, got %r" % shown["text"])
+    check(shown["title"] ==
+          "AT_PA_750img_26-09-18 placed Porites astreoides here by hand, "
+          "no AI assistance on 2026-09-25",
+          "the tooltip names the outcome and who, not just the visible text, "
+          "got %r" % shown["title"])
     check(hidden["top"] == shown["top"],
           "the canvas never moves whether the note is empty or full "
           "(empty top=%dpx, full top=%dpx)" % (hidden["top"], shown["top"]))

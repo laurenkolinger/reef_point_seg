@@ -732,15 +732,21 @@ def test_header_wrap_and_label_escaping():
     check('min-height: 28px' in rule and 'row-gap: 6px' in rule,
           'a min-height with a wrap row-gap, not a hard height')
     check('.review-topbar #image-filename' in tpl, 'the filename is the only shrinkable cell')
-    # The timer no longer holds the right edge with its own margin-left: auto
-    # (2026-09-27 review: that duplicated .spacer's job and, on a wrapped
-    # line with nothing after the timer but Pause, pushed the two of them
-    # off alone into a wide empty band). .spacer alone does that now; the
-    # timer keeps only a fixed width, so its own box never changes size.
+    # The timer travels to the row's end together with Pause, in one
+    # .timer-pause-group, rather than holding the edge on its own fixed-width
+    # box (2026-09-27 pixel review, defect 4: at 946px the old fixed-width
+    # timer and a separate .spacer left Pause stranded on the far side of a
+    # wrapped line with nothing between them). The group's own margin-left:
+    # auto carries both across on a wrap; the timer itself is width: auto
+    # with a floor, free to grow for a longer reading.
     rule = tpl[tpl.index('#frame-timer {'):]
     rule = rule[:rule.index('}') + 1]
-    check('margin-left: auto' not in rule, 'the timer no longer duplicates .spacer\'s job')
-    check('width: 23ch' in rule, 'the timer box is a fixed width')
+    check('width: auto' in rule and 'min-width: 9ch' in rule,
+          'the timer box is auto width with a floor, not a fixed cap')
+    group_rule = tpl[tpl.index('.timer-pause-group {'):]
+    group_rule = group_rule[:group_rule.index('}') + 1]
+    check('margin-left: auto' in group_rule,
+          'the timer-and-Pause group, not the timer alone, holds the row\'s right edge')
     check('function escHtml(' in tpl, 'escHtml helper present')
     rl = tpl[tpl.index('const renderList = (q) =>'):]
     rl = rl[:rl.index('renderList(\'\');')]

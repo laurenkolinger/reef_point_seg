@@ -157,19 +157,21 @@ def _run_probe(probe_js, width, height=900, **render_kwargs):
 
 # The realistic shortest and longest text each element carries in a session:
 # `#img-counter` from frame 1 of a batch to near its end, and `#frame-timer`
-# from the first frame (no history yet) to deep into a paused, tracked
-# session (mirrors the "this <fmt> [(paused)] . avg <fmt> (n=<count>, target
-# 15s)" template literal `_timerRender` builds in src/templates/index.html;
-# named rather than line-numbered, since both drift as the file changes).
-_EARLY_COUNTER, _EARLY_TIMER = "1 / 120", "this 4.2s · avg -- (n=0, target 15s)"
-_LATE_COUNTER, _LATE_TIMER = (
-    "117 / 120",
-    "this 1m 12s (paused) · avg 1m 3s (n=116, target 15s)",
-)
-# Past #frame-timer's 55ch cap (two-digit minutes, three-digit review count):
-# a rarer, longer session than _LATE_TIMER models, which must ellipsis at the
-# same fixed width rather than growing the bar.
-_EXTREME_TIMER = "this 123m 45s (paused) · avg 12m 34s (n=1234, target 15s)"
+# from the first frame (no history yet) to deep into a paused session
+# (mirrors the "Frame <fmt> [(paused)]" text `_timerRender` builds in
+# src/templates/index.html; the session average, sample count and 15s target
+# moved into the element's title, not its visible text, so they are not part
+# of this string. Named rather than line-numbered, since it drifts as the
+# file changes).
+_EARLY_COUNTER, _EARLY_TIMER = "1 / 120", "Frame 4.2s"
+_LATE_COUNTER, _LATE_TIMER = "117 / 120", "Frame 1m 12s (paused)"
+# A rarer, longer session than _LATE_TIMER models (two-digit minutes): since
+# 2026-09-27 #frame-timer is width: auto (it travels with Pause in one
+# .timer-pause-group that wraps as a unit, see test_the_timer_and_pause_
+# travel_together_without_moving_the_image below), so this is no longer
+# expected to render at the same fixed width as _LATE_TIMER; it still must
+# never move the image.
+_EXTREME_TIMER = "Frame 123m 45s (paused)"
 _STATUS_MESSAGES = [
     "",
     "Adding...",
@@ -328,14 +330,19 @@ def _extreme_timer_probe_js():
   showScreen('review');
   const wrapEl = document.getElementById('canvas-wrap');
   const timerEl = document.getElementById('frame-timer');
+  const pauseEl = document.getElementById('frame-timer-pause');
   const stages = %s;
   const out = [];
   for (const stage of stages) {
     timerEl.textContent = stage.text;
+    const timerBox = timerEl.getBoundingClientRect();
+    const pauseBox = pauseEl.getBoundingClientRect();
     out.push({
       name: stage.name,
       top: Math.round(wrapEl.getBoundingClientRect().top),
-      timerWidth: Math.round(timerEl.getBoundingClientRect().width),
+      timerWidth: Math.round(timerBox.width),
+      timerTop: Math.round(timerBox.top), timerBottom: Math.round(timerBox.bottom),
+      pauseTop: Math.round(pauseBox.top), pauseBottom: Math.round(pauseBox.bottom),
     });
   }
   const pre = document.createElement('pre');
@@ -346,13 +353,15 @@ def _extreme_timer_probe_js():
 """ % (stages, _MARK_START, _MARK_END)
 
 
-def test_the_timer_is_capped_not_just_floored():
-    """#frame-timer has a width and a max-width, not only a min-width.
-
-    A min-width alone stops the bar from shrinking below its floor but lets a
-    rarer, longer timer string keep growing it. `_EXTREME_TIMER` runs past
-    the 55ch cap on purpose; its rendered box must be exactly as wide as
-    `_LATE_TIMER`'s, not wider, and the image must not move either.
+def test_the_timer_and_pause_travel_together_without_moving_the_image():
+    """#frame-timer is width: auto since 2026-09-27 (pixel review, defect 4):
+    it and Pause share one .timer-pause-group with margin-left: auto, so a
+    wrap always carries both across together instead of stranding Pause on
+    its own line. A longer reading is free to widen the timer's own box (this
+    is the deliberate trade against the old fixed-width cap, which kept the
+    box still but let Pause end up far from it); what must still hold is that
+    the timer and Pause stay on the same line as each other, and that neither
+    reading moves the canvas.
     """
     js = _extreme_timer_probe_js()
     for width in _WIDTHS:
@@ -362,9 +371,23 @@ def test_the_timer_is_capped_not_just_floored():
         check(len(tops) == 1,
               "%dpx: the image top is the same at the late and the extreme "
               "timer text, saw %s" % (width, tops))
-        check(by_name["late"]["timerWidth"] == by_name["extreme"]["timerWidth"],
-              "%dpx: the timer's own box is the same width late (%dpx) and "
-              "extreme (%dpx), it does not grow past its cap"
+        for name in ("late", "extreme"):
+            row = by_name[name]
+            # "Same line" means their vertical ranges overlap, not that their
+            # tops match exactly: align-items: center in .timer-pause-group
+            # centers the shorter timer text against the taller Pause button,
+            # so their tops legitimately differ by a few pixels even sharing
+            # one line.
+            same_line = row["timerTop"] < row["pauseBottom"] and row["pauseTop"] < row["timerBottom"]
+            check(same_line,
+                  "%dpx, %s reading: the timer (top=%d, bottom=%d) and Pause "
+                  "(top=%d, bottom=%d) sit on the same line"
+                  % (width, name, row["timerTop"], row["timerBottom"],
+                     row["pauseTop"], row["pauseBottom"]))
+        check(by_name["extreme"]["timerWidth"] >= by_name["late"]["timerWidth"],
+              "%dpx: the timer's own box is free to widen for a longer "
+              "reading (late=%dpx, extreme=%dpx), since the group as a whole "
+              "wraps, not the timer alone"
               % (width, by_name["late"]["timerWidth"],
                  by_name["extreme"]["timerWidth"]))
 
@@ -395,7 +418,7 @@ def _filename_probe_js():
 def test_a_realistic_project_filename_does_not_move_the_image():
     """A project window (session_mode="configure") holds still too.
 
-    #image-filename already shrinks (flex-shrink: 1, min-width: 0) rather
+    #image-filename already shrinks (flex-shrink: 1, min-width: 16ch) rather
     than pushing the row wider; this proves it in project mode, where the
     standalone Import Images button is absent and a real TCRMP clip name
     (`_LONG_FILENAME`) is the thing that grows through a session, going from

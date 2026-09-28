@@ -373,25 +373,33 @@ body::after {
 }
 .topbar-row1 > * { flex-shrink: 0; white-space: nowrap; }
 .review-topbar #image-filename { flex-shrink: 1; min-width: 0; }
-/* The timer shows only the live reading ("this 1m 12s (paused)"); the
+/* The timer shows only the live reading ("Frame 1m 12s (paused)"); the
    session average, the sample count, and the 15s target (already explained
-   by this span's own static title) moved into a dynamic title instead of the
-   always-visible text (_timerRender sets both), so a 22-character slot holds
-   the realistic worst case ("this 123m 45s (paused)") without ellipsis and
-   without the 55-character-wide reservation the row no longer needs. A fixed
-   width (not just a floor) still matters: it stops this element's own box
-   from changing size through a session, which is what kept the row's wrap
-   point identical from the first frame to the last. */
+   by this span's own static title) live in a dynamic title instead of the
+   always-visible text (_timerRender sets both). Width is auto with a floor
+   (2026-09-27 pixel review): the timer and Pause now travel together in
+   .timer-pause-group, whose own margin-left: auto carries both to the row's
+   end and wraps them together at 946px, so the timer's own box no longer has
+   to hold a fixed width to keep Pause from stranding beside it. */
 #frame-timer {
-  width: 23ch; max-width: 23ch;
+  width: auto; min-width: 9ch; white-space: nowrap;
   font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis;
+}
+/* One flex group so the timer and Pause always wrap together (2026-09-27
+   pixel review, defect 4): at 946px they used to end up on the same wrapped
+   line but far apart, the timer pinned left of the row's own .spacer and
+   Pause pinned right of it with nothing between them. */
+.timer-pause-group {
+  display: flex; align-items: center; gap: 8px; margin-left: auto;
 }
 /* Fixed height whether the message is empty or full, so the row never
    appears or disappears as setStatus fires and clears (see setStatus).
    Overflow ellipses only a message that does not fit; setStatus mirrors the
-   full text onto the title attribute for that rarer case. */
+   full text onto the title attribute for that rarer case. Capped at 20px
+   (2026-09-27 pixel review) so the one reserved row never grows past what
+   stops the image moving. */
 .review-topbar #status-text {
-  height: 1.5em; line-height: 1.5em;
+  height: 1.5em; line-height: 1.5em; max-height: 20px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .review-topbar h1 {
@@ -413,7 +421,7 @@ body::after {
    narrower basis here, not just a shrink floor, is most of what lets row 1
    hold one line at 1280px (2026-09-27 review: the row was still wrapping in
    project mode). The full name stays one hover away on the chip's own title. */
-.topbar-row1 .topbar-session { flex-basis: 90px; max-width: 90px; }
+.topbar-row1 .topbar-session { flex-basis: 90px; max-width: 90px; display: inline-flex; align-items: center; }
 /* Keyboard-focusable help glyph: "?" beside a label, carrying its title. */
 .glyph {
   width: 18px; height: 18px; padding: 0; line-height: 1;
@@ -441,7 +449,7 @@ body::after {
 }
 .reviewer-field input {
   width: 52px; padding: 4px 6px;
-  background: var(--surface-light); color: var(--text);
+  background: var(--input-bg); color: var(--text);
   border: 1px solid var(--border); border-radius: var(--radius);
   font-family: 'Space Mono', monospace; font-size: 12px;
   text-transform: uppercase; text-align: center;
@@ -456,10 +464,29 @@ body::after {
   transition: all 0.15s;
 }
 .btn:hover { border-color: var(--pink); color: var(--pink); }
-.btn.primary { background: var(--magenta); border-color: var(--magenta); color: #fff; }
+/* var(--pink) at 2px, offset so the ring never touches the button's own
+   border (2026-09-27 pixel review: the browser default focus ring was the
+   only thing keyboard focus showed). */
+.btn:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
+/* var(--magenta-dark) with var(--text), not the plain --magenta fill with
+   white text (2026-09-27 pixel review): the design document's contrast
+   floor for a filled button reads 5.7:1 against --text and only 4.68:1
+   against white on this exact magenta. */
+.btn.primary { background: var(--magenta-dark); border-color: var(--magenta-dark); color: var(--text); }
 .btn.primary:hover { background: var(--pink); border-color: var(--pink); color: var(--bg); }
-.btn.active { background: var(--surface-light); border-color: var(--success); color: var(--success); }
+/* Magenta, the same colour language as an armed quick-add label
+   (.quickadd-bar .qa-btn.active), not the green .m-status uses for accepted
+   (2026-09-27 pixel review: Refine's green border read as a different,
+   unrelated state). A wash, not a solid fill, since this marks a held mode
+   rather than a momentary chip. */
+.btn.active { background: rgba(226,0,116,0.10); border-color: var(--magenta); color: var(--pink); }
 .spacer { flex: 1; }
+/* Every row-1 control at one height, including the session chip and the
+   initials box, so the row is not a jagged line of different-sized pills
+   (2026-09-27 pixel review). */
+.topbar-row1 .btn, .topbar-row1 .reviewer-field input, .topbar-row1 .topbar-session {
+  height: 30px; box-sizing: border-box;
+}
 .img-counter {
   font-size: 14px; font-weight: 700; color: var(--pink);
   /* 80px already covers "1 / 120" through "117 / 120"; tabular-nums is a
@@ -691,7 +718,7 @@ body::after {
   position: fixed; z-index: 255; display: none; pointer-events: none;
   background: var(--surface-light); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 5px 9px; max-width: 36ch;
-  font-family: 'Inter', sans-serif; font-size: 12px; line-height: 1.5;
+  font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5;
   color: var(--text); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.7);
 }
 #prior-mask-tip.visible { display: block; }
@@ -731,7 +758,7 @@ body::after {
    letting it wrap onto two or three lines never moves the image; :empty
    collapses the row entirely when there is nothing to say. */
 .panel-header .prior-screened-note {
-  order: 4; flex: 0 0 100%; font-size: 12px; line-height: 1.5;
+  order: 4; flex: 0 0 100%; font-size: 13px; line-height: 1.5;
   color: var(--warning); font-family: 'Inter', sans-serif;
 }
 .panel-header .prior-screened-note:empty { display: none; }
@@ -810,8 +837,12 @@ body::after {
   width: 14px; height: 14px; border-radius: var(--radius); border: 1px solid rgba(255,255,255,0.2);
   display: inline-block; flex-shrink: 0;
 }
+/* var(--text-dim), not var(--success) (2026-09-27 pixel review, defect 5):
+   this is the mask's per-frame spreadsheet-style letter (A, B, ... Z, AA,
+   ...), assigned once and never reused on this frame, not a status. Green
+   read as an accepted state next to the amber pending dot in m-status. */
 .mask-list li .m-label {
-  font-weight: 700; width: 22px; color: var(--success); flex-shrink: 0;
+  font-weight: 700; width: 22px; color: var(--text-dim); flex-shrink: 0;
   font-size: 13px; font-family: 'Space Mono', monospace;
 }
 /* The code, riding beside the name as a chip. */
@@ -858,16 +889,19 @@ body::after {
 #kbd-help.visible { display: flex; }
 #kbd-help .kh-card {
   background: var(--surface); border: 1px solid var(--magenta); border-radius: var(--radius-lg);
-  padding: 22px 26px; width: min(1040px, 94vw); max-height: 88vh; overflow-y: auto;
+  padding: 22px 26px; width: min(1040px, 94vw); max-height: 94vh; overflow-y: auto;
   box-shadow: 0 8px 40px rgba(0,0,0,0.8);
 }
 #kbd-help .kh-head {
   display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px;
   border-bottom: 1px solid var(--border); padding-bottom: 10px;
 }
+/* Sentence case (2026-09-27 pixel review): the design document reserves
+   uppercase for the window title, tabs and buttons, and this heading's own
+   text ("Keyboard") is already written in sentence case. */
 #kbd-help .kh-head h2 {
   font-family: 'Syne', sans-serif; color: var(--text); font-size: 22px;
-  text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;
+  letter-spacing: 0.04em; font-weight: 700;
 }
 #kbd-help .kh-head .kh-sub { font-size: 13px; color: var(--text-dim); font-family: 'Space Mono', monospace; }
 #kbd-help .kh-cols { display: grid; grid-template-columns: 1.4fr 1fr; gap: 14px 28px; align-items: start; }
@@ -883,8 +917,10 @@ body::after {
   border: 1px solid rgba(226,0,116,0.4); border-radius: var(--radius);
   padding: 8px 12px 10px; background: rgba(226,0,116,0.06);
 }
+/* Tighter rows (2026-09-27 pixel review): 4px top and bottom padding was
+   most of what pushed the sheet past its card at 1280px and 946px. */
 #kbd-help .kh-row {
-  display: flex; align-items: baseline; gap: 12px; padding: 4px 8px;
+  display: flex; align-items: baseline; gap: 12px; padding: 2px 8px;
   font-size: 13px; line-height: 1.5; font-family: 'Inter', sans-serif;
   border-bottom: 1px solid var(--border-dim);
 }
@@ -893,6 +929,8 @@ body::after {
    carries a key across to what it does. */
 #kbd-help .kh-row:nth-of-type(even) { background: rgba(25, 25, 38, 0.4); }
 #kbd-help .kh-row:hover { background: var(--surface-light); }
+/* 176px, not 148 (2026-09-27 pixel review): "Alt+drag / middle-drag" and
+   "Enter on a rejected row" wrapped onto two lines in the narrower column. */
 #kbd-help .kh-row .kh-keys { flex: 0 0 148px; text-align: right; color: var(--text); }
 #kbd-help .kh-row .kh-desc { color: var(--text-dim); }
 #kbd-help kbd {
@@ -922,13 +960,21 @@ body::after {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
   padding: 28px 36px; max-width: 520px; text-align: center;
 }
+/* Sentence case (2026-09-27 pixel review): the design document reserves
+   uppercase for the window title, tabs and buttons; "End of batch" is
+   already written in sentence case. */
 .overlay-card h2 {
   color: var(--pink); margin-bottom: 14px;
-  font-family: 'Syne', sans-serif; text-transform: uppercase; letter-spacing: 0.03em;
+  font-family: 'Syne', sans-serif; letter-spacing: 0.03em;
   font-size: 18px; font-weight: 600;
 }
 .overlay-card p { font-size: 14px; color: var(--text); margin-bottom: 8px; }
 .overlay-card .btn { margin-top: 12px; }
+/* The still-pending count under the export question (2026-09-27 pixel
+   review, defect 6): warning colour, and :empty collapses it entirely when
+   openExportConfirm finds nothing left pending. */
+.overlay-card p.pending-note { color: var(--warning); font-size: 13px; }
+.overlay-card p.pending-note:empty { display: none; margin: 0; }
 
 /* Category popup */
 #cat-popup {
@@ -937,12 +983,16 @@ body::after {
   padding: 8px 6px; font-size: 12px; pointer-events: auto;
   box-shadow: 0 4px 20px rgba(0,0,0,0.8);
 }
-#cat-popup.visible { display: flex; gap: 3px; flex-wrap: wrap; width: 320px;
+#cat-popup.visible { display: flex; gap: 3px; flex-wrap: wrap; width: 348px;
   max-height: 74vh; overflow-y: auto; }
+/* Even thirds (2026-09-27 pixel review): the five category buttons used to
+   grow to fill their row, three even ones on the first row and two stretched
+   wide on the second. A fixed one-third basis (minus the row's 3px gaps)
+   keeps every button the same width regardless of how many share its row. */
 #cat-popup .cat-btn {
   padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius);
   background: var(--input-bg); color: var(--text); cursor: crosshair;
-  font-size: 12px; flex: 1 1 auto; min-width: 64px; text-align: center;
+  font-size: 12px; flex: 0 0 calc((100% - 6px) / 3); text-align: center;
   white-space: nowrap;
   font-family: 'Space Mono', monospace; transition: all 0.1s;
 }
@@ -1297,7 +1347,6 @@ body::after {
       <span id="image-filename" style="color:var(--success); font-family:'Space Mono',monospace; font-size:13px; margin-left:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex: 3 1 22ch; min-width: 22ch; max-width: 44ch;"></span>
       <span id="custom-import-badge" style="display:none; font-size:12px; color:var(--bg); background:var(--magenta); padding:2px 8px; border-radius:var(--radius); font-family:'Space Mono',monospace; letter-spacing:0; font-weight:700;"
             title="This frame is a custom import: an operator-supplied image, not a pipeline-routed TCRMP frame. It lives in custom_imports/ inside this run and exports through the normal batch export like any other frame.">Custom</span>
-      <span class="spacer"></span>
       {% if session_mode == 'standalone' %}
       <input type="file" id="import-file-input" accept=".jpg,.jpeg,.png" multiple style="display:none"
              title="Choose one or more images (jpg or png) to import into this run."
@@ -1307,21 +1356,28 @@ body::after {
         Import Images
       </button>
       {% endif %}
-      <!-- Empty until _timerStart runs (selectImage, on the first frame): no
-           placeholder glyph, since a bare separator with nothing to separate
-           reads as a rendering defect, not a state. -->
-      <span id="frame-timer"
-            style="font-family:'Space Mono',monospace; font-size:12px; color:var(--text-dim); margin-right:8px"
-            title="This frame: target 15.0s. Average is the rolling mean for this session."></span>
-      <button class="btn" id="frame-timer-pause"
-              onclick="_timerTogglePause()" title="Pause / resume the timer (P)"
-              style="padding:4px 10px;margin-right:8px">Pause</button>
+      <!-- The timer and Pause travel as one group (2026-09-27 pixel review):
+           at 946px they used to sit on the same wrapped line but far apart,
+           the timer pinned left and Pause pinned right by the row's own
+           .spacer sitting between them. The group's own margin-left: auto
+           pushes the PAIR to the right edge together, so a wrap always
+           carries both across at once, adjacent to each other. -->
+      <span class="timer-pause-group">
+        <!-- Empty until _timerStart runs (selectImage, on the first frame):
+             no placeholder glyph, since a bare separator with nothing to
+             separate reads as a rendering defect, not a state. -->
+        <span id="frame-timer"
+              style="font-family:'Space Mono',monospace; font-size:12px; color:var(--text-dim);"
+              title="This frame: target 15.0s. Average is the rolling mean for this session."></span>
+        <button class="btn" id="frame-timer-pause"
+                onclick="_timerTogglePause()" title="Pause / resume the timer (P)">Pause</button>
+      </span>
     </div>
     <span class="status" id="status-text"></span>
   </div>
   <div class="toolbar-bar">
     <span class="tool-group">
-      <span class="tool-label">Opacity:</span>
+      <label class="tool-label" for="opacity-slider">Opacity:</label>
       <input type="range" id="opacity-slider" min="0" max="100" value="50"
              title="Mask fill opacity. Drag, or press O to cycle 30/60/90 percent. Keyboard shortcuts keep working while this slider is focused."
              oninput="setOpacity(this.value)" onchange="this.blur()">
@@ -1341,7 +1397,7 @@ body::after {
             title="Draw mode (D): freehand-edit the selected mask; drag inside to carve, outside to extend. Pick a mask first.">Draw (D)</button>
     <div class="sep"></div>
     <span class="tool-group">
-      <span class="tool-label">Mask size:</span>
+      <label class="tool-label" for="mask-size">Mask size:</label>
       <input type="range" id="mask-size" min="0" max="2" step="1" value="{{ {'tight':0,'medium':1,'generous':2}.get(default_mask_size, 2) }}"
              title="How much of the object SAM3 includes for the next click or box. Generous is best for large colonies; tight for a small piece inside a larger one. Moving it re-runs the selected mask's prompt right away."
              oninput="setMaskSize(this.value)" onchange="this.blur()">
@@ -1380,7 +1436,7 @@ body::after {
         <div class="sp-group">
           <div class="sp-head">Show</div>
           <label class="sp-opt" title="Show only the target-species masks and their cyan reference points; hide non-target masks and non-target reference points. On by default. Untick to show everything (T).">
-            <input type="checkbox" id="chk-target-only" checked onchange="toggleTargetOnly(this.checked)"> Target points only
+            <input type="checkbox" id="chk-target-only" checked onchange="toggleTargetOnly(this.checked)"> Target points only (T)
           </label>
           <label class="sp-opt" title="Show the step 4 points as read-only cyan markers (G). They guide placement and are never segmented, selected, or exported.">
             <input type="checkbox" id="chk-show-reference" {{ 'checked' if reference_default else '' }} onchange="toggleShowReference(this.checked)"> Ref points (G)
@@ -1487,7 +1543,6 @@ body::after {
         <div id="scan-status-box" class="scan-status" title="What the last scan did."></div>
         <ul class="mask-list" id="scan-candidate-list" title="Candidates from the last scan. Click a row to inspect; Enter keeps it, Delete drops it. Nothing is saved until you keep it."></ul>
       </details>
-      <div class="help-hint">Rejected is not final: untick hide rejected, click the row, press <kbd>Enter</kbd></div>
       <div class="help-hint">Press <kbd>K</kbd> for keyboard shortcuts</div>
       <div class="built-by">VEGA, part of VICARIUS. Built by
         <a href="mailto:lauren.olinger@uvi.edu">Lauren Olinger</a>.</div>
@@ -1498,8 +1553,8 @@ body::after {
 <!-- Label popup for new masks. Each target label gets a full-width row so the
      name it resolves to fits beside its code; the four category chips below stay
      short and share their rows. -->
-<div id="cat-popup">
-  <div class="cat-head">Target labels</div>
+<div id="cat-popup" role="dialog" aria-modal="true" aria-labelledby="cat-popup-title">
+  <div class="cat-head" id="cat-popup-title">Target labels</div>
   {% for lbl in target_labels %}
   <div class="cat-btn cat-row" onclick="assignNewMaskSpecies('{{ lbl.code }}')"
        {%- if not lbl.name %} title="The project's label list records no name for the code {{ lbl.code }}, so VEGA shows the code on its own. Add a name for it in the Label Manager to see one here."{% endif %}>
@@ -1525,10 +1580,10 @@ body::after {
 <div id="mode-indicator"></div>
 
 <!-- ════════════ KEYBOARD CHEAT SHEET (K toggles, sticky) ════════════ -->
-<div id="kbd-help">
+<div id="kbd-help" role="dialog" aria-modal="true" aria-labelledby="kbd-help-title">
   <div class="kh-card">
     <div class="kh-head">
-      <h2>Keyboard</h2>
+      <h2 id="kbd-help-title">Keyboard</h2>
       <span class="kh-sub"><kbd>K</kbd> toggles this panel · <kbd>K</kbd> or <kbd>Esc</kbd> to close</span>
     </div>
     <div class="kh-cols">
@@ -1537,7 +1592,9 @@ body::after {
         <h3>Masks: the main flow</h3>
         <div class="kh-row"><span class="kh-keys"><kbd>A</kbd></span><span class="kh-desc">un-armed sticky Add; click to place a new mask, refine, accept; stays in Add</span></div>
         <div class="kh-row"><span class="kh-keys"><kbd>1</kbd>…<kbd>9</kbd></span><span class="kh-desc">tap to arm that species (sticky) + enter Add; tap same number to disarm</span></div>
-        <div class="kh-row"><span class="kh-keys"><kbd>R</kbd></span><span class="kh-desc">{% if review_tagging_enabled %}arm REVIEW; the next mask you place ships out for expert review; tap R again to disarm{% else %}expert-review flagging is temporarily unavailable; R no longer arms REVIEW{% endif %}</span></div>
+        {%- if review_tagging_enabled %}
+        <div class="kh-row"><span class="kh-keys"><kbd>R</kbd></span><span class="kh-desc">arm REVIEW; the next mask you place ships out for expert review; tap R again to disarm</span></div>
+        {%- endif %}
         <div class="kh-row"><span class="kh-keys">cyan mask</span><span class="kh-desc">cyan = model proposal, pending your accept/reject</span></div>
         <div class="kh-row"><span class="kh-keys"><kbd>T</kbd></span><span class="kh-desc">show target points only (toggle)</span></div>
         <div class="kh-row"><span class="kh-keys">click / right-click</span><span class="kh-desc">in Refine: add region / remove region</span></div>
@@ -1560,7 +1617,7 @@ body::after {
         <div class="kh-row"><span class="kh-keys"><kbd>N</kbd></span><span class="kh-desc">next frame (last frame opens the export dialog)</span></div>
         <div class="kh-row"><span class="kh-keys"><kbd>&larr;</kbd></span><span class="kh-desc">previous frame</span></div>
         <div class="kh-row"><span class="kh-keys"><kbd>&rarr;</kbd></span><span class="kh-desc">next frame</span></div>
-        <div class="kh-row"><span class="kh-keys"><kbd>Space</kbd></span><span class="kh-desc">next image (last frame opens the Export dialog)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>Space</kbd></span><span class="kh-desc">next frame (last frame opens the export dialog)</span></div>
         <div class="kh-row"><span class="kh-keys"><kbd>P</kbd></span><span class="kh-desc">pause / resume the frame timer</span></div>
         <div class="kh-row"><span class="kh-keys"><kbd>Ctrl</kbd>+<kbd>S</kbd></span><span class="kh-desc">save this frame now</span></div>
       </div>
@@ -1578,7 +1635,7 @@ body::after {
         <div class="kh-row"><span class="kh-keys"><kbd>Shift</kbd>+drag</span><span class="kh-desc">box redraw of the selected mask (turn Box off first, in Box mode a drag makes a new mask)</span></div>
         <div class="kh-row"><span class="kh-keys">Mask size</span><span class="kh-desc">slider (toolbar): tight / medium / generous for the next click or box</span></div>
         <div class="kh-row"><span class="kh-keys">Gear icon</span><span class="kh-desc">Show (target points, ref points), Find (frames with a mask missing its species) and Tools (merge same ID, reload IDs)</span></div>
-        <div class="kh-row"><span class="kh-keys">Dashed outline</span><span class="kh-desc">a mask another project already screened here; hover it to see which project, who, and when</span></div>
+        <div class="kh-row"><span class="kh-keys">Dashed outline</span><span class="kh-desc">light = another project's screened mask (hover it); yellow = an unkept Find-similar candidate</span></div>
       </div>
 
     </div>
@@ -1587,10 +1644,16 @@ body::after {
 </div>
 
 <!-- End-of-batch confirm overlay (asked before any export) -->
-<div class="overlay" id="export-confirm-overlay">
+<div class="overlay" id="export-confirm-overlay" role="dialog" aria-modal="true" aria-labelledby="export-confirm-title">
   <div class="overlay-card">
-    <h2>End of batch</h2>
+    <h2 id="export-confirm-title">End of batch</h2>
     <p>You're on the last frame of this batch. Export now?</p>
+    <!-- Filled by openExportConfirm from a fresh /api/review_batch read (the
+         images[] array cached at batch load goes stale as soon as a frame is
+         reviewed, so a running total has to be re-read, not summed from
+         memory). Empty and collapsed when every mask in the batch is already
+         accepted or rejected. -->
+    <p id="export-confirm-pending" class="pending-note"></p>
     <div style="display:flex; gap:8px; justify-content:center;">
       <button class="btn primary" onclick="confirmExportYes()" title="Export this batch to YOLO now (Y).">Yes, export (Y)</button>
       <button class="btn" onclick="confirmExportNo()" title="Stay on this frame, don't export yet (N).">No (N)</button>
@@ -2269,6 +2332,10 @@ async function selectImage(idx) {
 
   const [, data] = await Promise.all([savePrev, fetchData]);
   currentData = data;
+  // Learn any names this frame's prior masks carry before anything reads
+  // labelNameFor for this frame, so the note below and the mask list never
+  // show a code bare when the very data that names it already arrived.
+  _learnNamesFromPriorMasks(currentData);
   _updatePriorScreenedNote();
   // The tip names a specific prior polygon at a specific screen position; both
   // are stale the instant the frame changes, so it never survives a switch.
@@ -2756,25 +2823,31 @@ function toggleShowReference(on) {
 // only echo, the same idea as drawReferencePoints: never in currentData.masks,
 // so findMaskAt, the mask list, undo and export never see them.
 
-// A stable colour per LABEL CODE (not per mask.id, since a prior mask's id
-// belongs to another project's numbering and carries no meaning here), so
-// every prior PA outline reads the same hue across the frame and the session.
-function priorMaskColor(label, alpha) {
-  const s = String(label || '');
-  let hue = 0;
-  for (let i = 0; i < s.length; i++) hue = (hue * 31 + s.charCodeAt(i)) % 360;
-  return `hsla(${hue}, 70%, 55%, ${alpha})`;
-}
+// One fixed light colour for every prior mask (2026-09-27 pixel review: a
+// per-label hue picked from the same wheel as the reef itself, at low
+// contrast, was reading as nearly invisible against real coral-reef photos).
+// Distinguishing one prior label from another is what the hover tip and the
+// "Already screened here" note are for; the outline's only job is to read as
+// "something was here" against any background.
+const PRIOR_MASK_COLOR = '#F5EDF0';
+const PRIOR_MASK_FILL_ALPHA = 0.10;
+
+// The prior mask currently under the pointer, or null; drawn with a solid
+// highlight instead of the dashed outline every other prior mask gets. Set by
+// updatePriorMaskHover, cleared by hidePriorMaskTip.
+let _hoveredPriorMask = null;
 
 function drawPriorMasks(ctx) {
   const priors = (currentData && currentData.prior_masks) || [];
   if (!priors.length) return;
   ctx.save();
-  ctx.setLineDash([6 / scale, 4 / scale]);
   for (const pm of priors) {
     const polygons = pm.polygon_px || [];
-    ctx.globalAlpha = maskOpacity * 0.35;
-    ctx.fillStyle = priorMaskColor(pm.label, 1.0);
+    // Fill, always: a faint wash so the shape reads even before the eye
+    // finds the outline.
+    ctx.globalAlpha = PRIOR_MASK_FILL_ALPHA;
+    ctx.fillStyle = PRIOR_MASK_COLOR;
+    ctx.setLineDash([]);
     for (const poly of polygons) {
       if (poly.length < 6) continue;
       ctx.beginPath();
@@ -2783,18 +2856,50 @@ function drawPriorMasks(ctx) {
       ctx.closePath();
       ctx.fill();
     }
-    ctx.globalAlpha = 0.85;
-    ctx.strokeStyle = priorMaskColor(pm.label, 0.85);
-    ctx.lineWidth = 1.5 / scale;
-    for (const poly of polygons) {
-      if (poly.length < 6) continue;
-      ctx.beginPath();
-      ctx.moveTo(poly[0], poly[1]);
-      for (let j = 2; j < poly.length; j += 2) ctx.lineTo(poly[j], poly[j + 1]);
-      ctx.closePath();
-      ctx.stroke();
+    if (pm === _hoveredPriorMask) {
+      // Hovered: one solid, full-opacity line, so the mask the tip is about
+      // to name is unambiguous.
+      ctx.globalAlpha = 1.0;
+      ctx.setLineDash([]);
+      ctx.strokeStyle = PRIOR_MASK_COLOR;
+      ctx.lineWidth = 2 / scale;
+      for (const poly of polygons) {
+        if (poly.length < 6) continue;
+        ctx.beginPath();
+        ctx.moveTo(poly[0], poly[1]);
+        for (let j = 2; j < poly.length; j += 2) ctx.lineTo(poly[j], poly[j + 1]);
+        ctx.closePath();
+        ctx.stroke();
+      }
+    } else {
+      // Not hovered: a dark underlay first, so the dashed line on top reads
+      // against a light reef background as reliably as a dark one, then the
+      // bright dash itself.
+      ctx.globalAlpha = 1.0;
+      ctx.setLineDash([8 / scale, 5 / scale]);
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)';
+      ctx.lineWidth = 3.5 / scale;
+      for (const poly of polygons) {
+        if (poly.length < 6) continue;
+        ctx.beginPath();
+        ctx.moveTo(poly[0], poly[1]);
+        for (let j = 2; j < poly.length; j += 2) ctx.lineTo(poly[j], poly[j + 1]);
+        ctx.closePath();
+        ctx.stroke();
+      }
+      ctx.strokeStyle = PRIOR_MASK_COLOR;
+      ctx.lineWidth = 2 / scale;
+      for (const poly of polygons) {
+        if (poly.length < 6) continue;
+        ctx.beginPath();
+        ctx.moveTo(poly[0], poly[1]);
+        for (let j = 2; j < poly.length; j += 2) ctx.lineTo(poly[j], poly[j + 1]);
+        ctx.closePath();
+        ctx.stroke();
+      }
     }
   }
+  ctx.setLineDash([]);
   ctx.restore();
   ctx.globalAlpha = 1.0;
 }
@@ -2821,21 +2926,44 @@ function _formatDateOnly(isoTimestamp) {
   return String(isoTimestamp || '').slice(0, 10);
 }
 
-// What the floating tooltip says about one prior mask, full name first: e.g.
-// "Porites astreoides (PA): screened in AT_PA_750img_26-09-18 by AT on
-// 2026-09-25".
-function priorMaskTipText(pm) {
+// The pieces of what the floating tooltip and the "Already screened here"
+// note both say about one prior mask: the resolved name (never a bare code
+// when any source anywhere on the page has a name for it), the project, the
+// reviewer (blank when the record carries none), and the date.
+function _priorMaskParts(pm) {
   const code = pm.label || '';
   const name = pm.name || labelNameFor(code, pm.name);
-  const head = name ? `${name} (${code})` : (code || 'unlabeled');
   const project = pm.project_name || pm.project_id || 'another project';
-  const date = _formatDateOnly(pm.at);
-  // A blank reviewer (an older record, or one imported without one) drops
-  // the whole "by X" clause instead of printing a placeholder like "by ?",
-  // which reads as a person, not as missing data.
   const reviewer = String(pm.reviewer || '').trim();
-  const by = reviewer ? ` by ${reviewer}` : '';
-  return `${head}: screened in ${project}${by} on ${date}`;
+  const date = _formatDateOnly(pm.at);
+  return {code, name, project, reviewer, date};
+}
+
+// What the floating tooltip says about one prior mask, full name first, as
+// plain text: e.g. "Porites astreoides (PA): screened in
+// AT_PA_750img_26-09-18 by AT on 2026-09-25". A blank reviewer (an older
+// record, or one imported without one) drops the whole "by X" clause instead
+// of printing a placeholder like "by ?", which reads as a person, not as
+// missing data.
+function priorMaskTipText(pm) {
+  const p = _priorMaskParts(pm);
+  const head = p.name ? `${p.name} (${p.code})` : (p.code || 'unlabeled');
+  const by = p.reviewer ? ` by ${p.reviewer}` : '';
+  return `${head}: screened in ${p.project}${by} on ${p.date}`;
+}
+
+// The same text, but with the species name in italics (2026-09-27 pixel
+// review), for the visible floating tip; the plain version above still
+// serves callers that need bare text.
+function priorMaskTipHtml(pm) {
+  const p = _priorMaskParts(pm);
+  const escName = escHtml(p.name);
+  const nameHtml = p.name
+    ? (isScientificName(p.name) ? `<i class="sci-name">${escName}</i>` : escName)
+    : '';
+  const head = nameHtml ? `${nameHtml} (${escHtml(p.code)})` : (escHtml(p.code) || 'unlabeled');
+  const by = p.reviewer ? ` by ${escHtml(p.reviewer)}` : '';
+  return `${head}: screened in ${escHtml(p.project)}${by} on ${escHtml(p.date)}`;
 }
 
 // Follows the cursor like #loupe; shown only while the pointer sits over a
@@ -2847,31 +2975,60 @@ function updatePriorMaskHover(clientX, clientY, imgX, imgY) {
   if (!currentData || !(currentData.prior_masks || []).length
       || findMaskAt(imgX, imgY) !== -1) {
     tip.classList.remove('visible');
+    if (_hoveredPriorMask) { _hoveredPriorMask = null; render(); }
     return;
   }
   const hit = findPriorMaskAt(imgX, imgY);
-  if (!hit) { tip.classList.remove('visible'); return; }
-  tip.textContent = priorMaskTipText(hit);
-  tip.style.left = (clientX + 14) + 'px';
-  tip.style.top = (clientY + 14) + 'px';
+  if (!hit) {
+    tip.classList.remove('visible');
+    if (_hoveredPriorMask) { _hoveredPriorMask = null; render(); }
+    return;
+  }
+  if (_hoveredPriorMask !== hit) { _hoveredPriorMask = hit; render(); }
+  tip.innerHTML = priorMaskTipHtml(hit);
   tip.classList.add('visible');
+  // Above and to the right of the cursor, not below-right (2026-09-27 pixel
+  // review: the old offset regularly put the tip on top of the very mask,
+  // own or prior, the operator was trying to see). getBoundingClientRect
+  // needs the 'visible' class already applied to measure a real height.
+  const box = tip.getBoundingClientRect();
+  tip.style.left = (clientX + 18) + 'px';
+  tip.style.top = (clientY - box.height - 18) + 'px';
 }
 
 function hidePriorMaskTip() {
   const tip = document.getElementById('prior-mask-tip');
   if (tip) tip.classList.remove('visible');
+  if (_hoveredPriorMask) { _hoveredPriorMask = null; render(); }
+}
+
+// What a prior project's outcome for one label means, folded into a clause
+// that reads naturally after "{project} " (2026-09-27 pixel review, defect
+// 11's tooltip: naming the outcome and who, not just repeating the visible
+// text). Mirrors provenance.py's compute_label_outcomes vocabulary exactly.
+function _screenedOutcomePhrase(outcome, name) {
+  switch (outcome) {
+    case 'found_ai': return `found ${name} here with AI assistance`;
+    case 'found_manual': return `placed ${name} here by hand, no AI assistance`;
+    case 'found_expert': return `confirmed ${name} here with an expert ID`;
+    case 'pending_expert': return `flagged ${name} here for expert review, not yet confirmed`;
+    case 'not_found': return `looked here and did not find ${name}`;
+    default: return `recorded an outcome here for ${name}`;
+  }
 }
 
 // The line under the Masks panel's "x/y accepted, n pending" count: "Already
-// screened here: Porites astreoides PA (AT_PA_750img_26-09-18)" for every
+// screened here: Porites astreoides PA in 18aprilpm_PA, 2026-04-18" for every
 // target label another project already recorded an outcome for on this
-// frame, full name first and the code riding after it as the same chip a
-// mask-list row gives one. Lives in the Masks panel (2026-09-27 review; moved
-// out of the top bar, where a variable-length note could only ever be a
-// clipped one-liner), so wrapping onto more than one line is fine here: the
-// panel is a fixed-width column beside the canvas, never above it, so
-// nothing this element does can move the image. Empty when nothing was
-// screened elsewhere, so it takes no space in the header at all.
+// frame, full name first (in italics for a scientific name) and the code
+// riding after it as the same chip a mask-list row gives one. Lives in the
+// Masks panel (2026-09-27 review; moved out of the top bar, where a
+// variable-length note could only ever be a clipped one-liner), so wrapping
+// onto more than one line is fine here: the panel is a fixed-width column
+// beside the canvas, never above it, so nothing this element does can move
+// the image. Empty when nothing was screened elsewhere, so it takes no space
+// in the header at all. The tooltip names the outcome and who (2026-09-27
+// pixel review, defect 11): it used to just repeat the visible text.
 function _updatePriorScreenedNote() {
   const el = document.getElementById('prior-screened-note');
   if (!el) return;
@@ -2882,17 +3039,21 @@ function _updatePriorScreenedNote() {
     el.title = '';
     return;
   }
-  const parts = codes.map(code => {
+  const parts = [];
+  const tipParts = [];
+  for (const code of codes) {
     const info = screened[code] || {};
     const name = labelNameFor(code, '');
     const nameHtml = name
       ? (isScientificName(name) ? `<i class="sci-name">${escHtml(name)}</i> ` : `${escHtml(name)} `)
       : '';
-    const project = escHtml(info.project_name || info.project_id || 'another project');
-    return `${nameHtml}<span class="code-chip">${escHtml(code)}</span> (${project})`;
-  });
+    const project = info.project_name || info.project_id || 'another project';
+    const date = _formatDateOnly(info.at);
+    parts.push(`${nameHtml}<span class="code-chip">${escHtml(code)}</span> in ${escHtml(project)}, ${escHtml(date)}`);
+    tipParts.push(`${project} ${_screenedOutcomePhrase(info.outcome, name || code)} on ${date}`);
+  }
   el.innerHTML = `Already screened here: ${parts.join(', ')}`;
-  el.title = el.textContent;
+  el.title = tipParts.join('; ');
 }
 
 function render() {
@@ -2961,8 +3122,14 @@ function render() {
       cx /= n; cy /= n;
 
       const labelText = `${m.label} ${m.species || ''}`;
-      const fs = Math.max(10, Math.min(16, 14 / scale));
-      ctx.font = `bold ${fs}px monospace`;
+      // A constant ON-SCREEN size (2026-09-27 pixel review): the old
+      // Math.min(16, 14/scale) clamp capped the CANVAS-unit size, which is
+      // exactly backwards once scale drops below about 0.9 (zoomed out on a
+      // real, several-thousand-pixel-wide frame): the clamp wins, 14/scale's
+      // compensation never applies, and the label renders unreadably small
+      // on screen. 13/scale, uncapped, always renders at 13 screen px.
+      const fs = 13 / scale;
+      ctx.font = `bold ${fs}px 'Space Mono', monospace`;
       ctx.globalAlpha = 1.0;
       ctx.lineWidth = 3 / scale;
       ctx.strokeStyle = 'rgba(0,0,0,0.8)';
@@ -4276,13 +4443,16 @@ function isScientificName(name) {
 
 // The full name a mask code resolves to, or '' when nothing resolves it.
 // Order: the project's label list, then the popup's own category words, then
-// whatever name the mask itself was saved with (never the code repeated).
+// every name this page has learned from any other source (_knownLabelNames,
+// see below), then whatever name the mask itself was saved with (never the
+// code repeated).
 function labelNameFor(code, fallbackName) {
   const c = String(code || '').trim();
   if (!c) return '';
   const hit = TARGET_LABELS.find(l => l.code === c);
   if (hit && hit.name) return hit.name;
   if (CATEGORY_CODE_NAMES[c]) return CATEGORY_CODE_NAMES[c];
+  if (_knownLabelNames[c]) return _knownLabelNames[c];
   const fb = String(fallbackName || '').trim();
   return (fb && fb !== c) ? fb : '';
 }
@@ -4310,6 +4480,58 @@ function labelRowTitle(code, fallbackName) {
 // Target species list from server
 const TARGET_SPECIES = [{% for sp in target_species %}{{ sp|tojson }}{% if not loop.last %}, {% endif %}{% endfor %}];
 const TARGET_LABELS = [{% for lbl in target_labels %}{code:{{ lbl.code|tojson }}, name:{{ lbl.name|tojson }}, category:{{ lbl.category|tojson }}}{% if not loop.last %}, {% endif %}{% endfor %}];
+
+// Every name this page has learned for a code, from any source (2026-09-27
+// pixel review: a real launch can render TARGET_LABELS with every name
+// blank, while a prior mask from another project already carries a real one
+// for the same code). Seeded from TARGET_LABELS; _learnLabelName adds to it
+// as prior masks arrive. labelNameFor reads this after the project's own
+// label list and its category words, so a name learned from one source
+// lights up every other place that code appears: the mask list, the
+// quickadd bar, the screened note, and (via _patchCatPopupNames) the label
+// popup's own rows, which are Jinja-rendered once and never rebuilt.
+const _knownLabelNames = {};
+for (const _lbl of TARGET_LABELS) { if (_lbl.name) _knownLabelNames[_lbl.code] = _lbl.name; }
+
+function _learnLabelName(code, name) {
+  const c = String(code || '').trim();
+  const n = String(name || '').trim();
+  if (!c || !n || _knownLabelNames[c]) return;
+  _knownLabelNames[c] = n;
+  _patchCatPopupNames();
+}
+
+// Fills in a target-label row's name in the label popup once the registry
+// learns one after the row already rendered bare. The popup is built once by
+// Jinja at page load and never rebuilt, so a name learned mid-session (from a
+// prior mask on a later frame) would otherwise never reach it. Never touches
+// a row that already carries its own name span.
+function _patchCatPopupNames() {
+  document.querySelectorAll('#cat-popup .cat-btn.cat-row').forEach(row => {
+    if (row.querySelector('.cat-name')) return;
+    const codeEl = row.querySelector('.cat-code');
+    if (!codeEl) return;
+    const name = _knownLabelNames[codeEl.textContent.trim()];
+    if (!name) return;
+    const span = document.createElement('span');
+    span.className = 'cat-name';
+    span.innerHTML = isScientificName(name)
+      ? `<i class="sci-name">${escHtml(name)}</i>`
+      : escHtml(name);
+    row.insertBefore(span, codeEl);
+    row.removeAttribute('title');
+  });
+}
+
+// Every code and name a frame's prior masks (another project's accepted
+// masks for this project's partly-screened labels) already carry, learned
+// once per frame load so a code TARGET_LABELS could not name still gets one
+// everywhere on the page.
+function _learnNamesFromPriorMasks(data) {
+  for (const pm of (data && data.prior_masks) || []) {
+    _learnLabelName(pm.label, pm.name);
+  }
+}
 
 // Held-number-key state (mirror of step 4). While a number is held, clicks
 // in ADD mode create a new mask with the corresponding target label.
@@ -5419,7 +5641,7 @@ function _timerRender() {
   // in this span's own title) move into a dynamic title instead, read the
   // same way an ellipsised status message or filename already is on this bar.
   el.innerHTML =
-    '<span style="color:var(--text-dim)">this </span>' +
+    '<span style="color:var(--text-dim)">Frame </span>' +
     `<span style="color:${paused ? 'var(--text-dim)' : color};font-weight:700">${nowStr}${paused ? ' (paused)' : ''}</span>`;
   el.title = `This frame: ${nowStr}${paused ? ', paused' : ''}, target ${FRAME_TIMER_TARGET_S.toFixed(1)}s. `
     + `Session average: ${avgStr} over ${_frameTimesSec.length} frame${_frameTimesSec.length === 1 ? '' : 's'}.`;
@@ -5529,8 +5751,33 @@ function setConflictStatus(msg) {
 // EXPORT
 // ══════════════════════════════════════════════
 // ── End-of-batch confirm ("Export now? y/n") ─────────────────────────────────
-function openExportConfirm() {
+// A fresh read, never the images[] array cached at batch load (2026-09-27
+// pixel review, defect 6): that cache is never updated as frames are
+// reviewed, so summing its n_pending would report what was pending when the
+// batch first loaded, not what is left now. advanceToNextFrame() already
+// calls saveCurrentMasks() before openExportConfirm(), so this read sees the
+// just-finished last frame's own masks too. Returns null on a network
+// failure so the dialog omits the line rather than showing a wrong count.
+async function _fetchBatchPendingTotal() {
+  try {
+    const res = await fetch('/api/review_batch');
+    if (!res.ok) return null;
+    const data = await res.json();
+    return (data.images || []).reduce((sum, im) => sum + (im.n_pending || 0), 0);
+  } catch (e) {
+    return null;
+  }
+}
+
+async function openExportConfirm() {
   document.getElementById('export-confirm-overlay').classList.add('visible');
+  const pendingEl = document.getElementById('export-confirm-pending');
+  if (!pendingEl) return;
+  pendingEl.textContent = '';
+  const total = await _fetchBatchPendingTotal();
+  if (total) {
+    pendingEl.textContent = `${total} mask${total === 1 ? '' : 's'} in this batch ${total === 1 ? 'is' : 'are'} still pending.`;
+  }
 }
 
 function confirmExportNo() {

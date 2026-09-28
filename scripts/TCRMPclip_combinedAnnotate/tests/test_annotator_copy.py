@@ -290,6 +290,13 @@ def _name_helpers_js(src=None):
     return "\n".join([
         words,
         category_map,
+        # An empty stand-in, not the real seeded object (2026-09-27 pixel
+        # review added this third name source): labelNameFor only reads it,
+        # never assumes it holds anything, so an always-empty registry here
+        # is a valid "fresh page load, nothing learned yet" state and keeps
+        # this harness independent of TARGET_LABELS's declaration order,
+        # which callers of this helper set on their own.
+        "const _knownLabelNames = {};",
         _extract_function("escHtml", src),
         _extract_function("isScientificName", src),
         _extract_function("labelNameFor", src),
@@ -497,7 +504,7 @@ def test_the_real_route_still_renders():
 def test_label_popup_shows_names_beside_codes():
     """Every popup row carries the name its code resolves to, or says it cannot."""
     page = _render()
-    popup = _block(page, '<div id="cat-popup">', '<div id="mode-indicator">')
+    popup = _block(page, '<div id="cat-popup"', '<div id="mode-indicator">')
     check("Porites astreoides" in popup, "the popup shows the binomial for PA")
     check('<i class="sci-name">Porites astreoides</i>' in popup,
           "a scientific name is set in italic")
@@ -653,7 +660,7 @@ def test_no_control_asks_for_a_key_that_does_nothing():
 def test_the_key_sheet_matches_what_the_page_binds():
     """Every letter the on-screen sheet claims is a key the listener handles."""
     page = _render()
-    sheet = _block(page, '<div id="kbd-help">', '<!-- End-of-batch confirm')
+    sheet = _block(page, '<div id="kbd-help"', '<!-- End-of-batch confirm')
     claimed = {k.upper() for k in re.findall(r"<kbd>([A-Za-z])</kbd>", sheet)}
     bound = _bound_keys()
     check(claimed <= bound,
@@ -662,11 +669,19 @@ def test_the_key_sheet_matches_what_the_page_binds():
     check(SHEET_LETTER_KEYS <= bound,
           "the keys this suite knows about are all bound (missing: %s)"
           % sorted(SHEET_LETTER_KEYS - bound))
-    # The one key the sheet deliberately describes as inert says so.
+    # The R row is dropped from the sheet entirely while locked (2026-09-27
+    # pixel review, defect 18: an inert row describing a key that currently
+    # does nothing was itself a defect, not a fix), and reappears, arming
+    # wording included, once expert-review flagging is back on.
     r_row = [line for line in sheet.splitlines() if "<kbd>R</kbd>" in line]
-    check(len(r_row) == 1, "the sheet has exactly one row for R")
-    check("no longer arms" in r_row[0],
-          "the R row says the key does not arm REVIEW, got %r" % r_row[0][-90:])
+    check(len(r_row) == 0, "the sheet has no row for R while locked, got %r" % r_row)
+    unlocked_sheet = _block(_render(review_tagging_enabled=True),
+                             '<div id="kbd-help"', '<!-- End-of-batch confirm')
+    r_row_unlocked = [line for line in unlocked_sheet.splitlines() if "<kbd>R</kbd>" in line]
+    check(len(r_row_unlocked) == 1, "the sheet has exactly one row for R once unlocked")
+    check("arm REVIEW" in r_row_unlocked[0],
+          "the R row says the key arms REVIEW once unlocked, got %r"
+          % r_row_unlocked[0][-90:])
     # P is the frame timer, not a marker toggle; G is the reference points.
     p_row = [line for line in sheet.splitlines() if "<kbd>P</kbd>" in line]
     check(any("timer" in line for line in p_row), "the P row names the frame timer")
@@ -692,9 +707,11 @@ def test_rejecting_a_mask_never_reads_as_final():
           "and says exactly how to bring one back")
     check("stay rejected and excluded from export" not in page,
           "the old tooltip, which read as final, is gone")
-    check("Rejected is not final" in page,
-          "the Masks panel carries a standing line saying so")
-    sheet = _block(page, '<div id="kbd-help">', '<!-- End-of-batch confirm')
+    check("Rejected is not final" not in page,
+          "the standing help-hint line is gone (2026-09-27 pixel review, "
+          "defect 11): it repeated a fact the hide-rejected tooltip, "
+          "checked above, already states")
+    sheet = _block(page, '<div id="kbd-help"', '<!-- End-of-batch confirm')
     check("on a rejected row" in sheet, "the key sheet has a row for bringing one back")
     check("never deleted" in sheet, "and the reject row says a reject is not a delete")
     src = _template_source()

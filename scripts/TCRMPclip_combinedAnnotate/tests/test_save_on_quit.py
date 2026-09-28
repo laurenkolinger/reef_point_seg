@@ -20,7 +20,7 @@ Run with the unified env python:
 """
 import json
 import os
-import select
+import queue
 import shutil
 import signal
 import subprocess
@@ -274,14 +274,40 @@ while True:
 
 
 def _wait_for_ready(proc, timeout_s=20):
+    """Wait up to timeout_s for the driver process to print "READY".
+
+    Reads proc.stdout on a background thread into a queue, rather than
+    pairing select.select() with the stream's own buffered readline()
+    (2026-09-27, found while diagnosing this test's own new flakiness):
+    a single readline() call can pull several already-flushed lines out of
+    the OS pipe in one internal read, so select() reports the file
+    descriptor not ready on the next pass even though a later line, such as
+    "READY", is already sitting unread in Python's own buffer. /proc/<pid>/
+    status showed the driver process already asleep past its READY print
+    while this test still waited on a select() that would never fire again.
+    A dedicated reader thread draining every line into a queue sidesteps
+    that mismatch entirely: the queue always holds whatever has been read,
+    in order, and a queue.Empty on a timed get() means exactly "no line has
+    arrived yet", not "a line arrived but nothing will tell me".
+    """
+    lines = queue.Queue()
+
+    def _drain():
+        for line in proc.stdout:
+            lines.put(line)
+        lines.put(None)  # stdout closed with no further lines
+
+    reader = threading.Thread(target=_drain, daemon=True)
+    reader.start()
+
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         remaining = max(0.0, deadline - time.time())
-        ready, _, _ = select.select([proc.stdout], [], [], remaining)
-        if not ready:
+        try:
+            line = lines.get(timeout=remaining)
+        except queue.Empty:
             continue
-        line = proc.stdout.readline()
-        if not line:
+        if line is None:
             return False
         if line.strip() == "READY":
             return True

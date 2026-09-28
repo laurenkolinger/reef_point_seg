@@ -296,9 +296,11 @@ def _review_locked_relabel_ids(relabel):
 def _load_target_label_info():
     """Return [{code, name, category}, ...] for each target label.
 
-    Parallels the step 4 helper: prefers master_codes_recoded.csv from the
-    project dir, falls back to scanning the recoded all_points.csv. Always
-    emits one entry per code so the UI has a stable index for 1..N keys.
+    Prefers a project-specific master_codes_recoded.csv or master_codes.csv
+    (the project dir, then its step2_recodeSpecies, then two repo-relative
+    output folders), and falls back to the platform-wide dictionary at
+    cfg.MASTER_CODES_CSV when none of those resolve. Always emits one entry
+    per code so the UI has a stable index for 1..N keys.
     """
     import csv as _csv
     lookup = {}
@@ -316,6 +318,14 @@ def _load_target_label_info():
     for d in candidate_dirs:
         master_candidates.append(os.path.join(d, 'master_codes_recoded.csv'))
         master_candidates.append(os.path.join(d, 'master_codes.csv'))
+    # Last resort: the platform-wide dictionary (cfg.MASTER_CODES_CSV, the same
+    # file _read_master_codes already reads for the standalone label picker).
+    # A project with no step2_recodeSpecies output and no project-root master
+    # codes file was falling through to here with an empty lookup, so every
+    # target label rendered as a bare code with no name anywhere on the page
+    # (2026-09-27 pixel review, found on a real launch).
+    if getattr(cfg, 'MASTER_CODES_CSV', None):
+        master_candidates.append(cfg.MASTER_CODES_CSV)
 
     for mc in master_candidates:
         if not os.path.exists(mc):
