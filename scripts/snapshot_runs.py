@@ -40,6 +40,36 @@ against the wrong directory. A fixed PROTECTED_SNAPSHOT_NAMES set
 this script existed) is never pruned even if it somehow ends up inside
 dest.
 
+Retention has two more guards against quietly losing the last good copy.
+First, a shrink guard: count-based pruning is count-only, so if inprocess
+is ever emptied or reset, a snapshot of the now-empty tree still verifies
+cleanly against itself, and after --keep nights the last snapshot that
+actually held real data would age out. Before pruning, this run's file
+count and byte total are compared to the previous finished snapshot's
+manifest; if either has dropped below SHRINK_GUARD_FRACTION (0.5, half)
+of the previous value, the new snapshot still finishes normally, but
+pruning is skipped for this run and a warning names both counts.
+--allow-shrink prunes anyway. Because each shrunk run still finishes and
+becomes the new comparison base for the next run, this guard catches a
+single large drop but not a slow, multi-night bleed down to zero; that
+tradeoff is what "finish the snapshot" requires. Second, a monthly tier:
+the oldest finished snapshot in each of the most recent
+MONTHLY_TIER_MAX_MONTHS (12) calendar months is kept out of count-based
+pruning entirely, so long-term monthly milestones survive independently
+of the --keep nightly window.
+
+A manifest.json that exists but fails to parse (disk trouble, a hand
+edit) is never allowed to fail a run outright. latest_finished_snapshot
+treats it exactly like a missing manifest when choosing a --link-dest
+base, logging one warning naming the file; the shrink guard's own read of
+it is wrapped the same way as defense in depth. Count-based pruning never
+needed a special case for this: list_finished_snapshots and
+prune_old_snapshots never look inside a manifest at all, so a finished
+snapshot with an unreadable one still counts as a normal, existing copy
+and is never removed while it is the only one left (the existing --keep
+>= 1 floor already covers it); it prunes normally once it stops being
+the only copy.
+
 _models (trained model weights) is excluded by default. Measured at
 build time it was 7.5 GB, as large as every run directory combined, and
 7.2 GB of that was one directory of checkpoints. A trained model can be
@@ -66,6 +96,8 @@ Inputs
                       Purpose above).
 --allow-dest          Allow a --dest whose final folder is not named
                       "daily". Off by default; see Purpose above.
+--allow-shrink        Prune normally even if this run's shrink guard
+                      fired. Off by default; see Purpose above.
 --dry-run             Print what would be copied and pruned; write, move,
                       delete or chmod nothing.
 
@@ -153,6 +185,16 @@ REQUIRED_DEST_BASENAME = "daily"
 # of this script's own, so latest_finished_snapshot() also never chooses
 # it as a --link-dest base (see that function).
 PROTECTED_SNAPSHOT_NAMES = frozenset({"20260926-222311"})
+
+# Shrink guard: a new snapshot whose file count or byte total falls below
+# this fraction of the previous finished snapshot's manifest skips
+# pruning for this run (see check_shrink_guard and the module docstring).
+SHRINK_GUARD_FRACTION = 0.5
+
+# Monthly tier: the oldest finished snapshot in each of this many most
+# recent calendar months is kept out of count-based pruning entirely
+# (see _monthly_tier_protected_names).
+MONTHLY_TIER_MAX_MONTHS = 12
 
 STAMP_FORMAT = "%Y%m%d-%H%M%S"
 STAMP_RE = re.compile(r"^\d{8}-\d{6}$")
@@ -693,40 +735,89 @@ def list_finished_snapshots(dest):
     return sorted(found, key=lambda p: p.name)
 
 
-def latest_finished_snapshot(dest):
-    """The most recent finished snapshot in dest that has its own
-    manifest.json, or None if there is not one yet.
+def latest_finished_snapshot(dest, log=lambda message: None):
+    """The most recent finished snapshot in dest with a manifest.json that
+    is present AND readable as valid JSON, or None if there is not one.
 
-    A finished-looking directory without manifest.json is skipped rather
-    than trusted as a --link-dest base. That covers the one-off snapshot
-    20260926-222311 (made by hand, before this script existed, so it has
-    no manifest.json of this script's own) and, defensively, a directory
-    left behind by a crash between write_manifest and the rename in some
-    future version of this script. rsync's --link-dest quick check trusts
-    whatever files it finds there; a directory this script did not fully
-    finish writing should never be that trusted.
+    A finished-looking directory without a usable manifest.json is
+    skipped rather than trusted as a --link-dest base. Two cases look
+    alike here but are treated differently for logging: a MISSING
+    manifest.json is common and unremarkable (the one-off snapshot
+    20260926-222311, made by hand before this script existed; or,
+    defensively, a directory left behind by a crash between
+    write_manifest and the rename in some future version of this script)
+    and is skipped silently. A manifest.json that EXISTS but fails to
+    parse (corrupted by disk trouble, or edited by hand) is unusual and
+    worth a human's attention, so it is skipped with exactly one warning
+    naming the file. Either way, rsync's --link-dest quick check trusts
+    whatever files it finds in the chosen directory; one this script
+    cannot even confirm it finished writing correctly should never be
+    that trusted.
 
     Parameters:
         dest: The snapshot destination directory.
+        log: A callable taking one string, for the corrupt-manifest
+             warning described above. Defaults to a no-op so callers that
+             do not care about logging (most tests) need not pass one.
 
     Returns:
-        A Path, or None if dest holds no finished, manifested snapshot
-        yet (including the very first run).
+        A Path, or None if dest holds no finished snapshot with a usable
+        manifest yet (including the very first run, or every finished
+        snapshot present having a missing or corrupt one).
     """
     for candidate in reversed(list_finished_snapshots(dest)):
-        if (candidate / MANIFEST_FILENAME).is_file():
-            return candidate
+        manifest_path = candidate / MANIFEST_FILENAME
+        if not manifest_path.is_file():
+            continue
+        try:
+            json.loads(manifest_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            log(f"  WARNING: skipping {candidate} as a link-dest base; its manifest.json "
+                f"at {manifest_path} is unreadable or corrupt ({exc}); treating it as absent")
+            continue
+        return candidate
     return None
 
 
+def _monthly_tier_protected_names(finished):
+    """The name of the oldest finished snapshot in each of the most
+    recent MONTHLY_TIER_MAX_MONTHS calendar months present in `finished`.
+
+    A calendar month is read straight off the stamp (the first six
+    characters of YYYYMMDD-HHMMSS, e.g. "202609"), so this is the
+    snapshot's own Atlantic Standard Time month, not a filesystem
+    timestamp. Keeping one milestone per recent month, independent of
+    --keep, means a long enough gap in the nightly rolling window still
+    leaves a trail of monthly copies rather than nothing older than
+    --keep nights.
+
+    Parameters:
+        finished: Finished snapshots (Path objects), any order.
+
+    Returns:
+        A set of snapshot name strings (YYYYMMDD-HHMMSS stamps), one per
+        month, for at most the MONTHLY_TIER_MAX_MONTHS most recent
+        distinct months present. Empty if `finished` is empty.
+    """
+    oldest_by_month = {}
+    for snapshot in finished:
+        month = snapshot.name[:6]
+        if month not in oldest_by_month or snapshot.name < oldest_by_month[month]:
+            oldest_by_month[month] = snapshot.name
+    most_recent_months = sorted(oldest_by_month, reverse=True)[:MONTHLY_TIER_MAX_MONTHS]
+    return {oldest_by_month[month] for month in most_recent_months}
+
+
 def prune_old_snapshots(dest, keep):
-    """Delete the oldest finished snapshots beyond the newest `keep`.
+    """Delete the oldest finished snapshots beyond the newest `keep`,
+    excusing two kinds of snapshot from count-based pruning entirely.
 
     Parameters:
         dest: The snapshot destination directory.
-        keep: How many of the newest finished snapshots to retain. Must
-              be at least 1: a --keep of 0 would delete every snapshot on
-              its own next run, which nightly retention never means.
+        keep: How many of the newest, non-excused finished snapshots to
+              retain. Must be at least 1: a --keep of 0 would delete
+              every snapshot on its own next run, which nightly retention
+              never means.
 
     Returns:
         The list of removed Path objects, oldest first (possibly empty).
@@ -736,19 +827,23 @@ def prune_old_snapshots(dest, keep):
         should list_finished_snapshots ever be bypassed) a removal
         candidate is a symlink, sits outside dest, its name does not
         match the stamp pattern, or its name is in
-        PROTECTED_SNAPSHOT_NAMES.
+        PROTECTED_SNAPSHOT_NAMES or the monthly tier (see
+        _monthly_tier_protected_names).
     """
     if keep < 1:
         raise SnapshotError(f"--keep must be at least 1, got {keep}")
-    # A name in PROTECTED_SNAPSHOT_NAMES never counts toward `keep` and is
-    # never a removal candidate: it is invisible to this rotation entirely.
-    finished = [p for p in list_finished_snapshots(dest) if p.name not in PROTECTED_SNAPSHOT_NAMES]
+    all_finished = list_finished_snapshots(dest)
+    # A name in PROTECTED_SNAPSHOT_NAMES or the monthly tier never counts
+    # toward `keep` and is never a removal candidate: both are invisible
+    # to this rotation entirely, computed from the full, unfiltered list.
+    excused = PROTECTED_SNAPSHOT_NAMES | _monthly_tier_protected_names(all_finished)
+    finished = [p for p in all_finished if p.name not in excused]
     if len(finished) <= keep:
         return []
     to_remove = finished[: len(finished) - keep]
     removed = []
     for candidate in to_remove:
-        if candidate.name in PROTECTED_SNAPSHOT_NAMES:
+        if candidate.name in excused:
             raise SnapshotError(f"refusing to prune a protected snapshot name: {candidate}")
         if candidate.is_symlink():
             raise SnapshotError(f"refusing to prune a symlink: {candidate}")
@@ -791,7 +886,7 @@ def _tree_size_bytes(root):
 
 
 def write_manifest(snapshot_dir, stamp, created_at, source, paths, include_models,
-                    link_dest, counts, verified_files):
+                    link_dest, counts, verified_files, total_bytes):
     """Write manifest.json describing one snapshot.
 
     Called on the .partial directory BEFORE it is renamed to its final
@@ -814,6 +909,10 @@ def write_manifest(snapshot_dir, stamp, created_at, source, paths, include_model
                    None for the first-ever snapshot.
         counts: The per-directory file-count dict from verify_counts.
         verified_files: The relative paths whose sha256 was checked.
+        total_bytes: This snapshot's total size, from _tree_size_bytes.
+                     Passed in (rather than computed here) so the caller
+                     can reuse the same number for the shrink guard
+                     without walking the whole tree twice.
     """
     manifest = {
         "stamp": stamp,
@@ -823,10 +922,75 @@ def write_manifest(snapshot_dir, stamp, created_at, source, paths, include_model
         "include_models": include_models,
         "link_dest": link_dest.name if link_dest else None,
         "file_counts": counts,
-        "total_bytes": _tree_size_bytes(snapshot_dir),
+        "total_bytes": total_bytes,
         "verified_files": verified_files,
     }
     (snapshot_dir / MANIFEST_FILENAME).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+
+
+def _read_manifest(snapshot_dir):
+    """Read and parse a finished snapshot's manifest.json.
+
+    Parameters:
+        snapshot_dir: A finished snapshot directory. latest_finished_snapshot
+                      never returns a candidate without a manifest.json, so
+                      callers that got snapshot_dir from there can expect
+                      this to succeed.
+
+    Returns:
+        The parsed manifest dict.
+
+    Raises:
+        SnapshotError: if manifest.json is missing, unreadable, or not
+        valid JSON.
+    """
+    manifest_path = snapshot_dir / MANIFEST_FILENAME
+    try:
+        return json.loads(manifest_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SnapshotError(f"could not read manifest at {manifest_path}: {exc}") from exc
+
+
+def check_shrink_guard(new_file_count, new_total_bytes, previous_manifest):
+    """Compare a new snapshot's size against the previous finished
+    snapshot's manifest, to catch inprocess having been emptied or reset.
+
+    Count-based retention (prune_old_snapshots) only looks at how many
+    snapshots exist, never at what is inside them, so a snapshot of an
+    emptied inprocess/ verifies just as cleanly as a full one and would
+    otherwise, after --keep nights, push out the last snapshot that held
+    real data.
+
+    Parameters:
+        new_file_count: This run's total file count (summed across every
+                        copied directory).
+        new_total_bytes: This run's total size in bytes.
+        previous_manifest: The previous finished snapshot's parsed
+                            manifest.json (from _read_manifest), or None
+                            if this is the first-ever snapshot.
+
+    Returns:
+        A (shrunk, message) tuple. shrunk is False (message None) when
+        there is no previous manifest to compare against, or when neither
+        the file count nor the byte total fell below SHRINK_GUARD_FRACTION
+        of the previous snapshot's own count and total. Otherwise shrunk
+        is True and message names all four numbers.
+    """
+    if previous_manifest is None:
+        return False, None
+    previous_file_count = sum(c["dest"] for c in previous_manifest["file_counts"].values())
+    previous_total_bytes = previous_manifest.get("total_bytes", 0)
+    count_shrunk = previous_file_count > 0 and new_file_count < SHRINK_GUARD_FRACTION * previous_file_count
+    bytes_shrunk = previous_total_bytes > 0 and new_total_bytes < SHRINK_GUARD_FRACTION * previous_total_bytes
+    if not (count_shrunk or bytes_shrunk):
+        return False, None
+    message = (
+        f"shrink guard: new snapshot has {new_file_count} file(s) and "
+        f"{new_total_bytes} byte(s); previous finished snapshot had "
+        f"{previous_file_count} file(s) and {previous_total_bytes} byte(s) "
+        f"(below {SHRINK_GUARD_FRACTION:.0%} of the previous)"
+    )
+    return True, message
 
 
 # --------------------------------------------------------------------------
@@ -883,9 +1047,10 @@ def _verify_with_retries(paths, partial, prev, log, verify_retry_wait_seconds):
 
 
 def take_snapshot(source, dest, keep=DEFAULT_KEEP, include_models=False, dry_run=False,
-                   verify_retry_wait_seconds=VERIFY_RETRY_WAIT_SECONDS, log=print):
+                   verify_retry_wait_seconds=VERIFY_RETRY_WAIT_SECONDS, allow_shrink=False,
+                   log=print):
     """Run one full snapshot cycle: discover, lock, copy, verify (with
-    bounded retry), finish, prune.
+    bounded retry), finish, prune (unless the shrink guard fires).
 
     Parameters:
         source: The inprocess/ root to copy from. Read-only to this
@@ -902,6 +1067,11 @@ def take_snapshot(source, dest, keep=DEFAULT_KEEP, include_models=False, dry_run
                                    VERIFY_RETRY_WAIT_SECONDS (60); tests
                                    pass 0 so a forced mismatch does not
                                    really sleep.
+        allow_shrink: Prune normally even if check_shrink_guard finds this
+                      run's file count or byte total below
+                      SHRINK_GUARD_FRACTION of the previous finished
+                      snapshot's. Off by default: pruning is skipped for
+                      this run instead, and a warning is logged.
         log: A callable taking one string, for the "Step N complete"
              progress checkpoints. Defaults to print.
 
@@ -925,7 +1095,7 @@ def take_snapshot(source, dest, keep=DEFAULT_KEEP, include_models=False, dry_run
     log(f"Step 1 complete: source validated, {len(paths)} top-level path(s) to copy from {source}")
 
     if dry_run:
-        prev = latest_finished_snapshot(dest)
+        prev = latest_finished_snapshot(dest, log=log)
         finished = list_finished_snapshots(dest)
         would_prune = finished[: max(0, len(finished) - keep)]
         log("DRY RUN: nothing was copied, deleted or chmod'd.")
@@ -944,7 +1114,7 @@ def take_snapshot(source, dest, keep=DEFAULT_KEEP, include_models=False, dry_run
         if stale:
             log(f"  swept {len(stale)} stale .partial dir(s) left by a crashed earlier run")
 
-        prev = latest_finished_snapshot(dest)
+        prev = latest_finished_snapshot(dest, log=log)
         moment = _now_ast()
         stamp = moment.strftime(STAMP_FORMAT)
         partial = dest / f"{stamp}{PARTIAL_SUFFIX}"
@@ -958,19 +1128,46 @@ def take_snapshot(source, dest, keep=DEFAULT_KEEP, include_models=False, dry_run
             paths, partial, prev, log, verify_retry_wait_seconds
         )
         total_files = sum(c["dest"] for c in counts.values())
+        total_bytes = _tree_size_bytes(partial)
         log(f"Step 4 complete: verified {total_files} file(s) by count, "
             f"{len(verified_files)} by content (attempt {attempts_used}/{VERIFY_MAX_ATTEMPTS})")
+
+        # Shrink guard, computed against the previous finished snapshot's
+        # manifest BEFORE this run's own manifest overwrites nothing (each
+        # snapshot has its own file): see check_shrink_guard's docstring.
+        # latest_finished_snapshot already skips a prev whose manifest is
+        # missing or corrupt, so this read should always succeed; the
+        # try/except is defense in depth (for example a race that
+        # corrupts the file between that check and this read) so a
+        # metadata problem on the PREVIOUS snapshot can never fail
+        # tonight's run outright.
+        previous_manifest = None
+        if prev is not None:
+            try:
+                previous_manifest = _read_manifest(prev)
+            except SnapshotError as exc:
+                log(f"  WARNING: could not read the previous snapshot's manifest at "
+                    f"{prev / MANIFEST_FILENAME}; treating it as absent for the shrink "
+                    f"guard ({exc})")
+        shrunk, shrink_message = check_shrink_guard(total_files, total_bytes, previous_manifest)
 
         # Manifest written into the .partial BEFORE the rename: see
         # write_manifest's own docstring for why this order matters.
         write_manifest(partial, stamp, moment, source, paths, include_models, prev,
-                        counts, verified_files)
+                        counts, verified_files, total_bytes)
         final_dir = dest / stamp
         partial.rename(final_dir)
         _chmod_tree_read_only(final_dir)
         log(f"Step 5 complete: {final_dir} finished, manifested and made read-only")
 
-        pruned = prune_old_snapshots(dest, keep)
+        if shrunk and not allow_shrink:
+            log(f"  WARNING: {shrink_message}; skipping retention pruning this run "
+                "(pass --allow-shrink to override)")
+            pruned = []
+        else:
+            if shrunk:
+                log(f"  WARNING: {shrink_message}; pruning anyway (--allow-shrink)")
+            pruned = prune_old_snapshots(dest, keep)
         log(f"Step 6 complete: retention kept {len(list_finished_snapshots(dest))}, "
             f"pruned {len(pruned)}")
 
@@ -1005,6 +1202,10 @@ def parse_args(argv=None):
     parser.add_argument("--allow-dest", action="store_true",
                          help=f"Allow a --dest whose final folder is not named "
                               f"'{REQUIRED_DEST_BASENAME}'. Off by default.")
+    parser.add_argument("--allow-shrink", action="store_true",
+                         help="Prune normally even if this run's file count or byte "
+                              f"total is below {SHRINK_GUARD_FRACTION:.0%} of the "
+                              "previous finished snapshot's. Off by default.")
     parser.add_argument("--dry-run", action="store_true",
                          help="Print what would be copied and pruned; write nothing.")
     return parser.parse_args(argv)
@@ -1028,6 +1229,7 @@ def main(argv=None):
             keep=args.keep,
             include_models=args.include_models,
             dry_run=args.dry_run,
+            allow_shrink=args.allow_shrink,
         )
     except SnapshotError as exc:
         print(f"snapshot_runs.py: {exc}", file=sys.stderr)

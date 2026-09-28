@@ -24,6 +24,7 @@ Covers:
 Exits nonzero on any failed assertion.
 """
 
+import atexit
 import json
 import os
 import shutil
@@ -36,7 +37,10 @@ _SCRIPTS = os.path.abspath(os.path.join(_HERE, "..", ".."))
 if _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
 
-_SCRATCH = "/tmp/claude-1000/-mnt-rip-vicarius-drive/ab8997e1-410f-4a89-a1a3-8a15baff3ddb/scratchpad"
+# A private temp root per run, removed at exit; the old hard-coded session
+# scratchpad path no longer exists, so every run failed before any check.
+_SCRATCH = tempfile.mkdtemp(prefix="cellinfo_cache_run_")
+atexit.register(shutil.rmtree, _SCRATCH, True)
 _TMP_REG = tempfile.mkdtemp(prefix="cellinfo_cache_reg_", dir=_SCRATCH)
 _TMP_CLIP = tempfile.mkdtemp(prefix="cellinfo_cache_clip_", dir=_SCRATCH)
 os.environ["TCRMP_MASK_REGISTRY_DIR"] = _TMP_REG

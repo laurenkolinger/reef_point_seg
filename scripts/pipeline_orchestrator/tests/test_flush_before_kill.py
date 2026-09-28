@@ -81,6 +81,33 @@ subprocess.Popen = _blocked_popen
 import app as appmod
 import project_manager as pm
 
+# Test isolation (2026-09-28 review): this file exercises the real
+# _flush_annotator against a stubbed urlopen in most tests, so it must
+# never actually stub appmod._flush_annotator wholesale (that would defeat
+# the tests that verify its own body-parsing logic). Instead, socket.socket
+# is guarded here so ANY code path in this file that still tries to open a
+# real socket to the orchestrator (5050) or the annotator port range
+# (5080-5089), including the _kill_all_annotators/stop-path tests below
+# whose own per-test stubs might be missed, fails loudly instead of making
+# a live network call.
+import socket as _socket
+_REAL_SOCKET = _socket.socket
+_GUARDED_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0"}
+_GUARDED_PORTS = {5050} | set(range(5080, 5090))
+
+
+class _NoLivePortSocket(_REAL_SOCKET):
+    def connect(self, address, *a, **k):
+        if (isinstance(address, tuple) and len(address) >= 2
+                and address[0] in _GUARDED_HOSTS and address[1] in _GUARDED_PORTS):
+            raise AssertionError(
+                f"test tried to open a real socket to {address[0]}:{address[1]} "
+                f"(guarded: 5050, 5080-5089); stub the code path that reached this")
+        return super().connect(address, *a, **k)
+
+
+_socket.socket = _NoLivePortSocket
+
 # _live_annotator_port only flushes a tracked port when runner.is_running(key)
 # confirms that key's process is still alive (the alive-check review fix,
 # 2026-09-27). Every fixture below defaults the real runner to "always alive"
@@ -161,21 +188,30 @@ def test_flush_annotator_no_port_fails_closed_without_network():
     check(ok2 is False, f"a falsy port must fail closed too, got {(ok2, reason2)}")
 
 
-def test_flush_annotator_success_posts_to_api_flush_with_named_timeout():
-    class _FakeResp:
-        status = 200
+def _fake_resp(status, body_bytes=b""):
+    """A minimal urlopen() context-manager double: `status` and a fixed
+    `read()` payload, nothing else. Every _flush_annotator test below builds
+    one of these instead of a real HTTP response."""
+    class _R:
+        def __init__(self):
+            self.status = status
+        def read(self):
+            return body_bytes
         def __enter__(self):
             return self
         def __exit__(self, *a):
             return False
+    return _R()
 
+
+def test_flush_annotator_success_posts_to_api_flush_with_named_timeout():
     seen = {}
 
     def _fake_urlopen(req, timeout=None):
         seen["url"] = req.full_url
         seen["method"] = req.get_method()
         seen["timeout"] = timeout
-        return _FakeResp()
+        return _fake_resp(200, b'{"ok": true}')
 
     orig_urlopen = appmod.urlopen
     appmod.urlopen = _fake_urlopen
@@ -192,18 +228,154 @@ def test_flush_annotator_success_posts_to_api_flush_with_named_timeout():
 
 
 def test_flush_annotator_reports_non_2xx_status():
-    class _FakeResp:
-        status = 500
-        def __enter__(self):
-            return self
-        def __exit__(self, *a):
-            return False
-
     orig_urlopen = appmod.urlopen
-    appmod.urlopen = lambda req, timeout=None: _FakeResp()
+    appmod.urlopen = lambda req, timeout=None: _fake_resp(500, b'{"ok": false}')
     try:
         ok, reason = appmod._flush_annotator(5080)
         check(ok is False and reason == "HTTP 500", f"expected (False, 'HTTP 500'), got {(ok, reason)}")
+    finally:
+        appmod.urlopen = orig_urlopen
+
+
+# ── /api/flush's JSON body: a 2xx alone is not a clean save ─────────────────
+# The annotator's own force_flush() (TCRMPclip_combinedAnnotate/src/app.py)
+# answers 200 with {ok, conflict, conflict_file} or {status: "merged", ...};
+# _flush_annotator must read that body, not just the HTTP status.
+
+def test_flush_annotator_plain_ok_true_is_success_with_no_note():
+    logged = []
+    orig_urlopen = appmod.urlopen
+    orig_note = appmod.vic.note
+    appmod.urlopen = lambda req, timeout=None: _fake_resp(200, b'{"ok": true}')
+    appmod.vic.note = lambda msg, study=None: logged.append(msg)
+    try:
+        ok, reason = appmod._flush_annotator(5080)
+        check(ok is True and reason is None, f"expected success, got {(ok, reason)}")
+        check(logged == [], f"a plain ok:true body must not be logged, got {logged}")
+    finally:
+        appmod.urlopen = orig_urlopen
+        appmod.vic.note = orig_note
+
+
+def test_flush_annotator_conflict_blocks_the_save_and_names_the_file():
+    logged = []
+    orig_urlopen = appmod.urlopen
+    orig_note = appmod.vic.note
+    body = b'{"ok": false, "conflict": true, "conflict_file": "segmentations.conflict-20260928-101500.json"}'
+    appmod.urlopen = lambda req, timeout=None: _fake_resp(200, body)
+    appmod.vic.note = lambda msg, study=None: logged.append(msg)
+    try:
+        ok, reason = appmod._flush_annotator(5080)
+        check(ok is False, f"an unresolved conflict must never read as saved, got {(ok, reason)}")
+        check("segmentations.conflict-20260928-101500.json" in reason,
+              f"the reason should name the conflict file: {reason}")
+        check(any("segmentations.conflict-20260928-101500.json" in m for m in logged),
+              f"the conflict file must be logged via vic.note: {logged}")
+    finally:
+        appmod.urlopen = orig_urlopen
+        appmod.vic.note = orig_note
+
+
+def test_flush_annotator_conflict_with_ok_true_names_both_sides_count():
+    """The real shape from _flush_result_fields (TCRMPclip_combinedAnnotate/
+    src/app.py): a save that also hit a frame edited both here and on disk
+    answers ok:true (the edit is never thrown away) plus conflict_file and
+    both_sides. ok:true wins the return value, but both_sides is still
+    logged so the count is on record."""
+    logged = []
+    orig_urlopen = appmod.urlopen
+    orig_note = appmod.vic.note
+    body = (b'{"ok": true, "conflict": true, '
+            b'"conflict_file": "segmentations.conflict-x.json", "both_sides": 2}')
+    appmod.urlopen = lambda req, timeout=None: _fake_resp(200, body)
+    appmod.vic.note = lambda msg, study=None: logged.append(msg)
+    try:
+        ok, reason = appmod._flush_annotator(5080)
+        check(ok is True and reason is None, f"ok:true must still read as saved, got {(ok, reason)}")
+        check(any("segmentations.conflict-x.json" in m for m in logged),
+              f"the conflict file must still be logged even though ok=true: {logged}")
+        check(any("2" in m for m in logged),
+              f"the both_sides count must be logged: {logged}")
+    finally:
+        appmod.urlopen = orig_urlopen
+        appmod.vic.note = orig_note
+
+
+def test_flush_annotator_conflict_with_no_ok_field_fails_closed():
+    """A hypothetical body that reports a conflict with no "ok" key at all
+    must never default to success."""
+    logged = []
+    orig_urlopen = appmod.urlopen
+    orig_note = appmod.vic.note
+    appmod.urlopen = lambda req, timeout=None: _fake_resp(200, b'{"conflict": true}')
+    appmod.vic.note = lambda msg, study=None: logged.append(msg)
+    try:
+        ok, reason = appmod._flush_annotator(5080)
+        check(ok is False, f"an unresolved conflict with no ok field must fail closed, got {(ok, reason)}")
+        check(bool(logged), "the conflict must still be logged even with no conflict_file")
+    finally:
+        appmod.urlopen = orig_urlopen
+        appmod.vic.note = orig_note
+
+
+def test_flush_annotator_merged_true_logs_taken_from_disk_and_succeeds():
+    """The real shape from _flush_result_fields: a save that pulled in
+    frame(s) changed only on disk answers {ok:true, merged:true,
+    taken_from_disk:N}, not a "status" key."""
+    logged = []
+    orig_urlopen = appmod.urlopen
+    orig_note = appmod.vic.note
+    body = b'{"ok": true, "merged": true, "taken_from_disk": 3}'
+    appmod.urlopen = lambda req, timeout=None: _fake_resp(200, body)
+    appmod.vic.note = lambda msg, study=None: logged.append(msg)
+    try:
+        ok, reason = appmod._flush_annotator(5080)
+        check(ok is True and reason is None, f"a merge is a success, got {(ok, reason)}")
+        check(any("taken_from_disk" in m and "3" in m for m in logged),
+              f"the taken_from_disk count must be logged: {logged}")
+    finally:
+        appmod.urlopen = orig_urlopen
+        appmod.vic.note = orig_note
+
+
+def test_flush_annotator_legacy_status_merged_still_recognized():
+    """An older annotator process (or a future rollback) can still answer
+    the legacy {status: "merged"} shape instead of merged:true; it must
+    still read as a successful save."""
+    logged = []
+    orig_urlopen = appmod.urlopen
+    orig_note = appmod.vic.note
+    appmod.urlopen = lambda req, timeout=None: _fake_resp(200, b'{"status": "merged"}')
+    appmod.vic.note = lambda msg, study=None: logged.append(msg)
+    try:
+        ok, reason = appmod._flush_annotator(5080)
+        check(ok is True and reason is None, f"the legacy shape is still a success, got {(ok, reason)}")
+        check(any("merged" in m for m in logged), f"the legacy merge must still be logged: {logged}")
+    finally:
+        appmod.urlopen = orig_urlopen
+        appmod.vic.note = orig_note
+
+
+def test_flush_annotator_non_json_2xx_body_still_counts_as_saved():
+    for body in (b"", b"not json at all", b"<html>ok</html>"):
+        orig_urlopen = appmod.urlopen
+        appmod.urlopen = lambda req, timeout=None, _b=body: _fake_resp(200, _b)
+        try:
+            ok, reason = appmod._flush_annotator(5080)
+            check(ok is True and reason is None,
+                  f"a non-JSON 2xx body ({body!r}) must still count as saved, got {(ok, reason)}")
+        finally:
+            appmod.urlopen = orig_urlopen
+
+
+def test_flush_annotator_json_array_body_still_counts_as_saved():
+    """Valid JSON that is not the {ok, conflict, ...} object shape (e.g. a
+    bare list) is treated the same as a non-JSON body: still saved."""
+    orig_urlopen = appmod.urlopen
+    appmod.urlopen = lambda req, timeout=None: _fake_resp(200, b'[1, 2, 3]')
+    try:
+        ok, reason = appmod._flush_annotator(5080)
+        check(ok is True and reason is None, f"expected success, got {(ok, reason)}")
     finally:
         appmod.urlopen = orig_urlopen
 
@@ -929,8 +1101,8 @@ def test_restart_script_is_valid_bash_and_flushes_before_every_kill():
     text = _read_script("restart_reef_point_seg.sh")
     check(ANNOTATOR_FLUSH_PORTS_LITERAL in text,
           "expected the full 5080-5089 + 5096 flush port list")
-    check("curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST \"http://127.0.0.1:${fp}/api/flush\""
-          in text, "expected a best-effort POST /api/flush per candidate port")
+    check("curl -s -m 5 -w '\\n%{http_code}' -X POST \"http://127.0.0.1:${_fp}/api/flush\""
+          in text, "expected a best-effort POST /api/flush that also captures the body")
 
     lines = text.splitlines()
     flush_idx = _first_line_with(lines, "ANNOTATOR_FLUSH_PORTS=")
@@ -958,8 +1130,8 @@ def test_run_pipeline_script_is_valid_bash_and_flushes_before_every_kill():
     text = _read_script("run_pipeline.sh")
     check(ANNOTATOR_FLUSH_PORTS_LITERAL in text,
           "expected the full 5080-5089 + 5096 flush port list")
-    check("curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST \"http://127.0.0.1:${fp}/api/flush\""
-          in text, "expected a best-effort POST /api/flush per candidate port")
+    check("curl -s -m 5 -w '\\n%{http_code}' -X POST \"http://127.0.0.1:${_fp}/api/flush\""
+          in text, "expected a best-effort POST /api/flush that also captures the body")
 
     lines = text.splitlines()
     flush_idx = _first_line_with(lines, "ANNOTATOR_FLUSH_PORTS=")
@@ -978,9 +1150,13 @@ def test_shell_scripts_only_flush_annotator_owned_ports():
     """Neither script may flush a port on runner.ports' say-so alone: each
     must resolve the listening pid (ss -ltnp) and check its
     /proc/<pid>/cmdline against the same two entry scripts
-    _kill_all_annotators checks in pipeline_orchestrator/app.py, before the
-    curl. This is the review fix for flushing an unrelated listener sharing
-    the port range (benthic_species_viewer's serve_edit.py on 5081 today)."""
+    _kill_all_annotators checks in pipeline_orchestrator/app.py, before
+    calling _flush_and_report. This is the review fix for flushing an
+    unrelated listener sharing the port range (benthic_species_viewer's
+    serve_edit.py on 5081 today). _flush_and_report's curl sits inside the
+    function's own definition (textually earlier in the file than the loop
+    that calls it), so the order that matters is ss/cmdline before the CALL,
+    not before the function definition."""
     for name in ("restart_reef_point_seg.sh", "run_pipeline.sh"):
         text = _read_script(name)
         check("ss -ltnp" in text, f"{name}: expected a pid-carrying ss -ltnp lookup")
@@ -993,11 +1169,38 @@ def test_shell_scripts_only_flush_annotator_owned_ports():
         lines = text.splitlines()
         ss_idx = _first_line_with(lines, "ss -ltnp")
         cmdline_idx = _first_line_with(lines, '/proc/${fp_pid}/cmdline')
-        curl_idx = _first_line_with(lines, "curl -s -m 5 -o /dev/null -w '%{http_code}'")
+        call_idx = _first_line_with(lines, '_flush_and_report "$fp" "$fp_pid"')
+        check(call_idx is not None, f"{name}: expected the guarded _flush_and_report call")
         for idx, label in ((ss_idx, "the ss lookup"), (cmdline_idx, "the cmdline read")):
             check(idx is not None, f"{name}: expected to find {label}")
-            check(idx < curl_idx,
-                  f"{name}: {label} (line {idx}) must precede the curl (line {curl_idx})")
+            check(idx < call_idx,
+                  f"{name}: {label} (line {idx}) must precede the flush call (line {call_idx})")
+
+
+def test_shell_scripts_flush_and_report_parses_conflict_and_merged_json():
+    """_flush_and_report reads the /api/flush JSON body via python3, not just
+    the HTTP status, mirroring _flush_annotator's own reading of the exact
+    keys _flush_result_fields sends (TCRMPclip_combinedAnnotate/src/app.py):
+    body.get("merged")/"taken_from_disk" for a plain merge, body.get(
+    "conflict")/"conflict_file"/"both_sides" for one that also hit a frame
+    edited both here and on disk, plus the legacy status=="merged" shape.
+    No new dependency: python3 is already required by this repo."""
+    for name in ("restart_reef_point_seg.sh", "run_pipeline.sh"):
+        text = _read_script(name)
+        check("_flush_and_report()" in text, f"{name}: expected the _flush_and_report function")
+        check("python3 -c" in text, f"{name}: expected python3 to parse the JSON body")
+        check("json.loads" in text, f"{name}: expected real JSON parsing, not a raw grep on the body")
+        check('body.get("conflict")' in text, f"{name}: expected the conflict check")
+        check('body.get("conflict_file")' in text, f"{name}: expected the conflict file to be named")
+        check('body.get("both_sides")' in text, f"{name}: expected the both_sides count to be read")
+        check('body.get("merged")' in text, f"{name}: expected the real merged:true check")
+        check('body.get("status") == "merged"' in text, f"{name}: expected the legacy status fallback")
+        check('body.get("taken_from_disk")' in text, f"{name}: expected the taken_from_disk count to be read")
+        check('"ok"' in text, f"{name}: expected the ok field to gate success")
+        # The old body-discarding curl (-o /dev/null on the flush POST) must
+        # be gone: the body is exactly what the conflict/merged note reads.
+        check('-o /dev/null -w \'%{http_code}\' -X POST "http://127.0.0.1:${fp}/api/flush"'
+              not in text, f"{name}: the flush curl must not discard its body")
 
 
 def test_flush_helper_quotes_its_shell_variables():
@@ -1020,6 +1223,15 @@ if __name__ == "__main__":
     run(test_flush_annotator_reports_non_2xx_status)
     run(test_flush_annotator_reports_http_error_code_without_raising)
     run(test_flush_annotator_reports_connection_failure_without_raising)
+    print("_flush_annotator: the JSON body (conflict/merged), not just the status:")
+    run(test_flush_annotator_plain_ok_true_is_success_with_no_note)
+    run(test_flush_annotator_conflict_blocks_the_save_and_names_the_file)
+    run(test_flush_annotator_conflict_with_ok_true_names_both_sides_count)
+    run(test_flush_annotator_conflict_with_no_ok_field_fails_closed)
+    run(test_flush_annotator_merged_true_logs_taken_from_disk_and_succeeds)
+    run(test_flush_annotator_legacy_status_merged_still_recognized)
+    run(test_flush_annotator_non_json_2xx_body_still_counts_as_saved)
+    run(test_flush_annotator_json_array_body_still_counts_as_saved)
     print("_listener_port_for_pid:")
     run(test_listener_port_for_pid_reverse_lookup)
     run(test_listener_port_for_pid_no_numeric_prefix_false_match)
@@ -1048,6 +1260,7 @@ if __name__ == "__main__":
     run(test_restart_script_is_valid_bash_and_flushes_before_every_kill)
     run(test_run_pipeline_script_is_valid_bash_and_flushes_before_every_kill)
     run(test_shell_scripts_only_flush_annotator_owned_ports)
+    run(test_shell_scripts_flush_and_report_parses_conflict_and_merged_json)
     run(test_flush_helper_quotes_its_shell_variables)
 
     failed = [r for r in _RESULTS if not r[1]]

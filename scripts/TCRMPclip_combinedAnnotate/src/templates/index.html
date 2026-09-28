@@ -2420,29 +2420,37 @@ function scheduleFlush() {
   _flushTimer = setTimeout(() => { _flushTimer = null; flushNow(); }, 2000);
 }
 
-// Write the session to disk right now. Returns {ok, conflict}: ok is true
-// when the server actually wrote segmentations.json; conflict is true when
-// the write was refused because the file changed on disk outside this
-// window (the expert-ID importer, most likely), in which case a persistent
-// message naming the sibling file the unsaved copy went to is already
-// showing (setConflictStatus) by the time this returns, and the caller
-// must not overwrite it with its own status line.
+// Write the session to disk right now. Returns {ok, conflict, merged}: ok is
+// always true now (an edit is never refused or thrown away, only ever
+// reconciled with whatever changed on disk). conflict is true when at least
+// one frame was edited both here and on disk, in which case a persistent
+// message naming the frame count and the sibling file the outside versions
+// went to is already showing (setConflictStatus) by the time this returns,
+// and the caller must not overwrite it with its own status line. merged is
+// true when the save only pulled in frame(s) changed on disk (no both-sides
+// frame), which shows its own short status here instead.
 async function flushNow() {
   if (_flushTimer) { clearTimeout(_flushTimer); _flushTimer = null; }
   try {
     const res = await fetch('/api/flush', { method: 'POST' });
     const data = await res.json();
     if (data && data.conflict) {
+      const n = data.both_sides;
       setConflictStatus(
-        'Not saved: the file changed outside this window. Your edits are in '
-        + data.conflict_file + '. Reload before editing.'
+        `Edited here and outside on ${n} frame${n === 1 ? '' : 's'}: your `
+        + `edits are kept; the outside versions are in ${data.conflict_file}.`
       );
-      return { ok: false, conflict: true };
+      return { ok: true, conflict: true, merged: false };
     }
-    return { ok: !!(data && data.ok), conflict: false };
+    if (data && data.merged) {
+      const n = data.taken_from_disk;
+      setStatus(`Merged changes saved outside this window on ${n} frame${n === 1 ? '' : 's'}.`);
+      return { ok: true, conflict: false, merged: true };
+    }
+    return { ok: !!(data && data.ok), conflict: false, merged: false };
   } catch (e) {
     console.warn('flush failed', e);
-    return { ok: false, conflict: false };
+    return { ok: false, conflict: false, merged: false };
   }
 }
 
@@ -2465,11 +2473,10 @@ async function saveFrameNow() {
   setStatus('Saving...');
   await saveCurrentMasks();
   const result = await flushNow();
-  // A conflict already left its own persistent message on screen
-  // (setConflictStatus, inside flushNow); overwriting it here with the
-  // generic 3s "Save failed" line would hide the one detail the operator
-  // needs, where the unsaved copy went.
-  if (!result.conflict) {
+  // A conflict or a merge already left its own message on screen (inside
+  // flushNow); overwriting it here with the generic "Saved to disk" line
+  // would hide the detail the operator needs.
+  if (!result.conflict && !result.merged) {
     setStatus(result.ok ? 'Saved to disk' : 'Save failed: not written to disk');
   }
 }
@@ -4030,9 +4037,21 @@ async function reloadSegmentations() {
       currentData.masks = data.masks || currentData.masks;
       selectedMask = selId != null
         ? currentData.masks.findIndex(m => m.id === selId) : -1;
-      setStatus(data.merged > 0
-        ? `Reloaded: ${data.merged} mask${data.merged === 1 ? '' : 's'} updated (${data.expert} expert ID${data.expert === 1 ? '' : 's'})`
-        : 'Reloaded: no imported IDs for this frame yet');
+      // Reload IDs reconciles every frame in the project, not just this one
+      // (see reload_segmentations in app.py), so a both-sides frame it finds
+      // anywhere in the project gets the same persistent message /api/flush
+      // would show; otherwise report this frame's own review-field counts.
+      if (data.conflict) {
+        const n = data.both_sides;
+        setConflictStatus(
+          `Edited here and outside on ${n} frame${n === 1 ? '' : 's'}: your `
+          + `edits are kept; the outside versions are in ${data.conflict_file}.`
+        );
+      } else if (data.merged > 0) {
+        setStatus(`Reloaded: ${data.merged} mask${data.merged === 1 ? '' : 's'} updated (${data.expert} expert ID${data.expert === 1 ? '' : 's'})`);
+      } else {
+        setStatus('Reloaded: no imported IDs for this frame yet');
+      }
       renderMaskList(); render();
     } else {
       setStatus('Reload failed: ' + (data.error || ''));
@@ -5732,12 +5751,13 @@ function setStatus(msg) {
   }, 3000);
 }
 
-// A save diverted to a conflict sibling file (segmentations.json changed on
-// disk outside this window, most likely the expert-ID importer): shown in
-// the SAME fixed-height row as setStatus, so the image never moves, but in
-// the error color and with no 3s timer, so the operator cannot miss it or
-// have it clear itself while they keep working. The next ordinary setStatus
-// call replaces it once they act.
+// A save that found the same frame edited here AND on disk (most likely the
+// expert-ID importer): the local edit is kept, the outside version goes to
+// a conflict sibling file, and this message names both. Shown in the SAME
+// fixed-height row as setStatus, so the image never moves, but in the error
+// color and with no 3s timer, so the operator cannot miss it or have it
+// clear itself while they keep working. The next ordinary setStatus call
+// replaces it once they act.
 function setConflictStatus(msg) {
   const el = document.getElementById('status-text');
   clearTimeout(statusTimer);

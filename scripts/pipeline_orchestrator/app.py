@@ -1089,11 +1089,28 @@ def _flush_annotator(port):
 
     The plan's "save first" decision: every path that stops a combined
     annotator or Edit Masks process calls this before signalling it, so an
-    unsaved review edit reaches disk before the process is cut off. Never
-    raises: no listener, a timeout, and a non-2xx status are all just a
-    failed flush, so a stop is never blocked by a process that will not
-    answer. Returns (True, None) on any 2xx response, else
-    (False, <short reason>) for the caller to log and move on.
+    unsaved review edit reaches disk before the process is cut off.
+
+    A 2xx status alone does not mean the save was clean: /api/flush
+    (TCRMPclip_combinedAnnotate's force_flush, and Edit Masks' own copy)
+    answers 200 with a JSON body that names one of two outcomes on top of
+    "ok". A save that pulled in frame(s) changed only on disk answers
+    {"ok": true, "merged": true, "taken_from_disk": N}. A save that also hit
+    a frame edited both here and on disk answers {"ok": true, "conflict":
+    true, "conflict_file": <name>, "both_sides": N}. An older annotator
+    process can still answer the legacy {"status": "merged", ...} shape,
+    accepted here too. Whichever the body reports is logged to vic.note,
+    naming the conflict file and the both_sides/taken_from_disk count, so
+    that fact is on record even when the caller only logs on failure below.
+    The body's own "ok" field decides success when present; a 2xx with no
+    "ok" field but an unresolved "conflict" is treated as not saved (fails
+    closed); a 2xx with no parseable JSON body, or JSON with neither field,
+    still counts as saved.
+
+    Never raises: no listener, a timeout, a non-2xx status, and an
+    unreadable body are all just a failed flush, so a stop is never blocked
+    by a process that will not answer. Returns (True, None) on a confirmed
+    save, else (False, <short reason>) for the caller to log and move on.
     """
     if not port:
         return False, "no port"
@@ -1102,9 +1119,7 @@ def _flush_annotator(port):
         req = Request(url, data=b"", method="POST")
         with urlopen(req, timeout=_ANNOTATOR_FLUSH_TIMEOUT_S) as resp:
             status = resp.status if hasattr(resp, "status") else resp.getcode()
-            if 200 <= status < 300:
-                return True, None
-            return False, f"HTTP {status}"
+            body_bytes = resp.read()
     except URLError as exc:
         code = getattr(exc, "code", None)
         if code is not None:
@@ -1112,6 +1127,42 @@ def _flush_annotator(port):
         return False, str(getattr(exc, "reason", None) or exc)
     except Exception as exc:
         return False, str(exc)
+
+    if not (200 <= status < 300):
+        return False, f"HTTP {status}"
+
+    try:
+        body = json.loads(body_bytes) if body_bytes else {}
+    except (ValueError, TypeError):
+        return True, None  # a non-JSON 2xx still counts as saved
+    if not isinstance(body, dict):
+        return True, None  # valid JSON, but not the {ok, conflict, ...} shape
+
+    if body.get("conflict"):
+        conflict_file = body.get("conflict_file") or "<unnamed file>"
+        both_sides = body.get("both_sides")
+        detail = f", {both_sides} frame(s) edited on both sides" if both_sides else ""
+        vic.note(f"[orch] annotator flush on port {port} reported a "
+                 f"conflict: {conflict_file}{detail}")
+    elif body.get("merged") or body.get("status") == "merged":
+        taken_from_disk = body.get("taken_from_disk")
+        detail = f", taken_from_disk={taken_from_disk}" if taken_from_disk is not None else ""
+        vic.note(f"[orch] annotator flush on port {port} merged{detail}")
+
+    if "ok" in body:
+        if body["ok"]:
+            return True, None
+        conflict_file = body.get("conflict_file")
+        reason = f"conflict: {conflict_file}" if conflict_file else "ok=false"
+        return False, reason
+    if body.get("conflict"):
+        # A conflict reported with no explicit ok:true override is treated
+        # as not saved: an unresolved conflict must never read as a clean
+        # flush just because the body omitted "ok".
+        conflict_file = body.get("conflict_file")
+        reason = f"conflict: {conflict_file}" if conflict_file else "conflict"
+        return False, reason
+    return True, None
 
 
 def _live_annotator_port(step):

@@ -42,6 +42,57 @@ echo "==> Restarting Reef Point Seg orchestrator on port ${PORT}"
 # curl is swallowed and printed either way so a future -e stays safe.
 ANNOTATOR_FLUSH_PORTS=(5080 5081 5082 5083 5084 5085 5086 5087 5088 5089 5096)
 ANNOTATOR_ENTRY_PATTERN='TCRMPclip_combinedAnnotate/src/app.py|TCRMPclip_editMasks/src/app.py'
+
+# POSTs /api/flush and prints one status line, mirroring _flush_annotator's
+# reading of the JSON body in pipeline_orchestrator/app.py: a 2xx alone is
+# not a clean save. /api/flush (TCRMPclip_combinedAnnotate's force_flush,
+# and Edit Masks' own copy) answers 200 with {ok:true, merged:true,
+# taken_from_disk:N} for a save that pulled in frame(s) changed only on
+# disk, or {ok:true, conflict:true, conflict_file:<name>, both_sides:N} for
+# one that also hit a frame edited both here and on disk; an older
+# annotator process can still answer the legacy {status:"merged", ...}
+# shape, accepted here too. The conflict file and the both_sides/
+# taken_from_disk count are named in the printed line either way. python3
+# (no new dependency; already required by this repo) parses the body so
+# this never depends on grep against arbitrary JSON formatting. Never fails
+# the caller: a curl or parse failure just prints "did not confirm".
+_flush_and_report() {
+    local _fp="$1" _pid="$2"
+    curl -s -m 5 -w '\n%{http_code}' -X POST "http://127.0.0.1:${_fp}/api/flush" 2>/dev/null \
+        | python3 -c '
+import json, sys
+port, pid = sys.argv[1], sys.argv[2]
+body_text, _, code_text = sys.stdin.read().rpartition("\n")
+try:
+    code = int(code_text)
+except ValueError:
+    code = 0
+try:
+    body = json.loads(body_text) if body_text.strip() else {}
+except Exception:
+    body = None
+ok, note = True, ""
+if isinstance(body, dict):
+    if body.get("conflict"):
+        both_sides = body.get("both_sides")
+        detail = f", {both_sides} frame(s) edited on both sides" if both_sides else ""
+        note = "conflict: " + str(body.get("conflict_file") or "<unnamed file>") + detail
+        if not body.get("ok", False):
+            ok = False
+    elif body.get("merged") or body.get("status") == "merged":
+        taken_from_disk = body.get("taken_from_disk")
+        note = "merged" + (f", taken_from_disk={taken_from_disk}" if taken_from_disk is not None else "")
+    elif "ok" in body and not body["ok"]:
+        ok, note = False, "ok=false"
+if 200 <= code < 300 and ok:
+    print(f"    flushed port {port} (pid {pid})" + (f": {note}" if note else ""))
+else:
+    reason = note if note else f"http {code}"
+    print(f"    flush on port {port} (pid {pid}) did not confirm ({reason}); continuing")
+' "$_fp" "$_pid" \
+        || echo "    flush on port ${_fp} (pid ${_pid}) did not confirm (no response); continuing"
+}
+
 echo "  flushing any live annotator / Edit Masks session first..."
 for fp in "${ANNOTATOR_FLUSH_PORTS[@]}"; do
     fp_ss_line="$(ss -ltnp "sport = :${fp}" 2>/dev/null | grep LISTEN || true)"
@@ -52,11 +103,7 @@ for fp in "${ANNOTATOR_FLUSH_PORTS[@]}"; do
     if ! printf '%s' "$fp_cmdline" | grep -qE "$ANNOTATOR_ENTRY_PATTERN"; then
         continue  # not an annotator/editMasks process, or an unreadable cmdline; skip
     fi
-    flush_code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${fp}/api/flush" 2>/dev/null || true)"
-    case "$flush_code" in
-        2??) echo "    flushed port ${fp} (pid ${fp_pid})" ;;
-        *)   echo "    flush on port ${fp} (pid ${fp_pid}) did not confirm (http ${flush_code:-none}); continuing" ;;
-    esac
+    _flush_and_report "$fp" "$fp_pid"
 done
 
 # ── 1. Hard-kill the orchestrator + sub-app processes ─────────────────────────

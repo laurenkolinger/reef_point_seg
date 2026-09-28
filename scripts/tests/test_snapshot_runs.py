@@ -13,9 +13,20 @@ source, rsync exit 24 (vanished source files) logged as a warning rather
 than failing, a temp file present on attempt 1 and gone by the retry
 recovering once --delete is in the rsync command, --dest name refusal
 (and its --allow-dest override), the PROTECTED_SNAPSHOT_NAMES set never
-being pruned, and manifest.json surviving a simulated crash between being
-written and the rename to the final name. Every retry test passes
+being pruned, manifest.json surviving a simulated crash between being
+written and the rename to the final name, the monthly tier (oldest
+snapshot per calendar month, capped at 12 months, surviving count-based
+pruning), the shrink guard (a snapshot far smaller than the previous one
+finishing but skipping pruning and warning, with --allow-shrink
+overriding), and a corrupt or unreadable manifest.json in the previous
+finished snapshot never failing the run (skipped as a link-dest base and
+for the shrink guard, with one warning naming the file, and never pruned
+by count while it is the only remaining copy). Every retry test passes
 verify_retry_wait_seconds=0 so a forced mismatch does not really sleep.
+with_monthly_tier_disabled() lets a fixture built around a single
+calendar month test plain count-based retention, PROTECTED_SNAPSHOT_NAMES,
+or a corrupt manifest's own pruning behaviour without the (separately
+tested) monthly tier changing the numbers.
 
 Run: /usr/bin/python3 scripts/tests/test_snapshot_runs.py
 """
@@ -51,6 +62,25 @@ def fixed_now(moment):
     """A zero-arg callable snapshot_runs._now_ast can be monkeypatched to,
     so a test controls the stamp instead of racing the wall clock."""
     return lambda: moment
+
+
+def with_monthly_tier_disabled(fn):
+    """Call fn() with M._monthly_tier_protected_names neutralized (returns
+    an empty set), restoring the real function afterward even on error.
+
+    Several retention tests use fixtures whose stamps intentionally share
+    one calendar month to test plain count-based pruning or
+    PROTECTED_SNAPSHOT_NAMES in isolation; without this, the monthly tier
+    (tested on its own in test_monthly_tier_selects_oldest_per_month_capped_at_12
+    and test_monthly_tier_survives_count_pruning) would also protect each
+    fixture's oldest entry and change how many are removed.
+    """
+    real_monthly_tier = M._monthly_tier_protected_names
+    M._monthly_tier_protected_names = lambda finished: set()
+    try:
+        return fn()
+    finally:
+        M._monthly_tier_protected_names = real_monthly_tier
 
 
 def make_run(root, name, files):
@@ -149,7 +179,11 @@ def test_retention_keeps_newest_n():
             snap.mkdir()
             (snap / "placeholder.txt").write_text("x")
 
-        removed = M.prune_old_snapshots(dest, keep=14)
+        # Isolate plain count-based retention from the monthly tier (its own
+        # behaviour is covered by test_monthly_tier_survives_count_pruning):
+        # all 16 stamps share one calendar month, so without this the tier
+        # would also protect day 1, changing how many get removed here.
+        removed = with_monthly_tier_disabled(lambda: M.prune_old_snapshots(dest, keep=14))
 
         remaining = sorted(p.name for p in M.list_finished_snapshots(dest))
         check(len(remaining) == 14, f"14 snapshots remain, found {len(remaining)}")
@@ -647,13 +681,17 @@ def test_protected_snapshot_name_never_pruned():
         # 15 ordinary finished snapshots plus the protected one; keep=14
         # should remove exactly the single oldest ordinary snapshot and
         # never touch the protected name, which does not count toward keep.
+        # The monthly tier is disabled for this test (own coverage in
+        # test_monthly_tier_survives_count_pruning): all 15 ordinary
+        # stamps share one calendar month, so it would otherwise also
+        # protect their oldest entry and change the numbers below.
         stamps = [f"202608{day:02d}-023000" for day in range(1, 16)]  # 15 stamps
         for stamp in stamps:
             snap = dest / stamp
             snap.mkdir()
             (snap / "placeholder.txt").write_text("x")
 
-        removed = M.prune_old_snapshots(dest, keep=14)
+        removed = with_monthly_tier_disabled(lambda: M.prune_old_snapshots(dest, keep=14))
 
         check(protected.exists(), "the protected snapshot name still exists")
         check(all(p.name != protected_name for p in removed),
@@ -714,6 +752,318 @@ def test_manifest_written_before_rename_survives_simulated_crash():
               "a manifest-less finished snapshot is skipped; none other qualifies as a link-dest base")
 
 
+# ---------------------------------------------------------------------
+# 19. _monthly_tier_protected_names: the oldest stamp per calendar month,
+#     capped at the MONTHLY_TIER_MAX_MONTHS most recent distinct months.
+# ---------------------------------------------------------------------
+def test_monthly_tier_selects_oldest_per_month_capped_at_12():
+    months = [f"2025{month:02d}" for month in range(1, 13)] + ["202601", "202602"]  # 14 months
+    finished = []
+    oldest_of_month = {}
+    for month in months:
+        oldest = Path(f"{month}01-000000")
+        newest = Path(f"{month}15-000000")
+        finished.extend([oldest, newest])
+        oldest_of_month[month] = oldest.name
+
+    protected = M._monthly_tier_protected_names(finished)
+
+    check(len(protected) == M.MONTHLY_TIER_MAX_MONTHS,
+          f"exactly {M.MONTHLY_TIER_MAX_MONTHS} months are represented, found {len(protected)}")
+    most_recent_12_months = sorted(months, reverse=True)[:12]
+    expected = {oldest_of_month[month] for month in most_recent_12_months}
+    check(protected == expected,
+          "the protected set is exactly the oldest stamp of each of the 12 most recent months")
+    for month in sorted(months)[:2]:
+        check(oldest_of_month[month] not in protected,
+              f"the oldest stamp of {month}, beyond the 12-month cap, is not protected")
+
+    check(M._monthly_tier_protected_names([]) == set(),
+          "an empty snapshot list protects nothing")
+
+
+# ---------------------------------------------------------------------
+# 20. The monthly tier survives count-based pruning: the oldest snapshot
+#     of an old calendar month is kept even when a small --keep would
+#     otherwise remove it, while its non-oldest sibling is pruned normally.
+# ---------------------------------------------------------------------
+def test_monthly_tier_survives_count_pruning():
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / "dest"
+        dest.mkdir()
+        stamps = [
+            "20260801-000000", "20260815-000000",  # August: oldest, newest
+            "20260901-000000", "20260915-000000",  # September: oldest, newest
+            "20261001-000000", "20261015-000000",  # October: oldest, newest
+        ]
+        for stamp in stamps:
+            snap = dest / stamp
+            snap.mkdir()
+            (snap / "placeholder.txt").write_text("x")
+
+        removed = M.prune_old_snapshots(dest, keep=1)
+
+        remaining = {p.name for p in M.list_finished_snapshots(dest)}
+        check("20260801-000000" in remaining, "August's oldest survives via the monthly tier")
+        check("20260901-000000" in remaining, "September's oldest survives via the monthly tier")
+        check("20261001-000000" in remaining, "October's oldest survives via the monthly tier")
+        check("20261015-000000" in remaining, "the single newest snapshot survives via --keep=1")
+        check("20260815-000000" not in remaining, "August's non-oldest entry was pruned normally")
+        check("20260915-000000" not in remaining, "September's non-oldest entry was pruned normally")
+        check({p.name for p in removed} == {"20260815-000000", "20260915-000000"},
+              "exactly the two non-monthly, non-newest entries were removed")
+
+
+# ---------------------------------------------------------------------
+# 21. Shrink guard: a snapshot far smaller than the previous one still
+#     finishes, but pruning is skipped this run and a warning names both
+#     the new and previous file counts.
+# ---------------------------------------------------------------------
+def test_shrink_guard_skips_pruning_and_warns():
+    with tempfile.TemporaryDirectory() as tmp:
+        source = Path(tmp) / "inprocess"
+        dest = Path(tmp) / "dest"
+        dest.mkdir()
+        # A pre-existing old snapshot, so there is something for keep=1 to
+        # (wrongly) prune if the shrink guard did not skip pruning.
+        old = dest / "20260801-000000"
+        old.mkdir()
+        (old / "placeholder.txt").write_text("x")
+
+        run_dir = make_run(source, "run_mu", {f"file{i}.json": b"x" * 100 for i in range(10)})
+        M._now_ast = fixed_now(datetime(2026, 9, 25, 2, 30, 0, tzinfo=M.AST))
+        result1 = M.take_snapshot(source, dest, keep=1, log=lambda *_: None)
+        check(result1["final_dir"].is_dir(), "night 1 (10 files) produces a finished snapshot")
+
+        # Night 2: inprocess is reset down to a single small file. The copy
+        # is still perfectly correct for what source now holds and verifies
+        # cleanly; only its size relative to last night is suspicious.
+        for i in range(1, 10):
+            (run_dir / f"file{i}.json").unlink()
+
+        M._now_ast = fixed_now(datetime(2026, 9, 26, 2, 30, 0, tzinfo=M.AST))
+        log_lines = []
+        result2 = M.take_snapshot(source, dest, keep=1, log=log_lines.append)
+
+        check(result2["final_dir"].is_dir(),
+              "the shrunk run still finishes; it is not treated as a verify failure")
+        check(result2["pruned"] == [], "pruning was skipped this run because of the shrink guard")
+        check(any("WARNING" in line and "shrink guard" in line and "10 file(s)" in line
+                   and "1 file(s)" in line for line in log_lines),
+              "the shrink-guard warning names both the new (1) and previous (10) file counts")
+        remaining = {p.name for p in M.list_finished_snapshots(dest)}
+        check(old.name in remaining, "the pre-existing old snapshot was not pruned")
+        check(result1["stamp"] in remaining, "night 1's snapshot was not pruned")
+        check(result2["stamp"] in remaining, "night 2's own (shrunk) snapshot exists")
+
+
+# ---------------------------------------------------------------------
+# 22. --allow-shrink: the shrink is still logged, but pruning proceeds.
+# ---------------------------------------------------------------------
+def test_allow_shrink_overrides_and_prunes_anyway():
+    check(M.parse_args(["--allow-shrink"]).allow_shrink is True,
+          "--allow-shrink parses to True")
+    check(M.parse_args([]).allow_shrink is False, "--allow-shrink defaults to False")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        source = Path(tmp) / "inprocess"
+        dest = Path(tmp) / "dest"
+        dest.mkdir()
+        old = dest / "20260801-000000"
+        old.mkdir()
+        (old / "placeholder.txt").write_text("x")
+
+        run_dir = make_run(source, "run_nu", {f"file{i}.json": b"x" * 100 for i in range(10)})
+
+        def run_both_nights():
+            # keep=2 for night 1: with the pre-existing "old" fixture plus
+            # night 1's own snapshot that is exactly 2, so night 1's own
+            # (shrink-guard-unrelated) retention pass prunes nothing and
+            # "old" survives to be the thing --allow-shrink is shown to
+            # prune on night 2. keep=1 for night 2 forces real removal.
+            M._now_ast = fixed_now(datetime(2026, 9, 25, 2, 30, 0, tzinfo=M.AST))
+            first = M.take_snapshot(source, dest, keep=2, log=lambda *_: None)
+
+            for i in range(1, 10):
+                (run_dir / f"file{i}.json").unlink()
+
+            M._now_ast = fixed_now(datetime(2026, 9, 26, 2, 30, 0, tzinfo=M.AST))
+            lines = []
+            second = M.take_snapshot(source, dest, keep=1, allow_shrink=True, log=lines.append)
+            return first, second, lines
+
+        # Both nights share one calendar month here; disabled so this test
+        # exercises only the shrink-guard override, not the (separately
+        # tested) monthly tier, which would otherwise also protect night
+        # 1's snapshot as September's oldest and mask what --allow-shrink
+        # actually did.
+        result1, result2, log_lines = with_monthly_tier_disabled(run_both_nights)
+
+        check(result2["final_dir"].is_dir(), "the shrunk run still finishes")
+        check(any("WARNING" in line and "shrink guard" in line and "pruning anyway" in line
+                   for line in log_lines),
+              "the shrink is still logged, but pruning proceeds because of --allow-shrink")
+        remaining = {p.name for p in M.list_finished_snapshots(dest)}
+        check(old.name not in remaining, "--allow-shrink let the old snapshot be pruned normally")
+        check(result1["stamp"] not in remaining,
+              "--allow-shrink let night 1's snapshot be pruned normally")
+        check(result2["stamp"] in remaining, "night 2's own snapshot survives (it is the newest)")
+        check(len(result2["pruned"]) == 2, "both older snapshots were pruned under --allow-shrink")
+
+
+# ---------------------------------------------------------------------
+# 23. latest_finished_snapshot skips a snapshot whose manifest.json exists
+#     but fails to parse, exactly like a missing one, and logs one warning
+#     naming the file.
+# ---------------------------------------------------------------------
+def test_latest_finished_snapshot_skips_corrupt_manifest():
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / "dest"
+        dest.mkdir()
+
+        good = dest / "20260801-000000"
+        good.mkdir()
+        (good / M.MANIFEST_FILENAME).write_text('{"stamp": "20260801-000000", "file_counts": {}}')
+
+        corrupt = dest / "20260802-000000"
+        corrupt.mkdir()
+        corrupt_manifest = corrupt / M.MANIFEST_FILENAME
+        corrupt_manifest.write_text("{not valid json at all")
+
+        log_lines = []
+        chosen = M.latest_finished_snapshot(dest, log=log_lines.append)
+
+        check(chosen == good, "the newer, corrupt-manifest snapshot is skipped; the older good one is chosen")
+        check(any("WARNING" in line and str(corrupt_manifest) in line for line in log_lines),
+              "a warning names the corrupt manifest file")
+        check(len(log_lines) == 1, "exactly one warning is logged")
+
+        # No log callable at all: the default no-op must not raise.
+        chosen_default = M.latest_finished_snapshot(dest)
+        check(chosen_default == good, "the same choice is made with the default (silent) logger")
+
+
+# ---------------------------------------------------------------------
+# 24. A corrupt manifest.json in the previous finished snapshot never
+#     fails tonight's run: it is treated as absent for both the
+#     --link-dest base and the shrink guard, with one warning logged.
+# ---------------------------------------------------------------------
+def test_corrupt_previous_manifest_treated_as_absent():
+    with tempfile.TemporaryDirectory() as tmp:
+        source = Path(tmp) / "inprocess"
+        dest = Path(tmp) / "dest"
+        make_run(source, "run_xi", {"stable.txt": b"same content both nights"})
+
+        M._now_ast = fixed_now(datetime(2026, 9, 27, 2, 30, 0, tzinfo=M.AST))
+        result1 = M.take_snapshot(source, dest, keep=14, log=lambda *_: None)
+        manifest_path = result1["final_dir"] / M.MANIFEST_FILENAME
+
+        # Corrupt night 1's manifest.json in place. It is read-only from
+        # _chmod_tree_read_only; restore write first, exactly as this
+        # script's own pruning code does before it deletes anything.
+        os.chmod(manifest_path, manifest_path.stat().st_mode | stat.S_IWUSR)
+        manifest_path.write_text("{not valid json")
+
+        M._now_ast = fixed_now(datetime(2026, 9, 28, 2, 30, 0, tzinfo=M.AST))
+        log_lines = []
+        result2 = M.take_snapshot(source, dest, keep=14, log=log_lines.append)
+
+        check(result2["final_dir"].is_dir(), "the run completes despite a corrupt previous manifest")
+        warning_lines = [
+            line for line in log_lines
+            if "WARNING" in line and str(manifest_path) in line
+            and ("corrupt" in line or "unreadable" in line)
+        ]
+        check(len(warning_lines) == 1, f"exactly one warning names the corrupt manifest file, found {len(warning_lines)}")
+
+        stable1 = result1["final_dir"] / "run_xi" / "stable.txt"
+        stable2 = result2["final_dir"] / "run_xi" / "stable.txt"
+        check(stable1.stat().st_ino != stable2.stat().st_ino,
+              "night 2 did not hard-link against night 1: its corrupt manifest made it unusable as a link-dest base")
+
+        remaining = {p.name for p in M.list_finished_snapshots(dest)}
+        check(result1["stamp"] in remaining, "night 1's snapshot (corrupt manifest) still exists")
+        check(result2["stamp"] in remaining, "night 2's snapshot exists")
+
+
+# ---------------------------------------------------------------------
+# 25. Defense in depth: even if something hands the shrink guard a prev
+#     whose manifest is unreadable (bypassing latest_finished_snapshot's
+#     own check, as a race might), it is treated as absent, not raised.
+# ---------------------------------------------------------------------
+def test_shrink_guard_survives_unreadable_manifest_read_race():
+    with tempfile.TemporaryDirectory() as tmp:
+        source = Path(tmp) / "inprocess"
+        dest = Path(tmp) / "dest"
+        make_run(source, "run_omicron", {"a.txt": b"x"})
+
+        M._now_ast = fixed_now(datetime(2026, 9, 27, 2, 30, 0, tzinfo=M.AST))
+        result1 = M.take_snapshot(source, dest, keep=14, log=lambda *_: None)
+        manifest_path = result1["final_dir"] / M.MANIFEST_FILENAME
+        os.chmod(manifest_path, manifest_path.stat().st_mode | stat.S_IWUSR)
+        manifest_path.write_text("{not valid json")
+
+        # Force prev to be the corrupt-manifest snapshot directly, as if a
+        # race let it through latest_finished_snapshot's own check, to
+        # prove the shrink guard's own read never crashes the run either.
+        real_latest = M.latest_finished_snapshot
+        M.latest_finished_snapshot = lambda dest, log=lambda m: None: result1["final_dir"]
+
+        M._now_ast = fixed_now(datetime(2026, 9, 28, 2, 30, 0, tzinfo=M.AST))
+        log_lines = []
+        try:
+            result2 = M.take_snapshot(source, dest, keep=14, log=log_lines.append)
+        finally:
+            M.latest_finished_snapshot = real_latest
+
+        check(result2["final_dir"].is_dir(),
+              "the run completes even when prev's manifest is unreadable at read time")
+        check(any("WARNING" in line and "could not read" in line and str(manifest_path) in line
+                   for line in log_lines),
+              "a warning names the unreadable manifest file at the shrink guard's own read")
+
+
+# ---------------------------------------------------------------------
+# 26. A finished snapshot with a corrupt manifest is never pruned by
+#     count while it is the only remaining copy, but prunes normally once
+#     it is not the only one.
+# ---------------------------------------------------------------------
+def test_corrupt_manifest_snapshot_survives_as_sole_copy():
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / "dest"
+        dest.mkdir()
+        only = dest / "20260901-000000"
+        only.mkdir()
+        (only / "placeholder.txt").write_text("x")
+        (only / M.MANIFEST_FILENAME).write_text("{not valid json")
+
+        removed = M.prune_old_snapshots(dest, keep=1)
+        check(removed == [], "the sole finished snapshot is never pruned, corrupt manifest or not")
+        check(only.exists(), "it still exists on disk")
+
+
+def test_corrupt_manifest_snapshot_prunes_normally_when_not_sole_copy():
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / "dest"
+        dest.mkdir()
+        old_corrupt = dest / "20260801-000000"
+        old_corrupt.mkdir()
+        (old_corrupt / M.MANIFEST_FILENAME).write_text("{not valid json")
+        for stamp in ["20260802-000000", "20260803-000000", "20260804-000000"]:
+            snap = dest / stamp
+            snap.mkdir()
+            (snap / "placeholder.txt").write_text("x")
+
+        # Same calendar month throughout; disabled so this isolates the
+        # corrupt-manifest-and-not-sole-copy case from the (separately
+        # tested) monthly tier, which would otherwise also protect
+        # old_corrupt as August's oldest.
+        removed = with_monthly_tier_disabled(lambda: M.prune_old_snapshots(dest, keep=1))
+
+        check(old_corrupt.name in {p.name for p in removed},
+              "a corrupt-manifest snapshot is pruned normally once it is not the only copy")
+
+
 def main():
     test_happy_path()
     test_second_run_hardlinks_unchanged()
@@ -734,6 +1084,15 @@ def main():
     test_dest_name_refusal()
     test_protected_snapshot_name_never_pruned()
     test_manifest_written_before_rename_survives_simulated_crash()
+    test_monthly_tier_selects_oldest_per_month_capped_at_12()
+    test_monthly_tier_survives_count_pruning()
+    test_shrink_guard_skips_pruning_and_warns()
+    test_allow_shrink_overrides_and_prunes_anyway()
+    test_latest_finished_snapshot_skips_corrupt_manifest()
+    test_corrupt_previous_manifest_treated_as_absent()
+    test_shrink_guard_survives_unreadable_manifest_read_race()
+    test_corrupt_manifest_snapshot_survives_as_sole_copy()
+    test_corrupt_manifest_snapshot_prunes_normally_when_not_sole_copy()
 
     print("PASS" if _fail == 0 else f"{_fail} FAILED")
     return 1 if _fail else 0

@@ -67,6 +67,33 @@ subprocess.Popen = _blocked_popen
 import app as appmod  # noqa: E402
 from _reefreview.training_projects import mint_training_project  # noqa: E402
 
+# Test isolation (2026-09-28 review): _kill_all_annotators' flush-before-kill
+# (POST /api/flush, pipeline_orchestrator/app.py) reaches the network even
+# when subprocess.run/Popen are stubbed, since it goes through urllib, not
+# subprocess. This file's step4test/step4loop/editmasks route calls can
+# drive it, so appmod._flush_annotator is stubbed here (never a real save,
+# never a real socket) and socket.socket is guarded so any code path that
+# still tries to reach the orchestrator (5050) or the annotator port range
+# (5080-5089) fails the test loudly instead of making a live network call.
+appmod._flush_annotator = lambda port: (True, None)
+import socket as _socket
+_REAL_SOCKET = _socket.socket
+_GUARDED_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0"}
+_GUARDED_PORTS = {5050} | set(range(5080, 5090))
+
+
+class _NoLivePortSocket(_REAL_SOCKET):
+    def connect(self, address, *a, **k):
+        if (isinstance(address, tuple) and len(address) >= 2
+                and address[0] in _GUARDED_HOSTS and address[1] in _GUARDED_PORTS):
+            raise AssertionError(
+                f"test tried to open a real socket to {address[0]}:{address[1]} "
+                f"(guarded: 5050, 5080-5089); stub the code path that reached this")
+        return super().connect(address, *a, **k)
+
+
+_socket.socket = _NoLivePortSocket
+
 
 class _FakeVic:
     @staticmethod

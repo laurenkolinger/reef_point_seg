@@ -41,7 +41,7 @@ from mask_ops import (
 )
 from export_yolo import load_class_map, save_class_map, export_batch, update_data_yaml
 from render_overlay import render_segmentation_overlays
-from provenance import compute_label_outcomes, write_provenance_csv
+from provenance import compute_label_outcomes, write_provenance_csv, ast_now
 import custom_imports as ci
 
 app = Flask(__name__, template_folder='templates')
@@ -451,9 +451,19 @@ def _ast_stamp():
 # by save_segmentations() on every successful write of the real file. A
 # stat-only mismatch is not by itself proof of a real conflict (a touch, or a
 # rewrite that reproduced the same bytes, moves mtime without changing
-# content), so _seg_disk_hash below carries the content check that decides.
+# content), so _seg_disk_hash below carries the content check that decides,
+# and _seg_frame_hash carries the SAME check one frame at a time, since a
+# changed file can still hold ten untouched frames and one real edit.
 _seg_disk_identity = {}
 _seg_disk_hash = {}
+_seg_frame_hash = {}  # path -> {frame_filename: sha256 of that frame's content}
+
+# The open conflict episode's sibling file for each path, if any. Minted once
+# by _conflict_episode_path() and reused (overwritten) by every save that
+# still finds a both-sides frame, so an operator editing through an
+# unresolved conflict does not accumulate one multi-megabyte file per
+# trailing flush; cleared once a save resolves with no both-sides frame left.
+_conflict_episode = {}
 
 
 def _seg_file_identity(path):
@@ -482,36 +492,66 @@ def _hash_file(path):
         return None
 
 
-# Monotonically increasing counter, incremented by _mark_dirty() under
-# _dirty_lock. A session is dirty (_is_dirty()) while this is greater than
-# _segmentations_saved_version. This replaces a plain boolean flag, which
-# cleared itself unconditionally at the end of every save: an edit that
-# lands WHILE a save is still serializing (a click ~2s after the last, in
-# the middle of, say, a 24MB write) would set the flag, and the finishing
-# save's `dirty = False` would then stomp that back out with no way to tell
-# a captured edit from a missed one. save_segmentations() instead snapshots
-# this counter BEFORE it starts writing and only ever advances
-# _segmentations_saved_version to that snapshot once the write actually
-# lands, so a save can only clear the edits it demonstrably captured; an
-# increment that happens after the snapshot leaves the session dirty
-# regardless of how that in-flight save turns out.
+def _frame_hash(frame_dict):
+    """Stable sha256 of one frame's content, independent of dict key order.
+    Unlike the whole-file hash, a frame has no raw bytes of its own to hash,
+    so this hashes a canonical (sorted-key) re-serialization instead."""
+    return hashlib.sha256(json.dumps(frame_dict, sort_keys=True).encode()).hexdigest()
+
+
+def _record_frame_hashes(path, store):
+    """Snapshot every frame's content hash for `path`. Called after loading
+    or after successfully writing `store`, so the next save can tell, per
+    frame, whether the disk copy changed since this process last saw THAT
+    frame specifically, not just whether the file as a whole moved."""
+    _seg_frame_hash[path] = {name: _frame_hash(frame) for name, frame in store.items()}
+
+
+# Set by _mark_dirty() under _dirty_lock: _segmentations_dirty_counter is a
+# monotonically increasing count of every unsaved change, and
+# _dirty_frames is the set of frame filenames those changes touched.
+# A session is dirty (_is_dirty()) while the counter is greater than
+# _segmentations_saved_version. A plain boolean flag once stood in for the
+# counter and cleared itself unconditionally at the end of every save: an
+# edit that arrives WHILE a save is still serializing (a click ~2s after the
+# last, in the middle of, say, a 24MB write) would set the flag, and the
+# finishing save's `dirty = False` would then stomp that back out with no way
+# to tell a captured edit from a missed one. save_segmentations() instead
+# snapshots the counter AND the dirty-frames set BEFORE it starts writing,
+# and only ever advances _segmentations_saved_version (and clears exactly
+# those frames from _dirty_frames) once the write actually completes, so a
+# change that arrives after the snapshot leaves the session dirty regardless
+# of how that in-flight save turns out.
 _dirty_lock = threading.Lock()
 _segmentations_dirty_counter = 0
 _segmentations_saved_version = 0
+_dirty_frames = set()
 
 
-def _mark_dirty():
-    """Record one more unsaved change to session['segmentations'].
+def _mark_dirty(filename=None):
+    """Record an unsaved change to session['segmentations'].
 
-    Central call site for every mutation: applied to a mutating route via the
-    _dirty_on_success decorator below, and called directly from the one
-    mutation point that runs outside any route's request cycle (the
-    background segmentation loop's per-image write in
-    _process_single_image).
+    Args:
+        filename: the one frame that changed. None means every frame
+            currently in the store should be treated as dirty (a store-wide
+            change whose exact frame set a caller cannot narrow down, e.g.
+            a fresh custom-import backfill).
+
+    Central call site for every mutation: applied to a mutating route via
+    the _dirty_on_success decorator below (which reads the frame's filename
+    straight from the route's own URL argument), and called directly from
+    the mutation points that run outside any route's request cycle or that
+    flush themselves before the decorator would otherwise fire (the
+    background segmentation loop's per-image write; scrap, unscrap and
+    export, whose own flush_all() call must see the mark first, not after).
     """
     global _segmentations_dirty_counter
     with _dirty_lock:
         _segmentations_dirty_counter += 1
+        if filename is None:
+            _dirty_frames.update(session.get('segmentations', {}).keys())
+        else:
+            _dirty_frames.add(filename)
 
 
 def _is_dirty():
@@ -521,26 +561,56 @@ def _is_dirty():
 
 
 def _dirty_on_success(view):
-    """Decorator: mark the segmentations store dirty after `view` answers
-    with a non-error status.
+    """Decorator: run `view` under _store_write_lock and mark the
+    segmentations store dirty, still inside that lock, after it answers with
+    a non-error status.
 
-    Applied to every route that can change session['segmentations'] content,
-    so flush_before_exit() and the pre-kill POST /api/flush know there is
-    unsaved work without re-deriving it from each route's internals, and a
-    validation failure (400/404/409, a mask left exactly as it was) never
-    marks a request dirty that changed nothing. functools.wraps keeps the
-    wrapped function's __name__, which Flask uses as the endpoint name, so
-    stacking this under @app.route registers no duplicate endpoint.
+    The lock closes a real race: a mutating route used to read a mask dict
+    out of session['segmentations'] and edit it in place with no lock at
+    all, while a concurrent save_segmentations() (the trailing flush timer,
+    another request) could find the file changed on disk and replace the
+    WHOLE store (data.clear(); data.update(merged)) at the same moment. A
+    route's in-place edit arriving between that clear() and update() edited
+    an object no longer reachable from session['segmentations'] and was
+    silently lost. Since _store_write_lock is the SAME lock
+    save_segmentations() already holds for its own merge-and-write, a route
+    now either runs entirely before that merge starts or entirely after it
+    finishes, never interleaved with it, and the dirty mark happening before
+    the lock is released means a concurrent save's own dirty-set snapshot
+    (also taken under this lock) can never fall in the gap between the
+    route's mutation and its mark.
+
+    Applied to every route that can change session['segmentations'] content
+    and does not already flush itself (a route that calls flush_all() in its
+    own body, scrap, unscrap, export, marks dirty explicitly before that
+    call instead, so this wrapper never marks it dirty again right after it
+    just saved), so flush_before_exit() and the pre-kill POST /api/flush know
+    there is unsaved work without re-deriving it from each route's
+    internals, and a validation failure (400/404/409, a mask left exactly as
+    it was) never marks a request dirty that changed nothing. Reads
+    `filename` from the route's own URL argument when it has one, so the
+    dirty-frames set stays precise without every route marking itself by
+    hand. functools.wraps keeps the wrapped function's __name__, which Flask
+    uses as the endpoint name, so stacking this under @app.route registers
+    no duplicate endpoint.
+
+    A route that calls into SAM3 (add/refine/rebox/commit) runs that
+    inference INSIDE this lock too: splitting "compute the mask, then lock
+    to apply it" would need route-specific surgery this pass did not do.
+    The cost is real but small next to a save's own write time (a cached
+    SAM3 prompt is single-digit milliseconds; see sam_engine's own timing
+    notes), so a save waits at most that long behind an in-flight edit.
     """
     @functools.wraps(view)
     def wrapper(*args, **kwargs):
-        result = view(*args, **kwargs)
-        if isinstance(result, tuple):
-            status = result[1] if len(result) > 1 else 200
-        else:
-            status = getattr(result, 'status_code', 200)
-        if isinstance(status, int) and status < 400:
-            _mark_dirty()
+        with _store_write_lock:
+            result = view(*args, **kwargs)
+            if isinstance(result, tuple):
+                status = result[1] if len(result) > 1 else 200
+            else:
+                status = getattr(result, 'status_code', 200)
+            if isinstance(status, int) and status < 400:
+                _mark_dirty(filename=kwargs.get('filename'))
         return result
     return wrapper
 
@@ -550,11 +620,14 @@ def load_segmentations(export_dir):
     if os.path.exists(path):
         with open(path, 'rb') as f:
             raw = f.read()
+        data = json.loads(raw)
         _seg_disk_identity[path] = _seg_file_identity(path)
         _seg_disk_hash[path] = _hash_bytes(raw)
-        return json.loads(raw)
+        _record_frame_hashes(path, data)
+        return data
     _seg_disk_identity.pop(path, None)
     _seg_disk_hash.pop(path, None)
+    _seg_frame_hash.pop(path, None)
     return {}
 
 
@@ -667,40 +740,172 @@ def _atomic_write_json(path, payload, indent):
         raise
 
 
-def save_segmentations(export_dir, data):
-    """Write segmentations.json, unless another process changed it first.
+def _merge_store_with_disk(path, mem_store, disk_store, dirty_frame_names):
+    """Three-way per-frame reconciliation between the in-memory store being
+    saved and what is currently on disk.
 
-    The expert-ID importer (MOD/scripts/_expertids/importer.py) can rewrite
-    this exact file while an annotator sits open on the same project. A
-    mismatched (mtime_ns, size) against what THIS process last read or wrote
-    (_seg_disk_identity) is a first, cheap signal, not a verdict on its own:
-    a touch, or a rewrite that reproduced the exact same bytes, moves the
-    stat without changing content, so a stat mismatch is followed by a
-    sha256 comparison against _seg_disk_hash before anything is refused.
-    Equal content adopts the current stat as ours and the save proceeds
-    normally; different content diverts the in-memory copy to a sibling
-    segmentations.conflict-<AST stamp>.json instead of overwriting the real
-    file, with one line logged naming both paths, and keeps diverting on
-    every later save while the real file stays unreconciled, so this process
-    is never told it saved when it did not. A normal save (no external
-    change, or the first save of a session that never loaded an existing
-    file) proceeds and refreshes the tracked identity and hash to the file
-    it just wrote, so this process's own next save is never mistaken for a
-    conflict with itself.
+    Replaces the old whole-file divert-on-conflict: a save that finds the
+    file changed on disk no longer refuses to write, it reconciles frame by
+    frame so no writer's work is ever silently thrown away. Per frame:
 
-    The dirty counter is snapshotted before the write starts, not after it
-    finishes: see _segmentations_dirty_counter for why.
+      dirty locally, disk unchanged for that frame: keep the in-memory frame
+          (an operator's own edit); still folds in any review/expert fields
+          the disk copy carries, via _merge_imported_review_fields, since an
+          import can complete on a frame the operator is also editing.
+      dirty locally AND the disk copy changed for that SAME frame since this
+          process last read or wrote it (checked against the per-frame hash
+          in _seg_frame_hash, not just the whole file's hash): the in-memory,
+          now review-field-merged version still wins, but the frame is also
+          reported as a genuine both-sides conflict, since a real outside
+          edit was set aside to keep it.
+      not dirty locally: take the disk frame into memory wholesale (there is
+          no local edit here to defend).
+      present on disk only (a frame this session never loaded): take it.
+      present in memory only (new since the last load or save, OR deleted
+          from disk by another writer since this session last saw it): keep
+          it. A frame another writer removed from the file is deliberately
+          RESURRECTED this way rather than dropped: this process has no way
+          to tell "never existed" from "removed while I was holding a copy",
+          and keeping a copy nobody asked to delete is strictly safer than
+          discarding one nobody asked to keep.
 
     Returns:
-        (status, conflict_path): status is 'saved' when segmentations.json
-        itself was written, or 'conflict' when the write was diverted to a
-        sibling file instead; conflict_path is that sibling's absolute path,
-        or None when status is 'saved'.
+        (merged, both_sides, taken_from_disk, kept_local, review_counts):
+        merged is the reconciled {frame: seg_dict} store; both_sides is the
+        list of frame filenames changed on both sides; taken_from_disk and
+        kept_local are plain per-frame counts; review_counts is
+        {frame: (merged_count, expert_count)} from
+        _merge_imported_review_fields, one entry per dirty frame that also
+        existed on disk.
+    """
+    known_frame_hashes = _seg_frame_hash.get(path, {})
+    merged = {}
+    both_sides = []
+    taken_from_disk = 0
+    kept_local = 0
+    review_counts = {}
+    for name in set(mem_store) | set(disk_store):
+        in_mem = name in mem_store
+        on_disk = name in disk_store
+        if in_mem and on_disk:
+            if name in dirty_frame_names:
+                m_count, e_count = _merge_imported_review_fields(
+                    mem_store[name].get('masks', []), disk_store[name].get('masks', []))
+                review_counts[name] = (m_count, e_count)
+                merged[name] = mem_store[name]
+                kept_local += 1
+                last_known = known_frame_hashes.get(name)
+                if last_known is not None and _frame_hash(disk_store[name]) != last_known:
+                    both_sides.append(name)
+            else:
+                merged[name] = disk_store[name]
+                taken_from_disk += 1
+        elif on_disk:
+            merged[name] = disk_store[name]
+            taken_from_disk += 1
+        else:
+            merged[name] = mem_store[name]
+            kept_local += 1
+    return merged, both_sides, taken_from_disk, kept_local, review_counts
+
+
+def _conflict_episode_path(seg_path):
+    """The one conflict-sibling filename for the current unresolved episode
+    at `seg_path` (segmentations.json's own path), minted once and reused
+    for every save that still finds a both-sides frame, so an operator who
+    keeps editing during an unresolved conflict does not accumulate one file
+    per trailing flush. _append_conflict_entries() is what keeps this file's
+    CONTENT additive across those reuses; this function only names it."""
+    existing = _conflict_episode.get(seg_path)
+    if existing:
+        return existing
+    conflict_path = os.path.join(
+        os.path.dirname(seg_path), f'segmentations.conflict-{_ast_stamp()}.json')
+    _conflict_episode[seg_path] = conflict_path
+    return conflict_path
+
+
+def _append_conflict_entries(conflict_path, outside_versions):
+    """Add `outside_versions` ({frame: disk_content}) to the conflict-episode
+    file at `conflict_path`, keeping every distinct outside version already
+    recorded there instead of overwriting them.
+
+    Call site: save_segmentations()'s own '_store_write_lock' section, so
+    concurrent read-modify-write races on this file cannot happen. Reads the
+    file if it already exists (an earlier save in the same episode), so a
+    later save's both-sides frames never erase an earlier save's; each frame
+    maps to a list of {'at': AST timestamp, 'content': ...} entries, one per
+    distinct version this process has seen outside writes turn it into. An
+    exact repeat of the most recent recorded version for a frame (the same
+    outside content seen again) is not duplicated.
+    """
+    existing = {}
+    if os.path.exists(conflict_path):
+        try:
+            with open(conflict_path, 'rb') as f:
+                existing = json.loads(f.read())
+            if not isinstance(existing, dict):
+                existing = {}
+        except (OSError, ValueError):
+            # A conflict file that is itself unreadable right now (a rare
+            # race with something else touching it) must not lose the
+            # frames it already held: start fresh rather than raise, since
+            # the alternative is refusing this save entirely over a
+            # best-effort side record.
+            existing = {}
+    for name, content in outside_versions.items():
+        versions = existing.setdefault(name, [])
+        if not versions or versions[-1].get('content') != content:
+            versions.append({'at': ast_now(), 'content': content})
+    _atomic_write_json(conflict_path, existing, 1)
+
+
+def save_segmentations(export_dir, data):
+    """Write segmentations.json, merging in whatever an outside writer (most
+    likely the expert-ID importer, MOD/scripts/_expertids/importer.py)
+    changed on disk instead of refusing the write.
+
+    A mismatched (mtime_ns, size) against what THIS process last read or
+    wrote (_seg_disk_identity) is a first, cheap signal, not a verdict: a
+    touch, or a rewrite that reproduced the exact same bytes, moves the stat
+    without changing content, so a mismatch is followed by a sha256
+    comparison against _seg_disk_hash before anything else happens. Equal
+    content adopts the current stat and the save proceeds as normal.
+    Different content runs _merge_store_with_disk() per frame: an operator's
+    own unsaved edit to a frame always wins over a same-frame outside
+    change, but the outside change is folded in where it is pure review
+    metadata, and, for the rarer frame edited on both sides, the outside
+    version is APPENDED to a single per-episode conflict sibling
+    (segmentations.conflict-<AST stamp>.json, _append_conflict_entries(),
+    reused while any both-sides frame remains unresolved) so nothing is lost
+    even there, and no earlier save's recorded outside version in that same
+    file is ever overwritten by a later one. The
+    merged result is written to disk AND installed back into `data` in
+    place (data.clear(); data.update(...)): `data` is session
+    ['segmentations'] itself in every real caller, so the live session
+    reflects the merge, not just the file on disk.
+
+    The dirty counter and the dirty-frames set are BOTH snapshotted before
+    the write starts, not after it finishes: see
+    _segmentations_dirty_counter for why an edit arriving mid-write must
+    never be silently cleared by the save it raced with.
+
+    Returns:
+        (status, info): status is 'saved' when nothing on disk had changed,
+        or 'merged' when a per-frame merge ran (even if it found zero
+        both-sides frames). info is None for 'saved'; for 'merged' it is
+        {'conflict_path': path or None, 'taken_from_disk': int,
+        'kept_local': int, 'both_sides': int}.
     """
     global _segmentations_saved_version
     path = _seg_path(export_dir)
     with _store_write_lock:
-        version_being_saved = _segmentations_dirty_counter
+        with _dirty_lock:
+            version_being_saved = _segmentations_dirty_counter
+            frames_being_saved = set(_dirty_frames)
+
+        status = 'saved'
+        info = None
 
         on_disk_stat = _seg_file_identity(path)
         known_stat = _seg_disk_identity.get(path)
@@ -713,22 +918,40 @@ def save_segmentations(export_dir, data):
                 # conflict, just an updated stat to trust from here on.
                 _seg_disk_identity[path] = on_disk_stat
             else:
-                conflict_path = os.path.join(
-                    os.path.dirname(path), f'segmentations.conflict-{_ast_stamp()}.json')
-                _atomic_write_json(conflict_path, data, 1)
-                log(f"conflict: {path} changed on disk since this process last "
-                    f"saved it (an outside writer, most likely the expert-ID "
-                    f"importer); wrote the in-memory copy to {conflict_path} "
-                    f"instead of overwriting it")
-                return 'conflict', conflict_path
+                try:
+                    with open(path, 'rb') as f:
+                        disk_store = json.loads(f.read())
+                except (OSError, ValueError):
+                    disk_store = {}
+                merged, both_sides, taken, kept, _review_counts = _merge_store_with_disk(
+                    path, data, disk_store, frames_being_saved)
+                conflict_path = None
+                if both_sides:
+                    conflict_path = _conflict_episode_path(path)
+                    _append_conflict_entries(
+                        conflict_path, {name: disk_store[name] for name in both_sides})
+                    log(f"conflict: {path} changed on disk for {len(both_sides)} "
+                        f"frame(s) this process also edited "
+                        f"({', '.join(sorted(both_sides))}); kept the local edits "
+                        f"and wrote the outside versions to {conflict_path}")
+                else:
+                    _conflict_episode.pop(path, None)
+                data.clear()
+                data.update(merged)
+                status = 'merged'
+                info = {'conflict_path': conflict_path, 'taken_from_disk': taken,
+                        'kept_local': kept, 'both_sides': len(both_sides)}
 
         _atomic_write_json(path, data, 1)
         with open(path, 'rb') as f:
             written = f.read()
         _seg_disk_identity[path] = _seg_file_identity(path)
         _seg_disk_hash[path] = _hash_bytes(written)
-        _segmentations_saved_version = version_being_saved
-        return 'saved', None
+        _record_frame_hashes(path, data)
+        with _dirty_lock:
+            _segmentations_saved_version = version_being_saved
+            _dirty_frames.difference_update(frames_being_saved)
+        return status, info
 
 
 def save_manifest(export_dir, filenames):
@@ -845,11 +1068,12 @@ def flush_all():
     manifest, and the class map.
 
     Returns:
-        (status, conflict_path): save_segmentations()'s own return, passed
-        straight through, so a caller that flushed on the operator's behalf
-        (POST /api/flush, scrap/unscrap) can tell them their edit was
-        diverted rather than answering ok when it was not. ('saved', None)
-        when no project is open, since there is nothing to conflict with.
+        (status, info): save_segmentations()'s own return, passed straight
+        through, so a caller that flushed on the operator's behalf (POST
+        /api/flush, scrap/unscrap) can tell them whether the write merged in
+        an outside change rather than always answering a plain ok.
+        ('saved', None) when no project is open, since there is nothing to
+        reconcile with.
     """
     export_dir = session['export_dir']
     if not export_dir:
@@ -860,11 +1084,11 @@ def flush_all():
     # export_yolo.py (parity-guarded, not editable from this task), so it is
     # serialized here but is not itself an atomic replace.
     with _store_write_lock:
-        result, conflict_path = save_segmentations(export_dir, session['segmentations'])
+        status, info = save_segmentations(export_dir, session['segmentations'])
         save_manifest(export_dir, list(session['segmentations'].keys()))
         if session['class_map']:
             save_class_map(export_dir, session['class_map'])
-    return result, conflict_path
+    return status, info
 
 
 # ── Save on quit ─────────────────────────────────────────────────
@@ -876,7 +1100,7 @@ def flush_all():
 # How long the quit-time flush waits for the session write lock before giving
 # up. The GPU right-of-way sweep sends SIGTERM and the pipeline orchestrator's
 # runner.kill follows with SIGKILL 5s later (which cannot be caught), so this
-# must land comfortably inside that window.
+# must arrive comfortably inside that window.
 _QUIT_FLUSH_LOCK_TIMEOUT_S = 4.0
 
 # Set once flush_before_exit() has completed one attempt (saved, diverted to
@@ -1272,7 +1496,6 @@ def index():
 
 
 @app.route('/api/configure', methods=['POST'])
-@_dirty_on_success
 def configure():
     """Load sam_click_prompts.json for selected categories, build queue."""
     data = request.json or {}
@@ -1294,8 +1517,31 @@ def configure():
     elif not target_only_flag and 'Target species only' in categories:
         categories = [c for c in categories if c != 'Target species only']
 
-    session['input_dir'] = os.path.abspath(input_dir)
-    session['export_dir'] = os.path.abspath(export_dir)
+    input_dir_abs = os.path.abspath(input_dir)
+    export_dir_abs = os.path.abspath(export_dir)
+
+    # Flat input: routed_input/ids/sam_click_prompts.json + routed_input/raw/.
+    # Validated BEFORE any session state changes: a failed Open must never
+    # leave the session pointing at a new, invalid project, or a later save
+    # could write the OLD project's store into this unvalidated folder.
+    ids_path = os.path.join(input_dir_abs, 'ids', 'sam_click_prompts.json')
+    raw_dir = os.path.join(input_dir_abs, 'raw')
+    if not os.path.exists(ids_path):
+        return jsonify({'error': (
+            'No Step 4 output found for this project (no '
+            'ids/sam_click_prompts.json under ' + input_dir_abs + '). Run Step 4 '
+            '(routing) first, or open a project that has completed Step 4.'
+        )}), 404
+
+    # A dirty PREVIOUS session must be saved to its OWN folder before this
+    # request switches session['export_dir'] out from under it: once the
+    # switch below runs, a later save would otherwise reach only the NEW
+    # project's folder, never the one the unsaved edits actually belong to.
+    if _is_dirty() and session.get('export_dir'):
+        flush_all()
+
+    session['input_dir'] = input_dir_abs
+    session['export_dir'] = export_dir_abs
     session['categories'] = categories
     session['review_batch_size'] = batch_size
     session['shuffle'] = bool(data.get('shuffle', False))
@@ -1316,17 +1562,6 @@ def configure():
     # No-rescreening cross-project preview (2026-09-27): read-only, never
     # feeds segmentations/exports/the registry/undo/the dirty counter.
     session['prior_screening'] = load_prior_screening(session['export_dir'])
-
-    # Flat input: routed_input/ids/sam_click_prompts.json + routed_input/raw/
-    input_dir_abs = session['input_dir']
-    ids_path = os.path.join(input_dir_abs, 'ids', 'sam_click_prompts.json')
-    raw_dir = os.path.join(input_dir_abs, 'raw')
-    if not os.path.exists(ids_path):
-        return jsonify({'error': (
-            'No Step 4 output found for this project (no '
-            'ids/sam_click_prompts.json under ' + input_dir_abs + '). Run Step 4 '
-            '(routing) first, or open a project that has completed Step 4.'
-        )}), 404
 
     # Load existing segmentations (single flat read)
     existing = load_segmentations(session['export_dir'])
@@ -1468,11 +1703,27 @@ def configure():
 
 
 @app.route('/api/resume', methods=['POST'])
-@_dirty_on_success
 def resume():
     """Resume from existing segmentation output."""
     data = request.json
-    session['export_dir'] = os.path.abspath(data['export_dir'])
+    export_dir_abs = os.path.abspath(data['export_dir'])
+
+    # Validated BEFORE any session state changes: a failed Open must never
+    # leave the session pointing at a new, invalid project, or a later save
+    # could write the OLD project's store into this unvalidated folder.
+    if not os.path.isdir(export_dir_abs):
+        return jsonify({'error': 'Export directory not found'}), 404
+    # Load flat segmentations (Task 2 will extend this to handle year-nested
+    # legacy exports; for now load from the flat path only)
+    if not os.path.exists(_seg_path(export_dir_abs)):
+        return jsonify({'error': 'No segmentation data found'}), 404
+
+    # A dirty PREVIOUS session must be saved to its OWN folder before this
+    # request switches session['export_dir'] out from under it.
+    if _is_dirty() and session.get('export_dir'):
+        flush_all()
+
+    session['export_dir'] = export_dir_abs
     session['review_batch_size'] = data.get('review_batch_size', cfg.REVIEW_BATCH_SIZE)
     session['shuffle'] = bool(data.get('shuffle', False))
     _seed_reviewer(data.get('reviewer'))
@@ -1482,27 +1733,18 @@ def resume():
         _rc = _rc.split(',')
     session['contacts'] = [c.strip() for c in (_rc or []) if c and c.strip()]
 
-    export_dir = session['export_dir']
-    if not os.path.isdir(export_dir):
-        return jsonify({'error': 'Export directory not found'}), 404
-
     # Load class map
-    session['class_map'] = load_class_map(export_dir)
+    session['class_map'] = load_class_map(export_dir_abs)
 
     # No-rescreening cross-project preview (2026-09-27): read-only, never
     # feeds segmentations/exports/the registry/undo/the dirty counter.
-    session['prior_screening'] = load_prior_screening(export_dir)
+    session['prior_screening'] = load_prior_screening(export_dir_abs)
 
-    # Load flat segmentations (Task 2 will extend this to handle year-nested
-    # legacy exports; for now load from the flat path only)
-    if not os.path.exists(_seg_path(export_dir)):
-        return jsonify({'error': 'No segmentation data found'}), 404
-
-    session['segmentations'] = load_segmentations(export_dir)
+    session['segmentations'] = load_segmentations(export_dir_abs)
     total = len(session['segmentations'])
 
     # Backfill custom imports missing from the loaded store (normally none:
-    # imports are flushed into segmentations.json the moment they land).
+    # imports are flushed into segmentations.json the moment they arrive).
     _merge_custom_imports()
 
     session['phase'] = 'review'
@@ -1581,7 +1823,6 @@ def standalone_master_codes():
 
 
 @app.route('/api/standalone/start', methods=['POST'])
-@_dirty_on_success
 def standalone_start():
     """Create a standalone session (no project): session dir, labels, images, queue.
 
@@ -1818,12 +2059,16 @@ def _process_single_image(engine, item, export_dir):
         'exported': False,
     }
 
-    session['segmentations'][filename] = seg_dict
     # Runs on the background processing thread, outside any route's request
     # cycle, so the @_dirty_on_success decorator never sees it; mark it here
-    # directly (the one sprinkled call site, everywhere else routes through
-    # the decorator).
-    _mark_dirty()
+    # directly, by frame, the one sprinkled call site (everywhere else
+    # routes through the decorator, which reads the frame off the URL). Under
+    # _store_write_lock, the same lock a concurrent save's own merge holds,
+    # so this thread's write and that save's data.clear()/data.update() can
+    # never interleave.
+    with _store_write_lock:
+        session['segmentations'][filename] = seg_dict
+        _mark_dirty(filename=filename)
     render_segmentation_overlays(seg_dict, filename, export_dir, stage="auto")
 
     return filename, len(final_masks), len(points)
@@ -1857,9 +2102,17 @@ def _background_process_all():
                 log(f"SAM3 {idx + 1}/{total}: {fn} ({n_pts} pts -> {n_masks} masks)")
                 # Persist segmentations after EVERY image so an orchestrator
                 # restart (or crash, or ctrl+C) can't rewind progress.
-                # Cost: one ~KB JSON rewrite per image — cheap.
+                # Cost: one ~KB JSON rewrite per image — cheap. A disk-side
+                # change during a long batch (the expert-ID importer writing
+                # to an earlier frame) merges in rather than being refused;
+                # only a genuine both-sides frame is worth a log line here.
                 try:
-                    save_segmentations(export_dir, session['segmentations'])
+                    save_status, save_info = save_segmentations(
+                        export_dir, session['segmentations'])
+                    if save_status == 'merged' and save_info and save_info['both_sides']:
+                        log(f"conflict during background save after {fn}: kept "
+                            f"local edits, outside versions in "
+                            f"{save_info['conflict_path']}")
                 except Exception as flush_err:
                     log(f"flush failed after {fn}: {flush_err}")
             except Exception as e:
@@ -1925,15 +2178,30 @@ def process_status():
     })
 
 
-def _flush_result_fields(result, conflict_path):
-    """{'conflict': True, 'conflict_file': <basename>} when a save diverted
-    to a sibling file, else {}. Merged into a save route's own response dict
-    (which sets 'ok' itself, since a route may have real work to report even
-    when the flush underneath it diverted, e.g. an export that still wrote
-    its files) so the client always learns when its edit did not reach
-    segmentations.json."""
-    if result == 'conflict':
-        return {'conflict': True, 'conflict_file': os.path.basename(conflict_path)}
+def _flush_result_fields(status, info):
+    """Extra JSON fields describing a merge, for a save route's own response
+    dict (which sets 'ok' itself; a merge is always an ok save now, since an
+    operator's own edits are never blocked or thrown away, only reconciled
+    with whatever changed on disk):
+
+      plain 'saved', or a merge with nothing taken from disk and no
+        both-sides frame: {} (nothing worth telling the operator).
+      a merge that took frame(s) from disk with no both-sides frame:
+        {'merged': True, 'taken_from_disk': N}.
+      a merge with at least one both-sides frame (this process edited a
+        frame that also changed on disk): {'conflict': True,
+        'conflict_file': <name>, 'both_sides': N}.
+    """
+    if status != 'merged' or not info:
+        return {}
+    if info['both_sides']:
+        return {
+            'conflict': True,
+            'conflict_file': os.path.basename(info['conflict_path']),
+            'both_sides': info['both_sides'],
+        }
+    if info['taken_from_disk']:
+        return {'merged': True, 'taken_from_disk': info['taken_from_disk']}
     return {}
 
 
@@ -1948,17 +2216,17 @@ def force_flush():
     write, so a quiet pre-kill or trailing-timer call on a session nobody
     touched can never race the expert-ID importer for segmentations.json.
 
-    Answers {ok: false, conflict: true, conflict_file: <name>} rather than
-    ok: true when save_segmentations() diverted the write to a conflict
-    sibling (the file changed on disk since this process last saw it, most
-    likely the expert-ID importer): the operator is never told their edit
-    saved when it did not.
+    Always answers ok: true (an operator's edit is never refused or thrown
+    away); {'merged': True, 'taken_from_disk': N} when the save also pulled
+    in frame(s) changed only on disk, or {'conflict': True, 'conflict_file':
+    <name>, 'both_sides': N} when at least one frame was edited both here
+    and on disk, so the client can show the right message for each case.
     """
     if not _is_dirty():
         return jsonify({'ok': True})
-    result, conflict_path = flush_all()
-    out = {'ok': result != 'conflict'}
-    out.update(_flush_result_fields(result, conflict_path))
+    status, info = flush_all()
+    out = {'ok': True}
+    out.update(_flush_result_fields(status, info))
     return jsonify(out)
 
 
@@ -2454,7 +2722,7 @@ def refine_mask(filename):
     # click on a mask shouldn't cause it to eat an accepted neighbor just
     # because SAM3 regrew into that region. User asked for this explicitly.
     # Rejected masks are always ignored (they're "deleted" in the UI), including
-    # ones the client just deleted whose status PUT may not have landed yet.
+    # ones the client just deleted whose status PUT may not have arrived yet.
     new_binary, blockers = _clip_existing_to_neighbours(
         seg, mask_id, result['mask'], data.get('rejected_ids'))
     if new_binary is None:
@@ -2515,7 +2783,7 @@ def rebox_mask(filename):
 
     # Strict clip-to-neighbors (same rule as /refine and /add). Rejected
     # masks are ignored so you can redraw cleanly over a deleted one, including
-    # ones the client just deleted whose status PUT may not have landed yet.
+    # ones the client just deleted whose status PUT may not have arrived yet.
     new_binary, blockers = _clip_existing_to_neighbours(
         seg, mask_id, result['mask'], data.get('rejected_ids'))
     if new_binary is None:
@@ -3117,45 +3385,114 @@ def _merge_imported_review_fields(current_masks, disk_masks):
 
 
 @app.route('/api/reload_segmentations', methods=['POST'])
-@_dirty_on_success
 def reload_segmentations():
-    """Re-read the current image's segmentations.json from disk and MERGE IN the
-    imported review/expert fields (reviews[], expert_id, species-when-accepted)
-    onto the in-memory masks by review_uid/id — WITHOUT clobbering the
-    operator's unsaved accept/reject or geometry edits.
+    """Reconcile the WHOLE session against the current segmentations.json on
+    disk (the same per-frame merge save_segmentations() runs on a save that
+    finds the file changed), not a one-frame adopt.
 
-    Lets imported expert/pending colours appear without restarting the app:
-    after the importer (or a teammate) writes accepted IDs into the on-disk
-    segmentations.json, the operator hits "Reload IDs" and the freshly-confirmed
-    masks light up green / pending-amber in place.
+    A one-frame adopt (read disk, merge review fields into just the
+    requested frame, leave every other frame's tracked identity untouched)
+    let an operator's next save silently overwrite a DIFFERENT frame's
+    outside change: an expert ID the importer wrote to frame B while this
+    operator was reviewing frame A, reloaded on A, would still be lost by
+    A's own later save, since this route never looked at B. Every frame is
+    reconciled here, session['segmentations'] is updated to the merged
+    result, and this process's tracked identity/hash (whole-file AND
+    per-frame) is refreshed to the file just read, exactly like a fresh
+    load, so the next save starts from a state that has actually seen every
+    frame's current disk content.
+
+    The response still reports the ONE requested frame's own review-field
+    counts and refreshed masks, since that is the frame the operator is
+    looking at and the client repaints from this response. Lets imported
+    expert/pending colours appear without restarting the app: after the
+    importer (or a teammate) writes accepted IDs into the on-disk
+    segmentations.json, the operator hits "Reload IDs" and the
+    freshly-confirmed masks light up green / pending-amber in place.
+
+    The merge here is IMMEDIATELY followed by a real save_segmentations()
+    call, not adopted as a read-only bookkeeping update: a save is what
+    actually advances _dirty_frames/_segmentations_saved_version and the
+    tracked identity, all keyed off a WRITE having happened. An earlier
+    version of this route recorded those as reconciled from the read alone;
+    a later save (after yet another outside write to a THIRD frame) then
+    trusted that stale bookkeeping and took a frame this route had kept
+    local straight from disk, silently discarding the edit. The save's own
+    both-sides verdict is what the response below reports, not this
+    function's own (otherwise-redundant) merge stats. A truncated or
+    otherwise invalid on-disk file (a reader catching the importer
+    mid-write) is refused outright: session['segmentations'] and every
+    tracked identity are left exactly as they were, the same guarantee
+    save_segmentations() gives a writer that finds a broken file.
     """
     data = request.json or {}
     filename = data.get('filename')
     if not filename:
         return jsonify({'error': 'filename required'}), 400
 
-    seg = _find_segmentation(filename)
-    if not seg:
-        return jsonify({'error': 'not found'}), 404
-
     export_dir = session.get('export_dir')
     if not export_dir:
         return jsonify({'error': 'no export dir configured'}), 400
 
-    disk_segs = load_segmentations(export_dir)
-    disk_seg = disk_segs.get(filename)
-    if not disk_seg:
+    path = _seg_path(export_dir)
+    if not os.path.exists(path):
         return jsonify({'error': 'no on-disk segmentation for this frame'}), 404
 
-    merged_count, expert_count = _merge_imported_review_fields(
-        seg.get('masks', []), disk_seg.get('masks', []))
+    # The whole read-merge-save sequence runs under _store_write_lock, the
+    # same lock every mutating route and save_segmentations() itself hold,
+    # so this reconciliation can never interleave with a concurrent edit or
+    # a concurrent save.
+    with _store_write_lock:
+        with open(path, 'rb') as f:
+            raw = f.read()
+        try:
+            disk_store = json.loads(raw)
+        except ValueError as e:
+            log(f"reload: {path} is not valid JSON right now ({e}); nothing was reloaded")
+            return jsonify({'error': (
+                'segmentations.json could not be read right now (it may be mid-write); '
+                'nothing was reloaded, try again in a moment'
+            )}), 409
+        if filename not in disk_store and filename not in session['segmentations']:
+            return jsonify({'error': 'no on-disk segmentation for this frame'}), 404
 
-    return jsonify({
-        'ok': True,
-        'merged': merged_count,
-        'expert': expert_count,
-        'masks': wire_masks(seg.get('masks', [])),
-    })
+        with _dirty_lock:
+            frames_being_reconciled = set(_dirty_frames)
+
+        merged, _both_sides, _taken, _kept, review_counts = _merge_store_with_disk(
+            path, session['segmentations'], disk_store, frames_being_reconciled)
+        session['segmentations'].clear()
+        session['segmentations'].update(merged)
+
+        save_status, save_info = save_segmentations(export_dir, session['segmentations'])
+
+        seg = session['segmentations'].get(filename, {})
+        if filename in review_counts:
+            merged_count, expert_count = review_counts[filename]
+        else:
+            # Not a dirty frame: taken wholesale from disk, so every review/
+            # expert field it now carries is "new" from this session's view.
+            final_masks = seg.get('masks', [])
+            merged_count = len(final_masks)
+            expert_count = sum(
+                1 for m in final_masks
+                if isinstance(m.get('expert_id'), dict) and m['expert_id'].get('mode') == 'EXPERT')
+
+        out = {
+            'ok': True,
+            'merged': merged_count,
+            'expert': expert_count,
+            'masks': wire_masks(seg.get('masks', [])),
+        }
+        if save_status == 'merged' and save_info:
+            if save_info['both_sides']:
+                out['conflict'] = True
+                out['conflict_file'] = os.path.basename(save_info['conflict_path'])
+                out['both_sides'] = save_info['both_sides']
+            elif save_info['taken_from_disk']:
+                out['store_merged'] = True
+                out['taken_from_disk'] = save_info['taken_from_disk']
+        return jsonify(out)
 
 
 def _orchestrator_url():
@@ -3389,34 +3726,46 @@ def exemplar_scan(filename):
 
 
 @app.route('/api/image/<path:filename>/scrap', methods=['POST'])
-@_dirty_on_success
 def scrap_segmentation(filename):
     """Mark a frame as scrapped — excluded from review and export.
     Mirrors the step 4 scrap API so the two apps behave the same way.
     """
-    seg = _find_segmentation(filename)
-    if not seg:
-        return jsonify({'error': 'not found'}), 404
-    seg['scrapped'] = True
-    seg['reviewed'] = True
-    result, conflict_path = flush_all()
-    _build_review_list()
-    out = {'ok': result != 'conflict', 'remaining': len(session['review_files'])}
-    out.update(_flush_result_fields(result, conflict_path))
+    # The whole mutate-mark-flush sequence runs under _store_write_lock (the
+    # same lock save_segmentations()'s own merge-and-write holds), so a
+    # concurrent save can never see this frame half-edited or replace the
+    # store out from under this route: see _dirty_on_success for the race
+    # this protects against, which applies here too since this route flushes
+    # itself instead of going through that decorator.
+    with _store_write_lock:
+        seg = _find_segmentation(filename)
+        if not seg:
+            return jsonify({'error': 'not found'}), 404
+        seg['scrapped'] = True
+        seg['reviewed'] = True
+        # Marked here, before this route's own flush_all(), not left to
+        # @_dirty_on_success: that decorator fires AFTER the route returns,
+        # which would mark the session dirty again right after this call
+        # just saved it.
+        _mark_dirty(filename=filename)
+        status, info = flush_all()
+        _build_review_list()
+    out = {'ok': True, 'remaining': len(session['review_files'])}
+    out.update(_flush_result_fields(status, info))
     return jsonify(out)
 
 
 @app.route('/api/image/<path:filename>/unscrap', methods=['POST'])
-@_dirty_on_success
 def unscrap_segmentation(filename):
-    seg = _find_segmentation(filename)
-    if not seg:
-        return jsonify({'error': 'not found'}), 404
-    seg['scrapped'] = False
-    result, conflict_path = flush_all()
-    _build_review_list()
-    out = {'ok': result != 'conflict', 'remaining': len(session['review_files'])}
-    out.update(_flush_result_fields(result, conflict_path))
+    with _store_write_lock:
+        seg = _find_segmentation(filename)
+        if not seg:
+            return jsonify({'error': 'not found'}), 404
+        seg['scrapped'] = False
+        _mark_dirty(filename=filename)
+        status, info = flush_all()
+        _build_review_list()
+    out = {'ok': True, 'remaining': len(session['review_files'])}
+    out.update(_flush_result_fields(status, info))
     return jsonify(out)
 
 
@@ -3424,7 +3773,7 @@ def _blocking_masks(masks, rejected_ids=None):
     """Masks that a new or edited mask must clip against: the live (non-rejected)
     ones, minus any the client has just deleted (rejected_ids). The client sends
     its authoritative deleted set so a fast delete -> add/refine is NOT clipped by
-    a mask whose 'rejected' status PUT has not landed yet. Flask runs threaded, so
+    a mask whose 'rejected' status PUT has not arrived yet. Flask runs threaded, so
     the reject PUT and the add/refine POST can race; without this, the just-deleted
     mask would intermittently block a new overlapping mask in its location.
     Backend status='rejected' is honored too.
@@ -3816,7 +4165,6 @@ def _export_review_bundle(to_export, batch_files):
 
 
 @app.route('/api/export_batch', methods=['POST'])
-@_dirty_on_success
 def do_export():
     """Export current batch to YOLO Segmentation format."""
     batch_size = session['review_batch_size']
@@ -3846,13 +4194,20 @@ def do_export():
     # expert). Runs before flush_all so in-place relabels persist.
     review_stats = _export_review_bundle(to_export, batch_files)
 
-    # Mark exported and generate reviewed overlay images
-    for fn in batch_files:
-        seg = _find_segmentation(fn)
-        if seg:
-            seg['exported'] = True
-            _stamp_provenance(seg, fn)
-            render_segmentation_overlays(seg, fn, export_dir, stage="reviewed")
+    # Mark exported and generate reviewed overlay images. Under
+    # _store_write_lock (the same lock save_segmentations()'s own merge
+    # holds): a concurrent save must not replace session['segmentations']
+    # while this loop is mutating masks in it, or the mutation would apply to
+    # a dict no longer reachable afterward (see _dirty_on_success). Export's
+    # own file I/O above and below this loop does not touch
+    # session['segmentations'] and stays outside the lock.
+    with _store_write_lock:
+        for fn in batch_files:
+            seg = _find_segmentation(fn)
+            if seg:
+                seg['exported'] = True
+                _stamp_provenance(seg, fn)
+                render_segmentation_overlays(seg, fn, export_dir, stage="reviewed")
 
     # Build per-frame manifest entries (one row per routed frame in this batch)
     batch_name = _next_batch_name(export_dir)
@@ -3898,7 +4253,15 @@ def do_export():
     write_export_manifest(export_dir, manifest_entries)
     reconcile_export(export_dir, manifest_entries)
 
-    flush_all()
+    # Marked here, before this route's own flush_all(), not left to
+    # @_dirty_on_success: that decorator fires AFTER the route returns, which
+    # would mark the session dirty again right after this call just saved it.
+    # Under the same _store_write_lock flush_all()'s own save takes, so the
+    # mark and the write it produces are atomic with any concurrent save.
+    with _store_write_lock:
+        for fn in batch_files:
+            _mark_dirty(filename=fn)
+        flush_all()
 
     # Rebuild review list under the removed-frames model: exported + scrapped
     # frames drop out, review_offset resets to 0. The rebuilt list IS the next
