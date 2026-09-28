@@ -14,9 +14,12 @@ no polygon/image/mask geometry sidecar directories.
 
 import csv
 import os
+import re
+import shutil
 from contextlib import contextmanager
+from datetime import datetime
 
-from .clock import now_ast
+from .clock import now_ast, AST
 from . import uid as _uid
 from . import filename_parse
 
@@ -31,7 +34,28 @@ REGISTRY_FIELDS = [
     'uid', 'source_image', 'basename', 'species', 'category', 'source_type',
     'review', 'expert_mode', 'status', 'project_id', 'project_name', 'site',
     'year', 'transect', 'frame', 'created_at', 'updated_at',
+    'reviewer',
 ]
+
+# project_id shapes minted by the test suites (fixture residue). A row whose
+# project_id matches one of these AND has no live run_* project behind it is
+# test residue that purge_test_rows() may remove.
+TEST_FIXTURE_PATTERNS = (
+    r'^tmp$', r'^exp_', r'^e2e_', r'^combined_smoke_', r'^label_guard_',
+    r'^expert_lock_test_',
+)
+_TEST_FIXTURE_RE = re.compile('|'.join(TEST_FIXTURE_PATTERNS))
+
+
+def is_test_residue_project_id(project_id):
+    """True when project_id has the shape of a test-fixture project."""
+    return bool(_TEST_FIXTURE_RE.search((project_id or '').strip()))
+
+
+def normalize_reviewer(value):
+    """Reviewer initials as stored everywhere: stripped, uppercased, at most
+    8 characters. Blank in, blank out (nothing is inferred)."""
+    return str(value or '').strip().upper()[:8]
 
 
 def default_registry_dir():
@@ -42,12 +66,17 @@ def default_registry_dir():
     return os.path.join(module_root, 'inprocess', '_mask_registry')
 
 
-def build_registry_record(filename, mask, project_id, project_name, parsed=None):
+def build_registry_record(filename, mask, project_id, project_name, parsed=None,
+                          reviewer=''):
     """Turn an accepted mask into a canonical REGISTRY_FIELDS-shaped record.
 
     Mints the content-stable uid via uid.mask_uid(filename, mask, parsed) and
     returns None when that uid is not safe to use (so callers can skip the
     mask rather than write a bad row). Pure: no I/O, no registry access.
+
+    reviewer: initials of the person who reviewed the mask. The mask's own
+    'reviewer' value wins; `reviewer` is the caller's fallback (the session
+    reviewer at export or edit time). Blank stays blank.
     """
     u = _uid.mask_uid(filename, mask, parsed)
     if not _uid.is_safe_uid(u):
@@ -73,6 +102,7 @@ def build_registry_record(filename, mask, project_id, project_name, parsed=None)
         'year': p.get('year'),
         'transect': p.get('transect'),
         'frame': p.get('frame'),
+        'reviewer': normalize_reviewer(mask.get('reviewer') or reviewer),
     }
 
 
@@ -129,6 +159,13 @@ class MaskRegistry:
             for row in csv.DictReader(f):
                 uid = (row.get('uid') or '').strip()
                 if uid:
+                    # Manifests written before a column existed (e.g. the
+                    # 'reviewer' column) read back with that key absent;
+                    # fill '' so every record carries every field and the
+                    # next _write_all emits the current header.
+                    for k in REGISTRY_FIELDS:
+                        if row.get(k) is None:
+                            row[k] = ''
                     out[uid] = row
         return out
 
@@ -160,6 +197,10 @@ class MaskRegistry:
             if uid in records:
                 merged = dict(records[uid])
                 merged.update({k: v for k, v in record.items() if v not in (None,)})
+                # A blank reviewer on an update never erases initials that
+                # were already recorded for this mask.
+                if not (record.get('reviewer') or '').strip():
+                    merged['reviewer'] = records[uid].get('reviewer', '') or ''
                 merged['updated_at'] = now
                 merged.setdefault('created_at', records[uid].get('created_at', now))
             else:
@@ -169,3 +210,46 @@ class MaskRegistry:
             records[uid] = merged
             self._write_all(records)
         return merged
+
+    def purge_test_rows(self, known_project_ids):
+        """Remove test-fixture residue: rows whose project_id matches
+        TEST_FIXTURE_PATTERNS and is not in known_project_ids (the ids of the
+        live run_* projects). The residue is counted first, under the lock;
+        when nothing would be removed no backup is written. Otherwise the
+        manifest is copied to manifest.csv.bak-<YYYYMMDD-HHMMSS> (AST) before
+        the rewrite, with a -2, -3, ... suffix when that name already exists,
+        so a retry never overwrites the pre-purge copy. Returns
+        (removed, backup_path); (0, '') when nothing was removed or there is
+        no manifest yet.
+        """
+        known = {str(p).strip() for p in (known_project_ids or ()) if str(p).strip()}
+        with self._locked():
+            if not os.path.exists(self.manifest_path):
+                return 0, ''
+            records = self.load()
+            keep = {}
+            removed = 0
+            for uid, rec in records.items():
+                pid = (rec.get('project_id') or '').strip()
+                if is_test_residue_project_id(pid) and pid not in known:
+                    removed += 1
+                    continue
+                keep[uid] = rec
+            if not removed:
+                return 0, ''
+            backup = self._unused_backup_path()
+            shutil.copy2(self.manifest_path, backup)
+            self._write_all(keep)
+        return removed, backup
+
+    def _unused_backup_path(self):
+        """manifest.csv.bak-<YYYYMMDD-HHMMSS> (AST), then -2, -3, ... until
+        the name is free. Called under the lock."""
+        stamp = datetime.now(AST).strftime('%Y%m%d-%H%M%S')
+        base = self.manifest_path + '.bak-' + stamp
+        candidate = base
+        n = 1
+        while os.path.exists(candidate):
+            n += 1
+            candidate = f"{base}-{n}"
+        return candidate

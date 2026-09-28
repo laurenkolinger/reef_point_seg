@@ -3,7 +3,14 @@
    Remaps (show the active log, compose a new timestamped one), and Locations +
    Recode (read-only paths, one guarded re-run). Thin transport over the
    /labels/api/* routes; the safety posture lives in labels_io on the server.
-   No emoji, no em dashes. */
+
+   The vocabulary table sorts on its column heads, filters as you type, and
+   remembers the search, the category and the sort per browser under the
+   vega.labels. prefix. It has two empty lines, chosen on the vocabulary's
+   total rather than the filtered rows: no labels at all, or no label that
+   matches the filters (a remembered search can open the page onto the
+   second). Names are the primary cell and codes ride beside them as chips
+   (design spec section 6). No emoji, no em dashes. */
 (function () {
   'use strict';
 
@@ -22,6 +29,15 @@
   }
   function clear(node) { while (node && node.firstChild) node.removeChild(node.firstChild); }
 
+  // House format for every timestamp: 24 hour, no locale surprises. The box
+  // runs on AST, so the local clock is already the reported zone.
+  function stamp24(d) {
+    var t = d || new Date();
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return t.getFullYear() + '-' + p(t.getMonth() + 1) + '-' + p(t.getDate()) +
+           ' ' + p(t.getHours()) + ':' + p(t.getMinutes());
+  }
+
   function api(path, opts) {
     return fetch(BASE + path, opts).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (data) {
@@ -35,6 +51,96 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body || {})
     });
+  }
+
+  // ── remembered choices ─────────────────────────────────
+  // Every key sits under one prefix so a browser's storage can be read or
+  // cleared per window (registry window design, section 1). Storage can be
+  // absent or refused (a private window, a blocked site), so both helpers
+  // swallow the failure and the page runs without a memory.
+  var PREF_PREFIX = 'vega.labels.';
+
+  // The remembered value for a key, or null when there is none or storage
+  // is unavailable.
+  function readPref(key) {
+    try {
+      return window.localStorage.getItem(PREF_PREFIX + key);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Remember a value for a key; an empty value forgets the key.
+  function writePref(key, value) {
+    try {
+      if (value == null || value === '') window.localStorage.removeItem(PREF_PREFIX + key);
+      else window.localStorage.setItem(PREF_PREFIX + key, String(value));
+    } catch (e) {
+      // The choice is simply not remembered this time.
+    }
+  }
+
+  // ── names and codes ────────────────────────────────────
+  // Categories whose names are never a taxon: a coral condition, a substrate,
+  // a survey artefact. Any other category (Coral, Sponge, Gorgonian,
+  // Macroalgae, Cyanobacteria, Zoanthid, Calcareous, or one typed later) may
+  // hold a binomial, and then the name's shape decides.
+  var NON_TAXON_CATEGORIES = ['coral condition', 'non-living', 'other',
+                              'other, living', 'turf', 'dca'];
+
+  // Common-name heads this vocabulary uses, in both positions. "Ball sponge",
+  // "Sea fan", "Bleached coral" and "Coral spp." are names of a kind of thing,
+  // not binomials, so they stay upright; "Agaricia agaricites" and "Agaricia
+  // spp." are taxa and read in italics (design spec section 6).
+  var COMMON_SECOND = ['sponge', 'coral', 'algae', 'fan', 'plume', 'rod',
+                       'whip', 'tape', 'line', 'plague', 'cyanobacteria',
+                       'disease', 'band', 'complex', 'community', 'shadow'];
+  var COMMON_FIRST = ['coral', 'juvenile', 'branching', 'sea', 'other',
+                      'encrusting', 'erect', 'dead', 'diseased', 'bleached',
+                      'crustose', 'filamentous', 'epilithic', 'stony',
+                      'transect', 'weighted', 'white', 'black', 'yellow',
+                      'dark', 'ball', 'barrel', 'boring', 'rope', 'tube'];
+
+  // True when a name is a species binomial or a genus with "spp." after it,
+  // in a category that can hold a taxon. Returns false for a one-word name,
+  // a name of three words or more, any name whose first or second word is
+  // one of the common-name heads above, and every name in a non-taxon
+  // category whatever its shape.
+  function isScientific(name, category) {
+    var cat = String(category || '').trim().toLowerCase();
+    if (NON_TAXON_CATEGORIES.indexOf(cat) !== -1) return false;
+    var parts = String(name || '').trim().split(/\s+/);
+    if (parts.length !== 2) return false;
+    var first = parts[0];
+    var second = parts[1];
+    if (!/^[A-Z][a-z]{2,}$/.test(first)) return false;
+    if (COMMON_FIRST.indexOf(first.toLowerCase()) !== -1) return false;
+    if (/^(spp\.|sp\.)$/.test(second)) return true;
+    if (!/^[a-z]{3,}$/.test(second)) return false;
+    return COMMON_SECOND.indexOf(second) === -1;
+  }
+
+  // The name cell: a binomial in italics with "spp." left upright beside it.
+  function nameNode(name, category) {
+    var wrap = el('span', 'lb-name');
+    if (!isScientific(name, category)) {
+      wrap.textContent = name || '';
+      return wrap;
+    }
+    var parts = String(name).trim().split(/\s+/);
+    if (/^(spp\.|sp\.)$/.test(parts[1])) {
+      wrap.appendChild(el('i', 'sci', parts[0]));
+      wrap.appendChild(document.createTextNode(' ' + parts[1]));
+    } else {
+      wrap.appendChild(el('i', 'sci', name));
+    }
+    return wrap;
+  }
+
+  // A code as a chip: Space Mono on a hairline ring, beside the name it
+  // stands for. The lock on codes is explained once, on the Code column head.
+  function codeChip(code) {
+    return el('span', 'lb-code', code || '');
   }
 
   function baseName(p) {
@@ -66,44 +172,57 @@
   var LOCATIONS = null;
   var nextComposeId = 1;
 
+  // The sort of the vocabulary table: a column and a direction, or nothing
+  // for the file order (the order of the canonical CSV).
+  var SORT_COLUMNS = ['name', 'code', 'category'];
+  var SORT = { col: '', dir: '' };
+
+  // The category remembered from the last visit, applied once the category
+  // list has loaded (the select has no options to pick from before then).
+  var pendingCategory = readPref('category') || '';
+
   // ====================================================================
   // Section 1: Vocabulary
   // ====================================================================
-  function loadVocabulary() {
+  function loadVocabulary(then) {
     api('/api/vocabulary').then(function (res) {
       if (!res.ok) {
         toast('error', 'Could not load vocabulary', res.data.error || ('HTTP ' + res.status));
+        if (then) then();
         return;
       }
       VOCAB.rows = res.data.rows || [];
       VOCAB.categories = res.data.categories || [];
-      renderPaths(res.data);
       renderCategoryFilter();
       renderCategoryDatalist();
       renderVocabTable();
+      if (then) then();
     });
   }
 
-  function renderPaths(data) {
-    var box = $('vocab-paths');
-    clear(box);
-    function row(label, val) {
-      var r = el('div', 'lb-path-row');
-      r.appendChild(el('span', null, label + ' '));
-      r.appendChild(el('b', null, val || '(not set)'));
-      box.appendChild(r);
+  // The vocabulary row for a code, or null when the vocabulary has none.
+  function labelRow(code) {
+    if (!code) return null;
+    for (var i = 0; i < VOCAB.rows.length; i++) {
+      if (VOCAB.rows[i].code === code) return VOCAB.rows[i];
     }
-    row('Canonical', data.master_codes_csv);
-    if (data.duplicate_master_codes) row('Mirror', data.duplicate_master_codes);
+    return null;
   }
 
   function renderCategoryFilter() {
     var sel = $('vocab-cat');
-    var current = sel.value;
+    var wanted = sel.value || pendingCategory;
+    pendingCategory = '';
     clear(sel);
     sel.appendChild(new Option('All categories', ''));
     VOCAB.categories.forEach(function (c) { sel.appendChild(new Option(c, c)); });
-    sel.value = current || '';
+    sel.value = wanted;
+    // A remembered category that no longer exists is forgotten rather than
+    // left to filter every row away.
+    if (sel.value !== wanted) {
+      sel.value = '';
+      writePref('category', '');
+    }
   }
 
   function renderCategoryDatalist() {
@@ -129,19 +248,109 @@
     });
   }
 
+  function filtersActive() {
+    return !!(($('vocab-search').value || '').trim()) || !!$('vocab-cat').value;
+  }
+
+  function onSearchInput() {
+    writePref('search', ($('vocab-search').value || '').trim());
+    renderVocabTable();
+  }
+
+  function onCategoryChange() {
+    writePref('category', $('vocab-cat').value || '');
+    renderVocabTable();
+  }
+
+  // Clear filters clears the search and the category and forgets both. The
+  // sort stays: it is an order, not a filter.
+  function clearVocabFilters() {
+    $('vocab-search').value = '';
+    $('vocab-cat').value = '';
+    writePref('search', '');
+    writePref('category', '');
+    renderVocabTable();
+    $('vocab-search').focus();
+  }
+
+  // Text comparison that ignores case and accents, so "agaricia" and
+  // "Agaricia" sort together.
+  function compareText(a, b) {
+    return String(a || '').localeCompare(String(b || ''), undefined, { sensitivity: 'base' });
+  }
+
+  // A sorted copy of the rows under the current sort; the file order when
+  // no column is chosen. Ties on name or category fall back to the code.
+  function sortedRows(rows) {
+    if (!SORT.col) return rows.slice();
+    var col = SORT.col;
+    var sign = SORT.dir === 'desc' ? -1 : 1;
+    return rows.slice().sort(function (a, b) {
+      var c = compareText(a[col], b[col]);
+      if (c === 0 && col !== 'code') c = compareText(a.code, b.code);
+      return c * sign;
+    });
+  }
+
+  // Restore the remembered sort ("name:asc") when it names a real column.
+  function restoreSort() {
+    var parts = (readPref('sort') || '').split(':');
+    if (SORT_COLUMNS.indexOf(parts[0]) !== -1 && (parts[1] === 'asc' || parts[1] === 'desc')) {
+      SORT = { col: parts[0], dir: parts[1] };
+    }
+  }
+
+  // One press sorts a column ascending, a second reverses it, a third
+  // returns to the file order.
+  function cycleSort(col) {
+    if (SORT.col !== col) SORT = { col: col, dir: 'asc' };
+    else if (SORT.dir === 'asc') SORT = { col: col, dir: 'desc' };
+    else SORT = { col: '', dir: '' };
+    writePref('sort', SORT.col ? SORT.col + ':' + SORT.dir : '');
+    renderVocabTable();
+  }
+
+  // Mark the active head with aria-sort; the stylesheet draws the arrow.
+  function paintSortHeads() {
+    var heads = document.querySelectorAll('#vocab-table th[data-sort]');
+    Array.prototype.forEach.call(heads, function (th) {
+      if (th.dataset.sort === SORT.col) {
+        th.setAttribute('aria-sort', SORT.dir === 'asc' ? 'ascending' : 'descending');
+      } else {
+        th.removeAttribute('aria-sort');
+      }
+    });
+  }
+
+  // Optional control: hidden when absent rather than throwing.
+  function setHidden(id, on) {
+    var node = $(id);
+    if (node) node.hidden = on;
+  }
+
   function renderVocabTable() {
-    var rows = filteredVocab();
+    var rows = sortedRows(filteredVocab());
+    setHidden('vocab-clear', !filtersActive());
+    paintSortHeads();
     var tbody = $('vocab-tbody');
     clear(tbody);
-    show($('vocab-table'), rows.length > 0);
-    show($('vocab-empty'), rows.length === 0);
+    var total = VOCAB.rows.length;
+    var shown = rows.length;
+    show($('vocab-table'), shown > 0);
+    // Two empty lines, never both. The mint line is for a vocabulary with
+    // no labels; the filter line says what hid the rows and how to get them
+    // back, and carries the total so the count line and it agree.
+    show($('vocab-empty'), total === 0);
+    show($('vocab-nomatch'), total > 0 && shown === 0);
+    // Guarded: an orchestrator that compiled an older template at startup
+    // serves this script fresh, and the render must not throw on it.
+    var totalNode = $('vocab-nomatch-total');
+    if (totalNode) totalNode.textContent = String(total);
 
     rows.forEach(function (r) {
       tbody.appendChild(makeVocabRow(r));
     });
 
-    var total = VOCAB.rows.length;
-    var shown = rows.length;
     $('vocab-count').textContent =
       shown === total
         ? (total + ' label' + (total === 1 ? '' : 's'))
@@ -152,31 +361,28 @@
     var tr = el('tr');
     tr.dataset.code = r.code;
 
-    // Code (locked)
-    var tdCode = el('td');
-    var codeWrap = el('span', 'lb-code');
-    codeWrap.appendChild(el('span', null, r.code));
-    var lock = el('span', 'lb-lock', 'locked');
-    lock.title = 'Codes are referenced across every project and dataset, so a '
-      + 'code cannot be changed or deleted. Only its name and category are editable.';
-    codeWrap.appendChild(lock);
-    tdCode.appendChild(codeWrap);
+    // Name, the primary cell.
+    var tdName = el('td', 'col-name');
+    tdName.appendChild(nameNode(r.name, r.category));
+    tr.appendChild(tdName);
+
+    // Code, as a chip. The lock is stated once, on the Code column head.
+    var tdCode = el('td', 'col-code');
+    tdCode.appendChild(codeChip(r.code));
     tr.appendChild(tdCode);
 
     // Category
-    var tdCat = el('td');
-    var tag = el('span', 'lb-cat-tag', r.category || '');
-    tdCat.appendChild(tag);
+    var tdCat = el('td', 'col-category');
+    tdCat.appendChild(el('span', 'lb-cat-tag', r.category || ''));
     tr.appendChild(tdCat);
-
-    // Name
-    tr.appendChild(el('td', null, r.name || ''));
 
     // Edit
     var tdEdit = el('td', 'col-edit');
-    var editBtn = el('button', 'lb-btn lb-btn-ghost', 'Edit');
+    var editBtn = el('button', 'btn btn-mini', 'Edit');
     editBtn.type = 'button';
-    editBtn.title = 'Edit the name and category of ' + r.code;
+    // The full name with its code, so the tooltip never shows a bare code.
+    editBtn.title = 'Edit the name and category of '
+      + (r.name ? r.name + ' (' + r.code + ')' : r.code) + '.';
     editBtn.addEventListener('click', function () { startEdit(tr, r); });
     tdEdit.appendChild(editBtn);
     tr.appendChild(tdEdit);
@@ -189,67 +395,54 @@
     clear(tr);
     tr.dataset.code = r.code;
 
-    // locked code (unchanged)
-    var tdCode = el('td');
-    var codeWrap = el('span', 'lb-code');
-    codeWrap.appendChild(el('span', null, r.code));
-    var lock = el('span', 'lb-lock', 'locked');
-    lock.title = 'This code is immutable. Editing changes its name and category only.';
-    codeWrap.appendChild(lock);
-    tdCode.appendChild(codeWrap);
+    // name input, first because the name is the primary cell
+    var tdName = el('td', 'col-name');
+    var nameIn = el('input');
+    nameIn.type = 'text';
+    nameIn.value = r.name || '';
+    nameIn.setAttribute('aria-label', 'Name for ' + r.code);
+    nameIn.title = 'Write the full name this code stands for.';
+    tdName.appendChild(nameIn);
+    // The save error sits under the name input, inside this row. A separate
+    // row would take an nth-child slot and flip the stripes beneath it.
+    var errLine = el('div', 'lb-inline-error');
+    errLine.setAttribute('role', 'alert');
+    errLine.hidden = true;
+    tdName.appendChild(errLine);
+    tr.appendChild(tdName);
+
+    // The code itself never changes; only the name and category do.
+    var tdCode = el('td', 'col-code');
+    tdCode.appendChild(codeChip(r.code));
     tr.appendChild(tdCode);
 
     // category input
-    var tdCat = el('td');
+    var tdCat = el('td', 'col-category');
     var catIn = el('input');
     catIn.type = 'text';
     catIn.value = r.category || '';
     catIn.setAttribute('list', 'cat-list');
-    catIn.title = 'Category (required, non-empty)';
+    catIn.setAttribute('aria-label', 'Category for ' + r.code);
+    catIn.title = 'Reuse one of the categories already in the list, or type a new one.';
     tdCat.appendChild(catIn);
     tr.appendChild(tdCat);
-
-    // name input
-    var tdName = el('td');
-    var nameIn = el('input');
-    nameIn.type = 'text';
-    nameIn.value = r.name || '';
-    nameIn.title = 'Name (required, non-empty)';
-    tdName.appendChild(nameIn);
-    tr.appendChild(tdName);
 
     // actions
     var tdAct = el('td', 'col-edit');
     var actWrap = el('div', 'lb-row-actions');
-    var saveBtn = el('button', 'lb-btn lb-btn-accent', 'Save');
+    var saveBtn = el('button', 'btn btn-mini', 'Save');
     saveBtn.type = 'button';
-    saveBtn.title = 'Back up the canonical file, write the change, and mirror the duplicate';
-    var cancelBtn = el('button', 'lb-btn', 'Cancel');
+    saveBtn.title = 'VICARIUS backs up the canonical file, writes the change, and mirrors the copy every project reads.';
+    var cancelBtn = el('button', 'btn btn-mini', 'Cancel');
     cancelBtn.type = 'button';
-    cancelBtn.title = 'Discard this edit';
     actWrap.appendChild(saveBtn);
     actWrap.appendChild(cancelBtn);
     tdAct.appendChild(actWrap);
     tr.appendChild(tdAct);
 
-    // confirm note + error row beneath
-    var noteTr = el('tr', 'lb-row-confirm');
-    var noteTd = el('td');
-    noteTd.colSpan = 4;
-    var note = el('p', 'note',
-      'Saving backs up the canonical file and mirrors the duplicate so the two '
-      + 'stay byte-identical.');
-    noteTd.appendChild(note);
-    var errP = el('p', 'lb-inline-error');
-    errP.setAttribute('role', 'alert');
-    errP.hidden = true;
-    noteTd.appendChild(errP);
-    noteTr.appendChild(noteTd);
-    tr.parentNode.insertBefore(noteTr, tr.nextSibling);
-
     cancelBtn.addEventListener('click', function () { loadVocabulary(); });
     saveBtn.addEventListener('click', function () {
-      showError(errP, '');
+      showError(errLine, '');
       saveBtn.disabled = true;
       postJSON('/api/label', {
         code: r.code,
@@ -258,7 +451,7 @@
         is_new: false
       }).then(function (res) {
         saveBtn.disabled = false;
-        if (!res.ok) { showError(errP, res.data.error || ('HTTP ' + res.status)); return; }
+        if (!res.ok) { showError(errLine, res.data.error || ('HTTP ' + res.status)); return; }
         toast('ok', 'Saved ' + r.code,
           'Backup written: ' + baseName(res.data.backup_path)
           + (res.data.mirrored ? '. Duplicate mirrored.' : '.'));
@@ -275,10 +468,15 @@
     $('add-category').value = '';
     $('add-name').value = '';
     show($('vocab-addform'), true);
+    // The whole action row goes, not just its button, so the form takes the
+    // row's place rather than floating under an empty row's padding.
+    setHidden('vocab-actions', true);
     $('add-code').focus();
   }
   function closeAddForm() {
     show($('vocab-addform'), false);
+    setHidden('vocab-actions', false);
+    if ($('vocab-add')) $('vocab-add').focus();
     showError($('add-error'), '');
   }
   function submitAddForm(ev) {
@@ -316,11 +514,37 @@
     });
   }
 
+  // A remap log row names its codes old_code and new_code (labels_io writes
+  // the log; see its remaps[] entries, which also carry action, new_name,
+  // new_category and points_affected). {old,new} and {from,to} are tolerated
+  // so a hand-written log still renders.
   function remapPair(entry) {
-    // tolerate {old,new} or {from,to} shapes
-    var oldC = entry.old != null ? entry.old : (entry.from != null ? entry.from : '');
-    var newC = entry.new != null ? entry.new : (entry.to != null ? entry.to : '');
-    return { old: oldC, new: newC };
+    var oldC = entry.old_code != null ? entry.old_code
+      : (entry.old != null ? entry.old : (entry.from != null ? entry.from : ''));
+    var newC = entry.new_code != null ? entry.new_code
+      : (entry.new != null ? entry.new : (entry.to != null ? entry.to : ''));
+    return { old: oldC, new: newC, newName: entry.new_name || '', action: entry.action || '',
+             points: entry.points_affected };
+  }
+
+  // A code in a sentence: the full name with the code after it in
+  // parentheses when the vocabulary (or the log) can supply one, or the bare
+  // code when nothing resolves (a code merged away and gone from the file).
+  function describeCode(code, name) {
+    var row = labelRow(code);
+    var full = name || (row ? row.name : '');
+    return full ? (full + ' (' + code + ')') : String(code || '');
+  }
+
+  // One table cell: the full name when the vocabulary (or the log) can
+  // resolve it, then the code as a chip.
+  function codeCell(code, name) {
+    var td = el('td');
+    var row = labelRow(code);
+    var full = name || (row ? row.name : '');
+    if (full) td.appendChild(nameNode(full, row ? row.category : ''));
+    td.appendChild(codeChip(code));
+    return td;
   }
 
   function renderActiveRemap(active) {
@@ -328,17 +552,17 @@
     clear(meta);
     var table = $('remap-active-table');
     var tbody = $('remap-active-tbody');
-    var emptyP = $('remap-active-empty');
+    var emptyLine = $('remap-active-empty');
     var exWrap = $('remap-active-excludes');
     clear(tbody);
 
     if (!active) {
       show(table, false);
       show(exWrap, false);
-      show(emptyP, true);
+      show(emptyLine, true);
       return;
     }
-    show(emptyP, false);
+    show(emptyLine, false);
 
     var stamp = active.timestamp || '';
     var name = active.name || '';
@@ -359,20 +583,43 @@
     show(table, remaps.length > 0);
     remaps.forEach(function (p) {
       var tr = el('tr');
-      tr.appendChild(el('td', null, p.old));
+      // The row's tooltip names every code in full. A rename keeps its code,
+      // so the vocabulary already holds the new name and the sentence says
+      // which name the code now carries.
+      if (p.action === 'merge') {
+        tr.title = (p.points != null
+          ? 'Merge: the ' + p.points + ' points recorded as ' + describeCode(p.old, '')
+            + ' become ' + describeCode(p.new, p.newName) + '.'
+          : 'Merge: every point recorded as ' + describeCode(p.old, '')
+            + ' becomes ' + describeCode(p.new, p.newName) + '.');
+      } else if (p.action) {
+        var nowRow = labelRow(p.new);
+        var nowName = p.newName || (nowRow ? nowRow.name : '');
+        tr.title = 'Rename: the code ' + p.new + ' stays'
+          + (nowName ? ' and its name is now ' + nowName : ' and takes a new name')
+          + (p.points != null ? ' (' + p.points + ' points).' : '.');
+      }
+      tr.appendChild(codeCell(p.old, ''));
       tr.appendChild(el('td', 'lb-arrow', 'to'));
-      tr.appendChild(el('td', null, p.new));
+      tr.appendChild(codeCell(p.new, p.newName));
       tbody.appendChild(tr);
     });
 
     var excludes = active.excludes || [];
     show(exWrap, excludes.length > 0);
     if (excludes.length) {
-      var chips = $('remap-active-exchips');
-      clear(chips);
+      var list = $('remap-active-exchips');
+      clear(list);
       excludes.forEach(function (c) {
-        var chip = el('span', 'lb-chip', c);
-        chips.appendChild(chip);
+        var item = el('span', 'lb-excl');
+        var row = labelRow(c);
+        if (row) {
+          item.appendChild(nameNode(row.name, row.category));
+        } else {
+          item.title = 'The vocabulary has no label with this code, so the recode has nothing to drop for it.';
+        }
+        item.appendChild(codeChip(c));
+        list.appendChild(item);
       });
     }
   }
@@ -403,7 +650,7 @@
     var wrap = $('compose-rows');
     clear(wrap);
     if (!COMPOSE.remaps.length && !COMPOSE.excludes.length) {
-      wrap.appendChild(el('p', 'lb-card-note',
+      wrap.appendChild(el('div', 'lb-hint',
         'No rows yet. Add a remap (old to new) or an exclude.'));
       return;
     }
@@ -417,18 +664,20 @@
     oldIn.type = 'text';
     oldIn.placeholder = 'OLD';
     oldIn.value = r.old || '';
-    oldIn.title = 'The existing code to collapse';
+    oldIn.setAttribute('aria-label', 'Old code');
+    oldIn.title = 'Type the code this remap collapses.';
     oldIn.addEventListener('input', function () { r.old = oldIn.value.trim().toUpperCase(); oldIn.value = r.old; });
     var arrow = el('span', 'row-arrow', 'to');
     var newIn = el('input');
     newIn.type = 'text';
     newIn.placeholder = 'NEW';
     newIn.value = r.new || '';
-    newIn.title = 'The code it becomes';
+    newIn.setAttribute('aria-label', 'New code');
+    newIn.title = 'Type the code the old one becomes.';
     newIn.addEventListener('input', function () { r.new = newIn.value.trim().toUpperCase(); newIn.value = r.new; });
-    var del = el('button', 'lb-btn lb-btn-ghost', 'remove');
+    var del = el('button', 'btn btn-mini', 'Remove');
     del.type = 'button';
-    del.title = 'Remove this remap row';
+    del.title = 'Take this remap out of the draft.';
     del.addEventListener('click', function () {
       COMPOSE.remaps = COMPOSE.remaps.filter(function (x) { return x !== r; });
       renderComposeRows();
@@ -447,11 +696,12 @@
     input.type = 'text';
     input.placeholder = 'CODE';
     input.value = x.code || '';
-    input.title = 'A code to drop from the recode entirely';
+    input.setAttribute('aria-label', 'Code to exclude');
+    input.title = 'Type a code the recode should drop instead of rewrite.';
     input.addEventListener('input', function () { x.code = input.value.trim().toUpperCase(); input.value = x.code; });
-    var del = el('button', 'lb-btn lb-btn-ghost', 'remove');
+    var del = el('button', 'btn btn-mini', 'Remove');
     del.type = 'button';
-    del.title = 'Remove this exclude row';
+    del.title = 'Take this exclude out of the draft.';
     del.addEventListener('click', function () {
       COMPOSE.excludes = COMPOSE.excludes.filter(function (e) { return e !== x; });
       renderComposeRows();
@@ -557,12 +807,10 @@
     // tune the recode note + button availability
     var note = $('recode-note');
     if (!latest) {
-      note.textContent = 'No remap log to recode from yet. Save one in the Remaps '
-        + 'section first, then re-run.';
+      note.textContent = 'No remap log yet, so there is nothing to recode from.';
       $('recode-run').disabled = true;
     } else {
-      note.textContent = 'Regenerates the recoded master codes from the canonical '
-        + 'inputs and ' + latest.name + '. The prior recode outputs are backed up first.';
+      note.textContent = 'From ' + latest.name;
       $('recode-run').disabled = false;
     }
   }
@@ -627,11 +875,18 @@
   // wire up
   // ====================================================================
   function init() {
-    $('lb-generated').textContent = 'Loaded ' + new Date().toLocaleString();
+    $('lb-generated').textContent = 'Loaded ' + stamp24() + ' (AST)';
 
-    // vocabulary
-    $('vocab-search').addEventListener('input', renderVocabTable);
-    $('vocab-cat').addEventListener('change', renderVocabTable);
+    // vocabulary: remembered search and sort first, then the handlers
+    restoreSort();
+    $('vocab-search').value = readPref('search') || '';
+    $('vocab-search').addEventListener('input', onSearchInput);
+    $('vocab-cat').addEventListener('change', onCategoryChange);
+    if ($('vocab-clear')) $('vocab-clear').addEventListener('click', clearVocabFilters);
+    var sortButtons = document.querySelectorAll('#vocab-table th[data-sort] .lb-sort');
+    Array.prototype.forEach.call(sortButtons, function (btn) {
+      btn.addEventListener('click', function () { cycleSort(btn.parentNode.dataset.sort); });
+    });
     $('vocab-add').addEventListener('click', openAddForm);
     $('add-cancel').addEventListener('click', closeAddForm);
     $('vocab-addform').addEventListener('submit', submitAddForm);
@@ -652,9 +907,10 @@
     });
 
     renderComposeRows();
-    loadVocabulary();
-    loadRemaps();
-    loadLocations();
+    loadVocabulary(function () {
+      loadRemaps();
+      loadLocations();
+    });
   }
 
   if (document.readyState === 'loading') {

@@ -18,7 +18,7 @@ params:
   # NOT listed is left alone — so presets can be layered.
   split: test
   imgsz: 1024
-  conf_threshold: 0.25
+  conf_threshold: 0.001
   iou_threshold: 0.6
   preview_count: 8
   pdf_export_dir: ""
@@ -38,7 +38,7 @@ The file name (minus `.yaml`) is what the backend uses as the preset ID.
 ## Relation to Quick-start
 
 The **Use recommended defaults** button in the Step 7 panel is a
-shortcut that fills the form with `split=test`, `conf=0.25`, `iou=0.6`,
+shortcut that fills the form with `split=test`, `conf=0.001`, `iou=0.6`,
 `preview_count=8`, and auto-detects `imgsz` from the chosen run's
 `args.yaml`. Presets here serve a different purpose — saving/swapping
 full configuration bundles (e.g. per-experiment variants).

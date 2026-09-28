@@ -4,19 +4,19 @@
 # Until then it is a self-describing contract for inputs / outputs / params.
 
 name: "reef_point_seg"
-display_name: "Reef Point Seg"
+display_name: "VEGA"    # V-fleet name per Lauren 2026-09-02 (was Reef Point Seg)
 tags: ["AI", "TCRMP"]
-version: "1.3.0"           # 1.3.0: canonical per-mask registry (_mask_registry/manifest.csv) + standalone Edit Masks app + unnamed-mask label guard; 1.2.0: model-assist Refine loop (predictions.json, rounds.csv, split_manifest.json, loop_rounds/); 1.1.0: REVIEW flag + expert-review round-trip + Add-Expert-IDs tile
+version: "1.10.0"          # 1.10.0: the box-detector path end to end (generic YOLO box-dataset stager scripts/_boxes/ingest_yolo_boxes.py, which stages any images + labels + class-list distribution and writes names.csv, split_pins.json and rename_map.csv beside the Coral Intel layout, with every staged name unique ignoring letter case because this tree sits in a Synology Drive sync; split pins replayed by TCRMPtrain_oceankindCV/src/detect_dataset.py before any seeded draw, recorded as holdout_mode "staged", per docs/adr/0004-staged-datasets-carry-their-split-pins.md; run importer scripts/_boxes/import_external_runs.py, which turns finished detection runs trained outside VEGA into a model lab under inprocess/_models/<lab>/ and invents no score; config/presets/fish_heavy_augment_640.yaml, the October 2025 fish ablation recipe, applied by default on a box-dataset training project; full species names from a staged names.csv in the evaluation report, the inference overlay and the Step 6 report card; Evaluate scores the run the operator picked, writing a run the open project does not own to inprocess/_models/_eval/<run_name>_<ts>/ and leaving that project's Evaluate step pending; honest dataset cards on the Bounding Boxes page. Four descriptors bumped in this batch: reef_point_seg_bbox_dataset 1.3.1, reef_point_seg_split_manifest 1.2.2, reef_point_seg_model_lab_run 1.1.0, reef_point_seg_evaluation_metrics 1.2.0); 1.9.0: expert-review flagging suspended in every annotator (REVIEW_TAGGING_ENABLED False in each app's mask_ops.py and in TCRMPclip_placePoints/src/export.py; server-side refusal with HTTP 409 on every mask-writing route, all four spellings of the tag; the REVIEW control stays on screen greyed with a tooltip; publishing to the expert-review repository suspended; masks flagged before 2026-09-06 untouched and still readable); 1.8.0: one training surface (the project-free Train + Infer page at /models retired per docs/adr/0002, its blueprint, template, script and stylesheet removed; scripts/_modellab/labruns.py stays as the shared run library the orchestrator imports; the runs table, champion pick, box-dataset training and fine-tune move into the main window as Train, Evaluate and Inference cards; Bounding Boxes stages, converts, and hands training to VEGA by minting a training project); 1.7.0: uniform training projects (project_type composite_training + bbox_training, minted by scripts/_reefreview/training_projects.py from the matrix Training Sets tab and from Bounding Boxes; steps 1-4 skipped, opens on Train), a Step 6 training-task selector (segmentation default, detector under advanced settings, seg-to-box derivation for a project's own polygons), platform theme unification across every window (Inter body / Syne headings / Space Mono data, canonical magenta-on-near-black), store-first project cards with reviewer/species chips and training-project badges, and reviewer-identity enforcement on every accept/merge/relabel-of-accepted path in both annotator apps; 1.6.0: outputs entries + data-dictionary descriptors for the project-free Train + Infer model lab (inprocess/_models/<lab>, rounds.csv, champion.json, inference runs at inprocess/_models/_inference/<ts>_<note>), external bounding-box ingest (supporting_data/bbox_datasets/<name>, Coral Intel) and its SAM3 box-to-seg conversion (inprocess/_bbox/<name>), and step 3 selection_summary.json; 1.5.0: matrix cell drill-down (image + masks in the coverage matrix), reviewer initials on masks + registry, mask preferences + composite YOLO export, Step 6 training-source select, matrix Stats view; 1.4.0: standalone Annotate Images entry (inprocess/_standalone), Box mode, live mask size, merge keeps every part, SAM3 embedding caches; 1.3.0: canonical per-mask registry (_mask_registry/manifest.csv) + standalone Edit Masks app + unnamed-mask label guard; 1.2.0: model-assist Refine loop (predictions.json, rounds.csv, split_manifest.json, loop_rounds/); 1.1.0: REVIEW flag + expert-review round-trip + Add-Expert-IDs tile
 type: "pipeline"           # multi-step; launches its own orchestrator UI
 author: "Lauren K Olinger"
-description: "Eight-step TCRMP coral segmentation pipeline: CVR point data -> CPC/OCR point verification -> SAM3 masks -> YOLO11 segmentation training, evaluation, and inference. Includes a REVIEW flag that ships uncertain masks to an outside taxonomic expert via a GitHub-Pages viewer and folds their IDs back in (Add Expert IDs)."
+description: "VEGA trains vision models on reef imagery. A coral project turns TCRMP survey points into chosen frames, SAM3 outlines and a YOLO11 segmentation model. A detection project trains a YOLO detector on a staged bounding-box dataset. Both finish with evaluation and inference on new images."
 
 inputs:
   - name: "tcrmp_cvr"
     type: "directory"
     formats: [".xls", ".xlsx"]
     location: "${supporting_data_dir}/TCRMP_CVR"
-    description: "Raw TCRMP_CVR Excel files (step 1 input)."
+    description: "Raw TCRMP_CVR Excel files, the input to Fetch Points."
 
   - name: "tcrmp_clip"
     type: "directory"
@@ -27,7 +27,7 @@ inputs:
   - name: "cpc_all"
     type: "directory"
     location: "${supporting_data_dir}/cpc_all"
-    description: "Static pre-2020 CPCe point index (67 GB) produced once by legacy TCRMPclip_cpcID. Consumed by step 4."
+    description: "Static pre-2020 CPCe point index (67 GB) produced once by legacy TCRMPclip_cpcID. Consumed by Place + Segment."
 
 # ------------------------------------------------------------------------------
 # OUTPUTS - data-dictionary contract
@@ -109,21 +109,114 @@ outputs:
     path_template: "${projects_dir}/_mask_registry/manifest.csv"
     eml: false
 
+  - dataset: "reef_point_seg_standalone_session"       # Annotate Images (no project): YOLO export + session.json
+    path_template: "${projects_dir}/_standalone/{session}/"
+    eml: true
+
+  - dataset: "reef_point_seg_mask_preferences"         # matrix drawer choices: canonical masks per image x label for composite exports
+    path_template: "${projects_dir}/_mask_registry/preferences.csv"
+    eml: false
+
+  - dataset: "reef_point_seg_composite_export"         # cross-project YOLO export assembled by the matrix (Step 6 training source)
+    path_template: "${projects_dir}/_composite/{name}/"
+    eml: true
+
+  - dataset: "reef_point_seg_selection_summary"        # step3 machine-readable per-site/per-species selection summary
+    path_template: "${projects_dir}/{project_id}/step3_chooseImages/selection_summary.json"
+    eml: false
+
+  - dataset: "reef_point_seg_model_lab_run"            # lab folders written by the retired Train + Infer page (to 2026-09-05); still read by the main window's runs card (rounds.csv + champion.json)
+    path_template: "${projects_dir}/_models/{lab}/"
+    eml: false
+
+  - dataset: "reef_point_seg_model_lab_inference"      # project-free inference runs (overlays + manifest.json); older ones from the retired page, new ones from the main window's Inference step, all listed by its gallery
+    path_template: "${projects_dir}/_models/_inference/{ts}_{note}/"
+    eml: false
+
+  # Evaluate scores the run the operator picked on the Train step's runs card. A run the
+  # open project does not own (a run in a model lab, or another project's) is scored on its
+  # own dataset and its report is written to _models/_eval/{run_name}_{ts}/, which holds the
+  # same files the in-project evaluation folder holds: metrics.json, report.md, report.html,
+  # report.pdf, previews/ and val_run/. Both entries bind to the descriptors that already
+  # describe those two files; eml: false because the EML for each is emitted from the
+  # in-project entry above, and an evaluation written outside a project has no project run
+  # to finalise against.
+  - dataset: "reef_point_seg_evaluation_metrics"       # evaluation of a run the open project does not own: metrics JSON
+    path_template: "${projects_dir}/_models/_eval/{run_name}_{ts}/metrics.json"
+    eml: false
+
+  - dataset: "reef_point_seg_evaluation_report"        # evaluation of a run the open project does not own: PDF report (report.md, report.html and previews/ beside it)
+    path_template: "${projects_dir}/_models/_eval/{run_name}_{ts}/report.pdf"
+    eml: false
+
+  - dataset: "reef_point_seg_bbox_dataset"             # Bounding Boxes: staged external box dataset (Coral Intel), non-TCRMP
+    path_template: "${supporting_data_dir}/bbox_datasets/{name}/"
+    eml: false
+
+  - dataset: "reef_point_seg_bbox_seg_dataset"         # Bounding Boxes: SAM3-converted seg dataset from a staged box dataset
+    path_template: "${projects_dir}/_bbox/{name}/"
+    eml: false
+
+  - dataset: "reef_point_seg_training_project"         # a run_* project minted from a composite or a staged box dataset, project_type composite_training/bbox_training, skips steps 1-4 and opens on Train
+    path_template: "${projects_dir}/{project_id}/"
+    eml: false
+
+# ------------------------------------------------------------------------------
+# GPU RIGHT OF WAY - which stages touch a graphics card, and at which tier
+# ------------------------------------------------------------------------------
+# vicarius_ui_os's GPU right-of-way system (docs/superpowers/specs/2026-09-17-
+# gpu-right-of-way-design.md) refuses a stage start that would collide with a
+# higher-tier holder of the two RTX 5090 cards. StageRunner
+# (scripts/pipeline_orchestrator/stage_runner.py) reads this map once at
+# startup and asks before every Popen for a runner key listed here; a runner
+# key ABSENT from this map is never gated and never claims. Tier names come
+# from vicarius/_METADATA/gpu_ladder.yaml: "vega" is VICARIUS's own model
+# tier; "human" is the tier every interactive tool that loads a model onto a
+# card shares (the SAM3 annotators, and Step 4's OCR reader).
+#
+# Verified against the entry points each runner key actually launches
+# (2026-09-17), not just inferred from the step rail: step 4
+# (TCRMPclip_placePoints/src/app.py) runs GPU OCR detection
+# (detect.py:get_ocr_reader, USE_GPU=True); step 5 (TCRMPclip_segmentImages)
+# and every combinedAnnotate-family launch (step4test, step4loop, editmasks,
+# annotate) load a SAM3 model onto TCRMP_SAM3_DEVICE_TRACKER/EXEMPLAR
+# (config.py). step4test_route re-drives placePoints headlessly for the same
+# OCR pass, so it holds the same GPU load. Steps 1-3 (frame extraction,
+# species recode, image selection) and the matrix/label-manager dashboards
+# hold no card and are correctly absent. Steps 6-8 (TCRMPtrain_oceankindCV:
+# train, evaluate, infer) are the vega tier. step4test, step4loop and
+# editmasks were missing from this map in the first draft of the GPU
+# right-of-way plan (docs/superpowers/plans/2026-09-17-gpu-right-of-way.md,
+# Task 9): all three launch through the same call site as step4test_route
+# (app.py line 5065) and every one of them loads SAM3.
+gpu:
+  stages:
+    "4": human               # placePoints: GPU OCR detection (detect.py)
+    "5": human                # segmentImages: SAM3 click-prompt segmentation
+    "step4test_route": human  # headless placePoints routing pass (same OCR GPU)
+    "step4test": human        # combined annotator: SAM3 (port 5080)
+    "step4loop": human        # Refine active-learning annotator: SAM3, resume mode
+    "editmasks": human        # Edit Masks app: SAM3 engine for refinement
+    "annotate": human         # standalone Annotate Images: SAM3
+    "6": vega                 # train (oceankindCV, DDP across both GPUs)
+    "7": vega                 # evaluate
+    "8": vega                 # infer
+
 parameters:
   - name: "target_species"
     type: "string"
     default: "OFRA, PA, OA, OFAV, AL, MC, AA"
-    description: "Priority species for balanced selection (step 3) and review filtering (step 4)."
+    description: "Priority species for balanced selection in Choose Images and review filtering in Place + Segment."
 
   - name: "target_instances_per_species"
     type: "integer"
     default: 1000
-    description: "Minimum point-labels per target species before selection stops (step 3)."
+    description: "Minimum point-labels per target species before Choose Images stops selecting."
 
   - name: "epochs"
     type: "integer"
     default: 500
-    description: "Max training epochs (step 6)."
+    description: "Max training epochs for Train Model."
 
   - name: "imgsz"
     type: "integer"
@@ -140,12 +233,12 @@ cli:
   interactive: true     # module opens its own browser UI at http://localhost:5050
 
 # ------------------------------------------------------------------------------
-# VICARIUS UI — launcher style
+# VICARIUS UI - launcher style
 # ------------------------------------------------------------------------------
 # This module runs as a browser-based orchestrator on its own port; the
 # VICARIUS UI should NOT render the generic input_dir/output_dir form.
 # Because this launcher declares `runs:` below, the VICARIUS UI does NOT show a
-# standalone "Launch Orchestrator" button — reality is you always either create
+# standalone "Launch Orchestrator" button - reality is you always either create
 # a new project or open an existing one, and each of those starts the
 # orchestrator (in its own window) with that project loaded.
 ui:
@@ -169,6 +262,17 @@ ui:
     - label: "Label Manager"
       path: "/labels"
       tooltip: "View and edit the canonical species vocabulary (add labels, edit names/categories), compose remaps, and re-run the recode that new projects seed from. Backs up the canonical file and mirrors its duplicate on every write."
+    - label: "Annotate Images"
+      path: "/annotate"
+      tooltip: "Annotate your own photos with SAM3 outside any project: pick images, pick labels, place points or boxes, export YOLO labels. Sessions live in inprocess/_standalone and never touch project data."
+    - label: "Bounding Boxes"
+      path: "/boxes"
+      tooltip: "Stage an external bounding-box dataset (Coral Intel) under supporting_data/bbox_datasets and convert its boxes to outlines with SAM3. VEGA then takes over the training by minting a training project that opens in the main window. Separate from TCRMP projects and the coverage matrix."
+  # Label-coverage strip on top of the VICARIUS launcher window. source: matrix
+  # means VICARIUS builds it from this module's own scripts/_matrix builder,
+  # read straight off disk, so it shows with the orchestrator stopped.
+  coverage:
+    source: matrix
   runs:
     # Where live projects live. Relative to the module root (parent of github_repo/).
     dir: "inprocess"
@@ -176,3 +280,10 @@ ui:
     pattern: "run_*"
     # Status source: parse steps.N.status from project.json
     status_source: "project.json"
+    # Project naming. "auto": the launcher asks only for initials + purpose;
+    # the folder is run_{YY-MM-DD}_{INITIALS} (suffix _2, _3 for a same-day
+    # repeat) and the orchestrator rebuilds the display name on every save as
+    # {INITIALS}_{SPECIES}_{N}img_{YY-MM-DD} once Step 3 target labels are
+    # saved and selected_frames.csv exists. Omit the key to keep the typed
+    # Project-name box (tagfab and every other launcher).
+    naming: "auto"

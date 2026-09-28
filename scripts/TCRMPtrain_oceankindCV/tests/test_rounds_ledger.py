@@ -1,5 +1,9 @@
 """Tests for evaluate_run.py's append_round_row (rounds ledger, gates,
-champion-baselined lineage). Pure function: no ultralytics import needed.
+champion-baselined lineage, the image counts in the n_train, n_valid and
+n_test columns, and the conf, iou and imgsz columns that say what a score was
+measured with). No model, no GPU and no network: the only thing the counting
+tests borrow from ultralytics is its list of readable image types, and where
+ultralytics is not installed the detection stager's IMAGE_EXTS stands in.
 Run: env/bin/python scripts/TCRMPtrain_oceankindCV/tests/test_rounds_ledger.py"""
 import csv
 import json
@@ -279,6 +283,309 @@ try:
     check(row1['n_test'] == '6' or row1['n_test'] == 6, f"n_test mismatch: {row1['n_test']}")
 finally:
     shutil.rmtree(tmp5, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Test 6: the image count covers every type the trainer reads.
+# Before 2026-09-15 _count_images held its own six-entry list, so the fish
+# detector's ledger row said 5296 / 1512 / 757 for a dataset of 5300 / 1514 /
+# 758: short by exactly the 7 WebP images in it.
+# ---------------------------------------------------------------------------
+tmp6 = tempfile.mkdtemp(prefix='rounds_ledger_t6_')
+try:
+    import detect_dataset
+
+    suffixes = ER._image_suffixes()
+    check('.webp' in suffixes, f"WebP is an image the trainer reads; suffixes were {suffixes}")
+    for ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'):
+        check(ext in suffixes, f"{ext} counted before the fix and must still count; got {suffixes}")
+    unlisted = [e for e in detect_dataset.IMAGE_EXTS if e.lower() not in suffixes]
+    check(not unlisted,
+          f"every type the detection stager writes must be countable, missing {unlisted}")
+
+    # One image of each supported type, all counted.
+    all_types_dir = os.path.join(tmp6, 'all_types')
+    img_dir = os.path.join(all_types_dir, 'train', 'images')
+    os.makedirs(img_dir)
+    for i, ext in enumerate(suffixes):
+        with open(os.path.join(img_dir, f'img_{i}{ext}'), 'wb') as f:
+            f.write(b'\xff\xd8\xff\xd9')
+    n_all = ER._count_images(all_types_dir, 'train')
+    check(n_all == len(suffixes),
+          f"one image of each of the {len(suffixes)} supported types should count "
+          f"{len(suffixes)}, got {n_all}")
+
+    # A missing split folder is still 0, not an error.
+    check(ER._count_images(all_types_dir, 'valid') == 0,
+          "a split folder that does not exist must count 0")
+
+    # Test 6b: nothing that is not a readable image inflates the count.
+    mixed_dir = os.path.join(tmp6, 'mixed')
+    mixed_imgs = os.path.join(mixed_dir, 'train', 'images')
+    os.makedirs(mixed_imgs)
+    for name in ('a.jpg', 'b.png', 'c.webp', 'D.JPEG'):
+        with open(os.path.join(mixed_imgs, name), 'wb') as f:
+            f.write(b'\xff\xd8\xff\xd9')
+    for name in ('labels.txt', 'notes.md', 'checksums.sha256', 'README', 'a.jpg.bak', '.hidden'):
+        with open(os.path.join(mixed_imgs, name), 'w') as f:
+            f.write('not an image\n')
+    os.makedirs(os.path.join(mixed_imgs, 'archive.png'))          # a folder named like an image
+    os.symlink(os.path.join(mixed_imgs, 'gone.jpg'),
+               os.path.join(mixed_imgs, 'dangling.jpg'))          # a symlink to nothing
+    n_mixed = ER._count_images(mixed_dir, 'train')
+    check(n_mixed == 4,
+          f"4 images beside 6 non-images, a folder named archive.png and a dangling "
+          f"symlink should count 4, got {n_mixed}")
+
+    # Test 6c: the six types counted before the fix still count, on their own.
+    legacy_dir = os.path.join(tmp6, 'legacy')
+    legacy_imgs = os.path.join(legacy_dir, 'test', 'images')
+    os.makedirs(legacy_imgs)
+    for i, ext in enumerate(('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')):
+        with open(os.path.join(legacy_imgs, f'old_{i}{ext}'), 'wb') as f:
+            f.write(b'\xff\xd8\xff\xd9')
+    n_legacy = ER._count_images(legacy_dir, 'test')
+    check(n_legacy == 6, f"the six pre-existing image types should count 6, got {n_legacy}")
+finally:
+    shutil.rmtree(tmp6, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Test 7: the ledger row itself carries the WebP images (the reported defect)
+# ---------------------------------------------------------------------------
+tmp7 = tempfile.mkdtemp(prefix='rounds_ledger_t7_')
+try:
+    rounds_dir = os.path.join(tmp7, 'step6')
+    dataset_dir = make_dataset_dir(os.path.join(tmp7, 'dataset'), holdout_mode='transect',
+                                    n_train=40, n_valid=10, n_test=8)
+    extra_webp = {'train': 4, 'valid': 2, 'test': 1}
+    for split, n_extra in extra_webp.items():
+        img_dir = os.path.join(dataset_dir, split, 'images')
+        for i in range(n_extra):
+            with open(os.path.join(img_dir, f'{split}_webp_{i}.webp'), 'wb') as f:
+                f.write(b'RIFF0000WEBPVP8 ')
+
+    run1_dir = make_run_dir(tmp7, 'run1', base_model='yolo11l.pt')
+    m1 = fabricate_metrics(map50_95_m=0.5, recall_m=0.8, per_class_ap={'SS': 0.5})
+    row1 = ER.append_round_row(rounds_dir, run1_dir, m1, dataset_dir)
+    check(int(row1['n_train']) == 44,
+          f"40 JPEG + 4 WebP training images should be recorded as 44, got {row1['n_train']}")
+    check(int(row1['n_valid']) == 12,
+          f"10 JPEG + 2 WebP validation images should be recorded as 12, got {row1['n_valid']}")
+    check(int(row1['n_test']) == 9,
+          f"8 JPEG + 1 WebP test images should be recorded as 9, got {row1['n_test']}")
+finally:
+    shutil.rmtree(tmp7, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Test 8: with ultralytics unavailable the count falls back to the detection
+# stager's own list, and no third list hides in evaluate_run.py
+# ---------------------------------------------------------------------------
+tmp8 = tempfile.mkdtemp(prefix='rounds_ledger_t8_')
+blocked = {name: mod for name, mod in sys.modules.items()
+           if name == 'ultralytics' or name.startswith('ultralytics.')}
+try:
+    import detect_dataset
+
+    for name in blocked:
+        sys.modules[name] = None          # any ultralytics import now raises ImportError
+    try:
+        from ultralytics.data.utils import IMG_FORMATS  # noqa: F401
+        check(False, "the fixture failed to hide ultralytics, so test 8 proves nothing")
+    except ImportError:
+        pass
+
+    fallback = ER._image_suffixes()
+    expected = tuple(sorted(e.lower() for e in detect_dataset.IMAGE_EXTS))
+    check(fallback == expected,
+          f"without ultralytics the suffixes must be the stager's IMAGE_EXTS {expected}, got {fallback}")
+
+    img_dir = os.path.join(tmp8, 'train', 'images')
+    os.makedirs(img_dir)
+    for name in ('a.jpg', 'b.webp', 'c.avif', 'labels.txt'):
+        with open(os.path.join(img_dir, name), 'wb') as f:
+            f.write(b'\xff\xd8\xff\xd9')
+    n_fallback = ER._count_images(tmp8, 'train')
+    check(n_fallback == 2,
+          f"the stager's list covers JPEG and WebP but not AVIF, so 2 of the 4 files count, "
+          f"got {n_fallback}")
+finally:
+    for name, mod in blocked.items():
+        sys.modules[name] = mod
+    shutil.rmtree(tmp8, ignore_errors=True)
+
+try:
+    from ultralytics.data.utils import IMG_FORMATS as restored_formats
+except ImportError:
+    restored_formats = None          # the box has no ultralytics; the rest of the suite stands
+if restored_formats is not None:
+    check(ER._image_suffixes() == tuple(sorted('.' + f.lower() for f in restored_formats)),
+          "putting ultralytics back must restore the trainer's own list of image types")
+
+
+# ---------------------------------------------------------------------------
+# Test 9: the row records what the score was measured with (conf, iou, imgsz)
+# ---------------------------------------------------------------------------
+tmp9 = tempfile.mkdtemp(prefix='rounds_ledger_t9_')
+try:
+    rounds_dir = os.path.join(tmp9, 'step6')
+    dataset_dir = make_dataset_dir(os.path.join(tmp9, 'dataset'), holdout_mode='transect')
+    m = fabricate_metrics(map50_95_m=0.5, recall_m=0.8, per_class_ap={'SS': 0.5})
+
+    check(ER.ROUNDS_CSV_HEADER[-3:] == ['conf', 'iou', 'imgsz'],
+          f"the settings columns go at the END so an older ledger still reads, "
+          f"got {ER.ROUNDS_CSV_HEADER[-4:]}")
+
+    run1_dir = make_run_dir(tmp9, 'run1')
+    row1 = ER.append_round_row(rounds_dir, run1_dir, m, dataset_dir,
+                               conf=0.001, iou=0.6, imgsz=512)
+    check((row1['conf'], row1['iou'], row1['imgsz']) == (0.001, 0.6, 512),
+          f"the row carries the settings the evaluation used, got "
+          f"{(row1['conf'], row1['iou'], row1['imgsz'])}")
+    on_disk = read_rows(rounds_dir)[0]
+    check((on_disk['conf'], on_disk['iou'], on_disk['imgsz']) == ('0.001', '0.6', '512'),
+          f"and writes them to rounds.csv, got "
+          f"{(on_disk['conf'], on_disk['iou'], on_disk['imgsz'])}")
+
+    # A caller that does not say what it measured with leaves the cells empty
+    # rather than inventing a number.
+    run2_dir = make_run_dir(tmp9, 'run2')
+    row2 = ER.append_round_row(rounds_dir, run2_dir, m, dataset_dir)
+    check((row2['conf'], row2['iou'], row2['imgsz']) == ('', '', ''),
+          f"unstated settings stay blank, never a guessed number, got "
+          f"{(row2['conf'], row2['iou'], row2['imgsz'])}")
+
+    # A deliberate 0 is a real threshold and must survive as one.
+    zeroed = ER._eval_settings(0, 0.0, 0)
+    check(zeroed == {'conf': 0.0, 'iou': 0.0, 'imgsz': 0},
+          f"a typed 0 is kept, never read as 'not supplied', got {zeroed}")
+
+    # A setting that is not a number is refused by name, not written as text,
+    # and nothing is written before the refusal.
+    for bad in ({'conf': 'very low'}, {'iou': [0.6]}, {'imgsz': '512px'}):
+        name = list(bad)[0]
+        before = read_rows(rounds_dir)
+        try:
+            ER.append_round_row(rounds_dir, make_run_dir(tmp9, 'run_' + name), m,
+                                dataset_dir, **bad)
+            check(False, f"a non-numeric {name} must raise ValueError")
+        except ValueError as exc:
+            check(name in str(exc), f"the refusal names the setting, got {exc}")
+        check(read_rows(rounds_dir) == before,
+              f"a refused {name} leaves the ledger exactly as it was")
+finally:
+    shutil.rmtree(tmp9, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Test 10: a rounds.csv written before the settings columns still reads back
+# ---------------------------------------------------------------------------
+tmp10 = tempfile.mkdtemp(prefix='rounds_ledger_t10_')
+try:
+    rounds_dir = os.path.join(tmp10, 'step6')
+    dataset_dir = make_dataset_dir(os.path.join(tmp10, 'dataset'), holdout_mode='transect')
+    os.makedirs(rounds_dir, exist_ok=True)
+
+    old_header = [c for c in ER.ROUNDS_CSV_HEADER if c not in ('conf', 'iou', 'imgsz')]
+    old_row = {c: '' for c in old_header}
+    old_row.update({'round': '1', 'at': '2026-09-05T10:00:00-04:00', 'run_name': 'old_run',
+                    'run_dir': os.path.join(tmp10, 'old_run'), 'base_model': 'yolo11l.pt',
+                    'split_pinned': 'true', 'n_train': '40', 'n_valid': '10', 'n_test': '8',
+                    'map50_M': '0.600', 'map50_95_M': '0.500', 'recall_M': '0.80',
+                    'precision_M': '0.72', 'gate_map': 'pass', 'gate_class': 'pass',
+                    'gate_recall': 'pass', 'per_class_json': 'rounds/round_1_per_class.json',
+                    'metric_family': 'mask', 'metrics_schema': '2'})
+    with open(os.path.join(rounds_dir, 'rounds.csv'), 'w', newline='') as f:
+        w = csv.DictWriter(f, fieldnames=old_header)
+        w.writeheader()
+        w.writerow(old_row)
+
+    before = ER._read_rounds_csv(os.path.join(rounds_dir, 'rounds.csv'))
+    check(len(before) == 1 and 'conf' not in before[0],
+          f"the fixture really is a pre-settings ledger, got {sorted(before[0])[:4]}")
+
+    m = fabricate_metrics(map50_95_m=0.520, recall_m=0.81, per_class_ap={'SS': 0.52})
+    new_run_dir = make_run_dir(tmp10, 'new_run')
+    row = ER.append_round_row(rounds_dir, new_run_dir, m, dataset_dir,
+                              conf=0.001, iou=0.6, imgsz=512)
+    rows = read_rows(rounds_dir)
+    check(len(rows) == 2, f"the older row survives beside the new one, got {len(rows)} rows")
+    check(rows[0]['map50_95_M'] == '0.500' and rows[0]['run_name'] == 'old_run',
+          f"the older row's score is never rewritten, got {rows[0]['map50_95_M']}")
+    check(rows[0]['conf'] == '' and rows[0]['iou'] == '' and rows[0]['imgsz'] == '',
+          f"the older row reads back with empty settings cells, got {rows[0]['conf']!r}")
+    check(rows[1]['conf'] == '0.001' and rows[1]['imgsz'] == '512',
+          f"the new row carries what it was measured with, got {rows[1]['conf']!r}")
+    check(row['gate_map'] == ER.GATE_INCOMPARABLE,
+          f"a baseline that records no confidence cannot be ranked against a measured "
+          f"round, so the gate reads incomparable, got {row['gate_map']}")
+    check((row['gate_class'], row['gate_recall'])
+          == (ER.GATE_INCOMPARABLE, ER.GATE_INCOMPARABLE),
+          f"and so do the other two gates, got {(row['gate_class'], row['gate_recall'])}")
+finally:
+    shutil.rmtree(tmp10, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Test 11: two rows measured at different confidences are never ranked
+# ---------------------------------------------------------------------------
+tmp11 = tempfile.mkdtemp(prefix='rounds_ledger_t11_')
+try:
+    dataset_dir = make_dataset_dir(os.path.join(tmp11, 'dataset'), holdout_mode='transect')
+    strong = fabricate_metrics(map50_95_m=0.600, recall_m=0.85, per_class_ap={'SS': 0.60})
+    weak = fabricate_metrics(map50_95_m=0.400, recall_m=0.60, per_class_ap={'SS': 0.40})
+
+    def ledger_with(baseline_settings, round_settings, baseline_metrics=strong,
+                    round_metrics=weak, folder='case'):
+        """Two rounds in a fresh ledger; return the second round's row."""
+        rounds_dir = os.path.join(tmp11, folder)
+        ER.append_round_row(rounds_dir, make_run_dir(tmp11, folder + '_base'),
+                            baseline_metrics, dataset_dir, **baseline_settings)
+        return ER.append_round_row(rounds_dir, make_run_dir(tmp11, folder + '_new'),
+                                   round_metrics, dataset_dir, **round_settings)
+
+    measured = {'conf': 0.001, 'iou': 0.6, 'imgsz': 512}
+    same = ledger_with(measured, measured, folder='same_conf')
+    check(same['gate_map'] == ER.GATE_FAIL,
+          f"two rounds measured the same way are still ranked normally, got {same['gate_map']}")
+
+    moved = ledger_with(dict(measured, conf=0.25), measured, folder='moved_conf')
+    check(moved['gate_map'] == ER.GATE_INCOMPARABLE,
+          f"a baseline measured at another confidence yields no verdict, got {moved['gate_map']}")
+    check(moved['gate_recall'] == ER.GATE_INCOMPARABLE and 'flag' not in moved['gate_class'],
+          f"the per-class and recall gates say the same, got {moved['gate_class']}")
+
+    silent = ledger_with({}, {}, folder='neither_records')
+    check(silent['gate_map'] == ER.GATE_FAIL,
+          f"a ledger where neither row records a confidence behaves as it did before the "
+          f"columns existed, got {silent['gate_map']}")
+
+    # A hand-edited ledger must never crash an evaluation: a confidence cell
+    # that is not a number reads as 'not recorded', which is incomparable.
+    hostile_dir = os.path.join(tmp11, 'hostile')
+    ER.append_round_row(hostile_dir, make_run_dir(tmp11, 'hostile_base'), strong,
+                        dataset_dir, **measured)
+    rows = ER._read_rounds_csv(os.path.join(hostile_dir, 'rounds.csv'))
+    rows[0]['conf'] = 'very low'
+    ER._write_rounds_csv(os.path.join(hostile_dir, 'rounds.csv'), rows)
+    hostile = ER.append_round_row(hostile_dir, make_run_dir(tmp11, 'hostile_new'), weak,
+                                  dataset_dir, **measured)
+    check(hostile['gate_map'] == ER.GATE_INCOMPARABLE,
+          f"an unreadable confidence cell is treated as unrecorded, got {hostile['gate_map']}")
+
+    # An unpinned split still outranks every other reason: the verdict names
+    # the loose split, which is the thing to fix first.
+    loose_dataset = make_dataset_dir(os.path.join(tmp11, 'loose'), holdout_mode=None)
+    loose_dir = os.path.join(tmp11, 'loose_rounds')
+    ER.append_round_row(loose_dir, make_run_dir(tmp11, 'loose_base'), strong,
+                        loose_dataset, **dict(measured, conf=0.25))
+    loose = ER.append_round_row(loose_dir, make_run_dir(tmp11, 'loose_new'), weak,
+                                loose_dataset, **measured)
+    check(loose['gate_map'] == ER.GATE_UNPINNED,
+          f"a loose split still reads unpinned, not incomparable, got {loose['gate_map']}")
+finally:
+    shutil.rmtree(tmp11, ignore_errors=True)
 
 
 print("PASS" if _fail == 0 else f"{_fail} FAILED")

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the TCRMP Segment Images app and open browser
+# Launch the TCRMP Annotate Images app and open browser
 cd "$(dirname "$0")"
 
 PORT="${1:-5070}"

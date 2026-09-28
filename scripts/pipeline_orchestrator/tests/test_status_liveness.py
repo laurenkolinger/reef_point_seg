@@ -158,7 +158,7 @@ check(not r8.get("died"), "new launch lifecycle clears the died marker")
 # step4test one that _kill_all_annotators just killed (2026-08-14 review
 # defect: every Edit Masks launch false-alarmed the tile).
 appmod.runner = _KeyedRunner(live_keys=["editmasks"])
-appmod._route_set(phase="ui_ready", ui_port=5085, error=None,
+appmod._route_set(phase="ui_ready", ui_port=5083, error=None,
                   runner_key="editmasks", runner_label="Edit Masks app",
                   message="Edit Masks ready.")
 r9 = client.get("/api/step/step4test/route_status").get_json()
@@ -174,7 +174,7 @@ check(r10["phase"] == "error" and "Edit Masks app" in (r10.get("error") or ""),
 # step4test's Stop must NOT claim an Edit Masks session stopped: it only
 # kills its own keys, so a foreign-owned ui_ready stays untouched.
 appmod.runner = _KeyedRunner(live_keys=["editmasks"])
-appmod._route_set(phase="ui_ready", ui_port=5085, error=None,
+appmod._route_set(phase="ui_ready", ui_port=5083, error=None,
                   runner_key="editmasks", runner_label="Edit Masks app",
                   message="Edit Masks ready.")
 client.post("/api/step/step4test/stop")

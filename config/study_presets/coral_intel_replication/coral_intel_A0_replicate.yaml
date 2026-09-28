@@ -1,0 +1,121 @@
+# ======================================================================
+# Train Model recipe (VEGA preset format): "Coral Intel replicate (YOLOv8x, 640 px)"
+#
+# One of four recipes in the Coral Intel replication study, trained in one
+# VEGA project on the staged dataset coral_intel_t2aug (the Coral Intel
+# photographs plus the offline Table 2 variants written by
+# scripts/_ablation/coral_intel_offline_aug.py from
+# config/augment_presets/coral_intel_table2.yaml). The four are run in
+# order by scripts/_ablation/coral_intel_vega_driver.py, which reads these
+# files, saves each one as the project's Train settings and presses Start
+# through VEGA's own web API.
+#
+#   coral_intel_A0_replicate.yaml      Coral Intel Table 2 (the replicate)
+#   coral_intel_B1_yolo11x.yaml        A0 with the YOLO11x backbone
+#   coral_intel_B2_imgsz1024.yaml      A0 at 1024 px
+#   coral_intel_B3_offline_only.yaml   A0 with online augmentation off
+#
+# Every challenger differs from A0 only in the keys its
+# _meta.changes_from_replicate names; the driver refuses a file where that
+# is not true. Every file carries the full set of settings.
+#
+# What A0 replicates (Cordero et al. 2026, Table 2, read from the paper
+# on 2026-09-26):
+#   model yolov8x.pt     "The YOLOv8x model was trained" (sec. 2.6), COCO
+#                        weights staged at scripts/TCRMPtrain_oceankindCV/.
+#   epochs 300, imgsz 640, batch 16, seed 32   Table 2.
+#   device "0,1"         VEGA's default, both RTX 5090 cards; batch 16 is the
+#                        total across the pair. The paper used one card.
+#   patience 100 and every loss, optimizer and online augmentation value:
+#                        the Ultralytics defaults. Table 2 lists only the
+#                        arguments the authors passed, so everything else
+#                        took the library default, which differs from the
+#                        Train panel's own defaults.
+#   valid_ratio 0.15, test_ratio 0.15   sec. 2.5. The staged dataset's
+#                        split_pins.json fixes the split by source photo,
+#                        so these fractions only describe it.
+#
+# The paper does not report the optimizer, learning rate, patience or
+# pretrained weights; they are assumptions, stated in the study report.
+#
+# Why these files are not in config/presets/:
+#   That folder holds the recipes the Train panel offers, and its rules
+#   require every recipe to declare a task and a subject and every key to
+#   have a form field. These four would break both: four more recipes
+#   claiming detect and coral would stop coral_heavy_augment_640.yaml being
+#   applied on its own, and task, seed, erasing and auto_augment have no
+#   form field. VEGA still forwards all four when they sit in a project's
+#   saved Train settings, which is where the driver puts them. seed 32 is
+#   Table 2's. erasing and auto_augment act on classification models only in
+#   Ultralytics 8.4.38 and are carried at the library default so the record
+#   is complete.
+#
+# Not carried, because VEGA cannot pass them:
+#   dropout 0.10   in Ultralytics it acts on classification heads only, so
+#                  it has no effect on a detector.
+#   workers 8      VEGA's trainer uses 12 data-loader workers; this changes
+#                  loading speed, not the model.
+# ======================================================================
+
+_meta:
+  name: "Coral Intel replicate (YOLOv8x, 640 px)"
+  description: "Coral Intel Table 2: YOLOv8x, 640 px, batch 16 on two GPUs, seed 32, 300 epochs, patience 100, Ultralytics default online augmentation, on the offline Table 2 variants."
+  why: "Reproduces the published Coral Intel settings on photos split before augmentation. This is the honest baseline every other model is compared with."
+  task: detect
+  study: coral_intel_replication
+  arm: A0_replicate
+  factor: "none"
+  dataset: coral_intel_t2aug
+  changes_from_replicate: []
+
+params:
+  # Core training
+  model: "yolov8x.pt"
+  model_path: ""
+  epochs: 300
+  imgsz: 640
+  batch: 16
+  patience: 100
+  device: "0,1"
+  valid_ratio: 0.15
+  test_ratio: 0.15
+  task: "detect"
+  seed: 32
+
+  # Schedule and optimizer (Ultralytics defaults)
+  optimizer: "auto"
+  cos_lr: false
+  close_mosaic: 10
+  lr0: 0.01
+  lrf: 0.01
+  momentum: 0.937
+  weight_decay: 0.0005
+  warmup_epochs: 3.0
+
+  # Loss weights (Ultralytics defaults)
+  box: 7.5
+  cls: 0.5
+  dfl: 1.5
+  label_smoothing: 0.0
+
+  # Online augmentation (Ultralytics defaults unless marked)
+  hsv_h: 0.015
+  hsv_s: 0.7
+  hsv_v: 0.4
+  bgr: 0.0
+  degrees: 0.0
+  translate: 0.1
+  scale: 0.5
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  mosaic: 1.0
+  mixup: 0.0
+  cutmix: 0.0
+  copy_paste: 0.0
+
+  # Carried for a complete record (no effect on a box detector)
+  copy_paste_mode: "flip"
+  erasing: 0.4
+  auto_augment: "randaugment"

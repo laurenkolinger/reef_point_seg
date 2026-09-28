@@ -18,6 +18,7 @@ import re
 import sys
 import json
 import shutil
+import subprocess
 import tempfile
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -26,6 +27,26 @@ sys.path.insert(0, _ORCH)
 
 import app as appmod
 import project_manager as pm
+
+
+# Never reach off this process (2026-09-02 hotfix, mirrors
+# test_editmasks_routes.py): every launch route can hit _kill_all_annotators
+# (pkill/fuser through subprocess.run), and the folder route spawns xdg-open
+# through subprocess.Popen, which a run stub never sees. Each such spawn used
+# to open a real file-manager window on the operator's desktop. The per-test
+# real_subprocess.run swaps below save and restore whatever is current.
+class _FakeCompleted:
+    returncode = 0
+    stdout = ""
+    stderr = ""
+
+
+def _blocked_popen(*a, **k):
+    raise AssertionError(f"subprocess.Popen reached: {a[0] if a else k.get('args')!r}")
+
+
+subprocess.run = lambda *a, **k: _FakeCompleted()
+subprocess.Popen = _blocked_popen
 
 _RESULTS = []
 
@@ -291,6 +312,14 @@ def test_run_happy_path_launches_annotator():
 def test_folder_refuses_path_outside_project():
     client, tmp, state, export_dir = _client_with_project()
     other = tempfile.mkdtemp()
+    # The route's spawn is host_open.open_in_file_manager, which refuses temp
+    # fixtures and VICARIUS_HOST_OPEN=0 (run_all_tests.sh) before any Popen.
+    # This test covers path resolution and the guard, so record the opener
+    # call instead of spawning (the spawn itself is pinned by
+    # tests/test_host_open_guard.py and test_open_folder_routes.py).
+    opened = []
+    orig_open = appmod._open_in_file_manager
+    appmod._open_in_file_manager = lambda p: (opened.append(p) or (True, ""))
     try:
         # Force the loop_rounds/export lookup to miss so the fallback dir is
         # used, then verify the guard itself (not the existence check) is
@@ -301,12 +330,15 @@ def test_folder_refuses_path_outside_project():
         # guard logic directly by constructing a path outside project_dir.
         r_ok = client.post("/api/step/step4loop/folder")
         check(r_ok.status_code == 200, f"in-project folder call should succeed: {r_ok.get_json()}")
+        check(opened == [os.path.abspath(export_dir)],
+              f"opener called once with the export dir: {opened}")
 
         project_dir_abs = os.path.abspath(state["project_dir"])
         outside_abs = os.path.abspath(other)
         check(not (outside_abs.startswith(project_dir_abs + os.sep) or outside_abs == project_dir_abs),
               "test fixture invariant broken: `other` must be outside the project dir")
     finally:
+        appmod._open_in_file_manager = orig_open
         appmod.current_project = None
         shutil.rmtree(tmp, ignore_errors=True)
         shutil.rmtree(other, ignore_errors=True)

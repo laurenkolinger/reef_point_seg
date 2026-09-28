@@ -1,0 +1,298 @@
+/* VEGA inference gallery card (Step 7: Model Inference results block).
+ * Every rule is scoped under .vega-gallery and reads the host page's theme
+ * variables from style.css (--surface, --surface-light, --border, --text,
+ * --text-dim, --pink, --magenta, --success, --error, --font-mono, --font-body).
+ * No colour is hardcoded here except the image well, which is black on purpose
+ * so a letterboxed overlay reads as a photo, not as a missing tile. */
+
+/* The run picker holds one option per inference run, and an option can be
+   several hundred characters long. A select contributes its longest option
+   to every ancestor's minimum-content width, which flex:1 on the host's
+   .main-panel honours through its default min-width:auto, so without this
+   guard one long run name pushes the whole page sideways at 946 px (measured
+   2026-09-05: 1240 px of content in a 946 px viewport). Containing the
+   inline size makes this card's width the host's decision alone and leaves
+   the long option to truncate inside the select. Same guard as
+   .vega-runs-wrap in orchestrator_runs.css. */
+.vega-gallery {
+  contain: inline-size;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* -- Heading row ------------------------------------------------------ */
+.vega-gallery .vg-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.vega-gallery .vg-head h3 {
+  margin: 0;
+  color: var(--pink);
+}
+.vega-gallery .vg-spacer { flex: 1; }
+
+/* -- Tooltip glyph (28 px hit target, 16 px ring) --------------------- */
+.vega-gallery .vg-tip {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: none;
+  border: 0;
+  display: inline-grid;
+  place-items: center;
+  vertical-align: middle;
+  cursor: help;
+  color: var(--text-dim);
+  flex: none;
+}
+.vega-gallery .vg-tip span {
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  font: 700 10px/14px var(--font-mono);
+  text-align: center;
+  display: block;
+}
+.vega-gallery .vg-tip:hover span,
+.vega-gallery .vg-tip:focus-visible span {
+  border-color: var(--pink);
+  color: var(--pink);
+}
+
+/* -- Run picker row --------------------------------------------------- */
+.vega-gallery .vg-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.vega-gallery .vg-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+.vega-gallery .vg-select {
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 10px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.vega-gallery .vg-select:focus {
+  border-color: var(--magenta);
+  box-shadow: 0 0 0 1px rgba(226, 0, 116, 0.35);
+}
+
+/* -- Status (empty and error states) and header lines ---------------- */
+.vega-gallery .vg-status,
+.vega-gallery .vg-state {
+  margin: 0 0 10px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.vega-gallery .vg-error { color: var(--error); }
+.vega-gallery .vg-header {
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: var(--surface-light);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-body);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.vega-gallery .vg-header:empty { display: none; }
+.vega-gallery .vg-header p { margin: 0; }
+.vega-gallery .vg-header .vg-counts { color: var(--text); }
+.vega-gallery .vg-header .vg-blind { color: var(--warning); }
+.vega-gallery .vg-header .vg-error { color: var(--error); }
+
+/* -- Tile grid -------------------------------------------------------- */
+.vega-gallery .vg-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  align-items: stretch;
+}
+.vega-gallery .vg-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  background: var(--surface-light);
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius-lg);
+  min-width: 0;
+}
+
+/* Image well: a button so the keyboard can toggle overlay and raw frame.
+ * The image is contained, never cropped, so a box at the frame edge stays
+ * visible; the badge names the view showing. */
+.vega-gallery .vg-image {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: #000;
+  cursor: pointer;
+  overflow: hidden;
+}
+.vega-gallery .vg-image img {
+  display: block;
+  width: 100%;
+  height: 150px;
+  object-fit: contain;
+}
+.vega-gallery .vg-view {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(10, 10, 15, 0.8);
+  color: var(--text-dim);
+  font: 400 10px/16px var(--font-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.vega-gallery .vg-image:hover .vg-view,
+.vega-gallery .vg-image:focus-visible .vg-view { color: var(--pink); }
+.vega-gallery .vg-image[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--pink); }
+.vega-gallery .vg-image[aria-pressed="true"] .vg-view { color: var(--pink); }
+.vega-gallery .vg-missing {
+  display: grid;
+  place-items: center;
+  height: 150px;
+  border-radius: var(--radius);
+  background: #000;
+  color: var(--text-dim);
+  font-family: var(--font-body);
+  font-size: 12px;
+}
+.vega-gallery .vg-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--success);
+  overflow-wrap: anywhere;
+}
+
+/* Chips: full name, code beside it, confidence to two decimals. */
+.vega-gallery .vg-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-family: var(--font-body);
+  font-size: 11px;
+}
+/* A chip never breaks inside itself: the name, its code and its number stay
+ * on one line, and a name too long for the tile truncates with an ellipsis
+ * (the chip's title carries the full text). */
+.vega-gallery .vg-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  max-width: 100%;
+  white-space: nowrap;
+}
+.vega-gallery .vg-chip .vg-species,
+.vega-gallery .vg-chip .vg-class {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vega-gallery .vg-chip i.vg-species { font-style: italic; }
+.vega-gallery .vg-chip .vg-code,
+.vega-gallery .vg-chip .vg-conf { flex: none; }
+.vega-gallery .vg-code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+}
+.vega-gallery .vg-code-only { cursor: help; }
+.vega-gallery .vg-conf {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.vega-gallery .vg-none {
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* Verdict row, pinned to the tile's bottom so every tile in a row aligns. */
+.vega-gallery .vg-verdicts {
+  display: flex;
+  gap: 4px;
+  margin-top: auto;
+}
+.vega-gallery .vg-verdict {
+  flex: 1;
+  min-height: 28px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.vega-gallery .vg-verdict[data-verdict="yes"]:hover,
+.vega-gallery .vg-verdict[data-verdict="yes"].is-pressed { border-color: var(--success); color: var(--success); }
+.vega-gallery .vg-verdict[data-verdict="no"]:hover,
+.vega-gallery .vg-verdict[data-verdict="no"].is-pressed { border-color: var(--error); color: var(--error); }
+.vega-gallery .vg-verdict[data-verdict="skip"]:hover,
+.vega-gallery .vg-verdict[data-verdict="skip"].is-pressed { border-color: var(--pink); color: var(--pink); }
+.vega-gallery .vg-verdict.is-pressed { background: var(--surface); box-shadow: inset 0 0 0 1px currentColor; }
+.vega-gallery .vg-tile-note {
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--warning);
+}
+.vega-gallery .vg-tile-note:empty { display: none; }
+
+/* -- Focus (2 px pink ring, 2 px offset, per the design spec) --------- */
+.vega-gallery button:focus-visible,
+.vega-gallery select:focus-visible,
+.vega-gallery [tabindex="0"]:focus-visible {
+  outline: 2px solid var(--pink);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .vega-gallery .vg-verdict,
+  .vega-gallery .vg-tip span { transition: color 0.12s, border-color 0.12s, background-color 0.12s; }
+}
+
+@media (max-width: 700px) {
+  .vega-gallery .vg-row { flex-wrap: wrap; }
+  .vega-gallery .vg-select { flex-basis: 100%; }
+}

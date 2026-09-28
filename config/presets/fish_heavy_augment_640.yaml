@@ -1,0 +1,90 @@
+# ======================================================================
+# Step 6 training preset: "Fish heavy augmentation, 640 px"
+#
+# Where the numbers come from:
+#   The October 2025 ablation on the fish photo dataset (7,572 images,
+#   34 species and colour-phase classes) in oceankind_CV, six configurations
+#   of YOLO11-large at 640 px on two RTX 5090s, one seed each, scored on a
+#   held-out 10 percent test split (758 images, 1,301 boxes):
+#     baseline (default light jitter, no mosaic)   test mAP50 0.798
+#     run1 classification loss weight 2.0          0.808
+#     run2 slightly stronger jitter                0.785
+#     run3 THIS RECIPE                             0.904  (mAP50-95 0.835)
+#     run4 moderate mixing + cls 1.5, lr0 0.008    0.900
+#     run6 similar recipe at 1024 px               0.904  (3x inference cost)
+#   The class-weight and class-exclusion arms never reached the trainer and
+#   the focal-loss arm did not start, so the one supported finding is that
+#   sample mixing plus geometric and colour jitter raised mAP50 by 10.6
+#   points. Full record: vicarius/_METADATA/notes/LO/
+#   n-20260914-231000-fish-detector-model-report.md.
+#
+#   Every value below was read from that run's own args.yaml at
+#   /home/bizon/Desktop/ai/oceankind_CV/fish_training/training_runs/
+#   run3_heavy_augment/args.yaml, with two exceptions marked at their keys:
+#   degrees, which that file records as 15.0, and label_smoothing, which it
+#   does not record at all.
+#
+# One caution: hsv_h 0.3 is a large hue change for classes that separate
+# colour phases of one species, and it was raised together with everything
+# else. It is copied here verbatim because this is the recipe that scored;
+# a first VEGA ablation would try 0.03 (the coral presets' value) alone.
+#
+# How to use:
+#   Set the Train panel's Training task to Detector and its Subject to fish.
+#   This recipe is then the one recipe that matches, so VICARIUS selects it
+#   and applies it to a project with no training settings saved yet. Any
+#   project can also load it by hand from the Load preset dropdown. Values
+#   overwrite the form fields they name; the rest are left.
+# ======================================================================
+
+_meta:
+  name: "Fish heavy augmentation, 640 px"
+  description: "run3_heavy_augment recipe from the fish ablation (mosaic 1.0, mixup 0.15, copy-paste 0.1, rotation 15, scale 0.5, hue 0.3); yolo11l at 640 px, batch 32 on two GPUs."
+  # What this recipe is for. The Train panel offers it when its Training
+  # task control says Detector and its Subject control says fish.
+  task: detect
+  subject: fish
+
+params:
+  model: yolo11l.pt
+  epochs: 350
+  imgsz: 640
+  batch: 32
+  patience: 50
+  device: "0,1"
+  valid_ratio: 0.2
+  test_ratio: 0.1
+  hsv_h: 0.3
+  hsv_s: 0.5
+  hsv_v: 0.4
+  bgr: 0.0
+  # run3 recorded this as 15.0, the same number.
+  degrees: 15
+  translate: 0.1
+  scale: 0.5
+  shear: 2.0
+  perspective: 0.0001
+  flipud: 0.0
+  fliplr: 0.5
+  mosaic: 1.0
+  mixup: 0.15
+  cutmix: 0.0
+  copy_paste: 0.1
+  copy_paste_mode: flip
+  close_mosaic: 10
+  optimizer: auto
+  lr0: 0.01
+  lrf: 0.01
+  momentum: 0.937
+  weight_decay: 0.0005
+  warmup_epochs: 3.0
+  cos_lr: false
+  box: 7.5
+  cls: 0.5
+  dfl: 1.5
+  # Not recorded in run3's args.yaml. 0.0 is VEGA's own trainer default
+  # (scripts/TCRMPtrain_oceankindCV/src/train_wrapper.py line 144), named
+  # here so applying this preset writes the form field rather than keeping
+  # whatever a previously loaded preset left in it. Ultralytics 8.4 treats
+  # the key as removed and drops it, so the value changes no training.
+  label_smoothing: 0.0

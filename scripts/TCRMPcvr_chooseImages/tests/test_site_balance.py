@@ -97,8 +97,21 @@ def test_target_below_n_sites_gives_everyone_floor_of_one():
 
 
 def test_proportional_mid_case():
-    """avail={A:100,B:50,C:50}, target=40, cap 0.25 -> A capped at 10 (25% of
-    40); B and C share the rest proportionally; all >=1."""
+    """avail={A:100,B:50,C:50}, target=40, cap 0.25.
+
+    Three sites cannot all sit at or under a 25 percent share, so the cap is
+    mathematically unsatisfiable here (it needs at least ceil(1/0.25) == 4
+    sites). The allocation must then be the most even split that still meets
+    the target: 14/13/13, monotonic in avail, every site at or above 1 and at
+    or under its own avail.
+
+    Updated 2026-09-01: the previous assertion (A <= floor(0.25*total)) only
+    held because allocate_by_site deadlocked and returned {A:1,B:1,C:1} for a
+    target of 40, which made floor(0.25*3) == 0 -> cap 1 trivially true. The
+    docstring's stated intent (A=10, B=15, C=15) is itself cap-violating: B and
+    C would each hold 37.5 percent. Both the buggy result and the intended one
+    are wrong, so the assertion now pins the even-split semantics.
+    """
     avail = {"A": 100, "B": 50, "C": 50}
     target = 40
 
@@ -106,13 +119,34 @@ def test_proportional_mid_case():
 
     check(set(result.keys()) == set(avail.keys()), "every site present")
     total = sum(result.values())
-    cap = max(1, math.floor(0.25 * total))
-    check(result["A"] <= cap, f"A capped at floor(0.25*total)={cap}, got {result['A']}")
+    check(total == target,
+          f"availability is 200, well above target {target}: got {total}")
+    even = math.ceil(total / len(avail))
+    check(max(result.values()) <= even,
+          f"no site may exceed the even share of {even}: {result}")
     for s in avail:
         check(result[s] >= 1, f"{s} >= 1: got {result[s]}")
         check(result[s] <= avail[s], f"{s} <= avail {avail[s]}: got {result[s]}")
+    check(result["A"] >= result["B"],
+          f"A has the most avail so it takes the rounding leftover: {result}")
     check(result["B"] == result["C"],
           f"B and C have equal avail so should split evenly: {result['B']} vs {result['C']}")
+
+
+def test_realistic_site_count_converges_on_target():
+    """28 sites with ample frames each: the allocation must reach the target,
+    not stall at the inclusion floor. Guards the water-fill convergence fix."""
+    avail = {f"S{i:02d}": 200 for i in range(28)}
+    target = 500
+
+    result = si.allocate_by_site(avail, target, cap_frac=0.25)
+
+    total = sum(result.values())
+    check(total == target, f"28 sites should reach target {target}: got {total}")
+    cap = math.floor(0.25 * total)
+    check(max(result.values()) <= cap,
+          f"cap must bind at convergence (<= {cap}): {result}")
+    check(min(result.values()) >= 1, f"every site included: {result}")
 
 
 def test_every_site_with_avail_gets_floor_one():
@@ -153,9 +187,12 @@ def test_deterministic():
 
 
 def test_cap_unsatisfiable_with_few_sites_floors_win():
-    """With only 2 sites, 25% cap is mathematically below the floor of 1
-    (cap would be 0 or 1 for tiny totals) - floors must win, no site is ever
-    forced below 1, and no exception is raised."""
+    """With only 2 sites a 25% cap can never hold for both, so the cap yields:
+    no site is forced below its floor of 1 and no exception is raised.
+
+    Since the 2026-09-01 convergence fix the unsatisfiable branch splits the
+    request evenly (5/5 here) instead of stalling at 1/1; the guarantee under
+    test, that neither site drops below 1, is unchanged."""
     avail = {"A": 20, "B": 20}
     result = si.allocate_by_site(avail, target=10, cap_frac=0.25)
     check(result["A"] >= 1 and result["B"] >= 1,

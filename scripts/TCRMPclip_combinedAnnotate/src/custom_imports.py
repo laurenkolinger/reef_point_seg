@@ -57,8 +57,14 @@ SUBDIR = 'custom_imports'
 _AST = timezone(timedelta(hours=-4), name='AST')
 
 
-def _now_ast():
+def now_ast():
+    """Current time in AST. The one AST clock this package exposes: callers
+    elsewhere (app.py) reuse it rather than defining a second timezone."""
     return datetime.now(_AST)
+
+
+# Long-standing private name, kept so existing call sites keep working.
+_now_ast = now_ast
 
 
 def imports_dir(export_dir):
@@ -90,7 +96,7 @@ def _save_manifest(export_dir, entries):
     with open(tmp, 'w') as f:
         json.dump({
             'schema': 1,
-            'updated_at': _now_ast().strftime('%Y-%m-%d %H:%M:%S AST'),
+            'updated_at': now_ast().strftime('%Y-%m-%d %H:%M:%S AST'),
             'imports': entries,
         }, f, indent=1)
     os.replace(tmp, path)
@@ -197,7 +203,7 @@ def ingest_files(export_dir, items, taken_names=None, long_edge=LORES_LONG_EDGE,
             'orig_width': ow, 'orig_height': oh,
             'width': dw, 'height': dh,
             'scale': scale,
-            'imported_at': _now_ast().strftime('%Y-%m-%d %H:%M:%S AST'),
+            'imported_at': now_ast().strftime('%Y-%m-%d %H:%M:%S AST'),
             'reviewer': reviewer or '',
         })
         log(f"[import] {orig_name} -> {delivered_name} "
@@ -266,7 +272,7 @@ def record_in_project(export_dir, entries, initials='LO'):
             return False
         names = [e['filename'] for e in entries]
         state.setdefault('access_log', []).append({
-            'ts': _now_ast().isoformat(timespec='seconds'),
+            'ts': now_ast().isoformat(timespec='seconds'),
             'initials': initials or 'LO',
             'action': 'import_images',
             'purpose': (f"imported {len(entries)} custom image(s) into the "

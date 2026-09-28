@@ -1,13 +1,26 @@
 #!/usr/bin/env python3
-"""Thin wrapper around Ultralytics' YOLO segmentation training.
+"""Thin wrapper around Ultralytics' YOLO training, segmentation or detection.
 
 Mirrors oceankind_CV/training/train_segment.py hyperparameters but exposes
 every knob as a CLI argument so the orchestrator UI can forward user-tuned
 values. Defaults are taken from train_segment.py so unchanged runs give
 identical results to upstream.
 
-`project` is accepted explicitly so training runs land inside the pipeline's
-step-6 project folder instead of next to cwd (upstream hardcodes 'OK_CV').
+--task picks what is trained: segment (the default, unchanged behaviour) or
+detect. The task changes exactly two things, the base weights (yolo11<size>.pt
+instead of yolo11<size>-seg.pt) and the task handed to the YOLO constructor.
+Every other knob, augmentation included, is task-agnostic and is forwarded the
+same way for both.
+
+The weights are what really decide the head: ultralytics reads the task of a
+.pt checkpoint from the checkpoint and ignores the task it is handed (only a
+.yaml config takes the task from the caller). --task is therefore the name of
+the intent, and check_model_task() refuses the pairing that would quietly
+train the wrong head.
+
+`project` is accepted explicitly so training runs are written inside the
+pipeline's step-6 project folder instead of next to cwd (upstream hardcodes
+'OK_CV').
 """
 
 import argparse
@@ -16,9 +29,72 @@ import sys
 
 from ultralytics import YOLO
 
+# What ultralytics calls each task, keyed by every spelling this platform uses.
+_TASKS = {'segment': 'segment', 'seg': 'segment', 'segmentation': 'segment',
+          'detect': 'detect', 'detection': 'detect', 'bbox': 'detect'}
+
+
+def yolo_task(task):
+    """The ultralytics task name for a task as the orchestrator spells it,
+    case-insensitively. An unrecognized value reads as segment here; the CLI
+    refuses it outright (see _task_arg), so no run silently gets the wrong
+    task from a typo."""
+    return _TASKS.get(str(task or '').strip().lower(), 'segment')
+
+
+def _task_arg(value):
+    """argparse type for --task: normalize the spelling and the case, and
+    refuse anything else. Case matters because the caller is a shell env var:
+    plain `choices=` would reject "Detect" AFTER run_step6.sh had already
+    written dataset_detect/."""
+    key = str(value).strip().lower()
+    if key not in _TASKS:
+        raise argparse.ArgumentTypeError(
+            f"unknown task {value!r}; use segment or detect")
+    return _TASKS[key]
+
+
+def default_model_for(task, size='m'):
+    """Base weights for a task when the caller named none.
+
+    yolo11n/s/m are staged next to this tool for BOTH tasks, so the default
+    (m) never downloads. The l and x sizes are staged for segmentation only,
+    so a detection run at those sizes has ultralytics fetch the file, which
+    needs the box to reach the network."""
+    return f'yolo11{size}.pt' if yolo_task(task) == 'detect' else f'yolo11{size}-seg.pt'
+
+
+def resolve_model(args):
+    """The weights to train from: whatever --model named, else the task's
+    default. An explicit path always wins, which is how a fine-tune continues
+    from an earlier run's best.pt."""
+    return args.model or default_model_for(args.task)
+
+
+def check_model_task(model, task):
+    """'' when the weights suit the task, else why they do not.
+
+    This matters more than it looks: ultralytics reads the task of a .pt
+    checkpoint from the checkpoint itself and ignores the `task` it is handed
+    (Model._load), so a mismatched pair does not fail, it silently trains the
+    OTHER head and writes it into this run's folder. Only the file name is
+    evidence, so neutral names (best.pt, last.pt) are left to ultralytics.
+
+    The check runs one way on purpose. A detection run handed -seg weights is
+    always a mistake and is refused. The reverse (a segmentation task named
+    over stock detection weights) is how the model lab drives a detection lab
+    today, which passes detection weights without setting a task: refusing it
+    would break a path that trains the right model. Once every caller sends
+    TCRMP_STEP6_TASK, the check can run both ways."""
+    base = os.path.basename(str(model or ''))
+    if yolo_task(task) == 'detect' and '-seg' in base:
+        return (f'task=detect cannot train from segmentation weights ({base}). '
+                'Pick a detection base model, or fine-tune from a detection run.')
+    return ''
+
 
 def arg_parse():
-    p = argparse.ArgumentParser(description='Train YOLO segmentation model (TCRMP step 6)')
+    p = argparse.ArgumentParser(description='Train a YOLO model (TCRMP step 6)')
 
     # --- required plumbing ------------------------------------------------
     p.add_argument('--src', required=True, help='Path to data.yaml from the split step')
@@ -26,8 +102,13 @@ def arg_parse():
     p.add_argument('--project', required=True, help='Root directory for training runs')
 
     # --- core training ----------------------------------------------------
-    p.add_argument('--model', default='yolo11m-seg.pt',
-                   help='Base weights. e.g. yolo11{n,s,m,l,x}-seg.pt')
+    p.add_argument('--task', default='segment', type=_task_arg,
+                   help='What to train: segment (default) or detect, in any case. Sets the '
+                        'base weights and the ultralytics task; every other knob is '
+                        'task-agnostic.')
+    p.add_argument('--model', default='',
+                   help='Base weights. Unset uses the task default: yolo11m-seg.pt for '
+                        'segment, yolo11m.pt for detect.')
     p.add_argument('--epochs', type=int, default=500)
     p.add_argument('--imgsz', type=int, default=512)
     p.add_argument('--batch', type=int, default=-1,
@@ -163,10 +244,17 @@ def main():
         sys.exit(1)
     os.makedirs(args.project, exist_ok=True)
 
+    task = yolo_task(args.task)
+    model_path = resolve_model(args)
+    mismatch = check_model_task(model_path, task)
+    if mismatch:
+        print(f'ERROR: {mismatch}', file=sys.stderr)
+        sys.exit(2)
+
     # Echo the knobs that matter so the run is reproducible from logs alone.
     print(f'[train] data={args.src}')
     print(f'[train] project={args.project} name={args.name}')
-    print(f'[train] model={args.model} epochs={args.epochs} imgsz={args.imgsz} '
+    print(f'[train] task={task} model={model_path} epochs={args.epochs} imgsz={args.imgsz} '
           f'batch={args.batch} optimizer={args.optimizer}')
     print(f'[train] HSV hue={args.hsv_h} sat={args.hsv_s} val={args.hsv_v}')
     print(f'[train] geom rot={args.degrees} trans={args.translate} scale={args.scale} '
@@ -178,7 +266,7 @@ def main():
 
     kwargs = build_train_kwargs(args)
 
-    model = YOLO(args.model)
+    model = YOLO(model_path, task=task)
     model.train(**kwargs)
 
 

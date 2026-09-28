@@ -7,6 +7,19 @@
 # For `all`, the split ratios + every training hyperparameter can be overridden
 # via env vars set by the orchestrator:
 #
+#   TCRMP_STEP6_TASK        ("segment" (default) trains a segmentation model
+#                            from the polygon labels; "detect" trains a
+#                            bounding-box model. Every other knob below is
+#                            task-agnostic and is forwarded the same way for
+#                            both. On a segmentation source, detect derives
+#                            box labels into dataset_detect/ and trains there,
+#                            leaving dataset/ intact for later seg runs; a
+#                            step6 dir whose dataset/ already holds box labels
+#                            trains from it directly.)
+#   TCRMP_STEP6_MODEL_PATH  (absolute weights path; wins over the [model]
+#                            argument and over the task default, which is
+#                            yolo11m-seg.pt for segment and yolo11m.pt for
+#                            detect)
 #   TCRMP_STEP6_VALID       TCRMP_STEP6_TEST          TCRMP_STEP6_MIN_SAMPLES
 #   TCRMP_STEP6_INCLUDE_CLASSES  (CSV of class IDs to keep; unset = all)
 #   TCRMP_STEP6_PIN_SPLIT   ("1" = pinned_split.py (default), frozen by-transect
@@ -33,8 +46,10 @@
 #                            fine-tuning from previous weights; unset = no freeze)
 #
 # Output dirs inside step6_dir:
-#   dataset/   train/valid/test split + data.yaml + test.yaml
-#   runs/      ultralytics training runs (each --name is a subdir)
+#   dataset/         train/valid/test split + data.yaml + test.yaml
+#   dataset_detect/  detection view of dataset/ (symlinked images, polygon
+#                    labels reduced to boxes), written only for task=detect
+#   runs/            ultralytics training runs (each --name is a subdir)
 set -e
 
 cd "$(dirname "$0")"
@@ -56,6 +71,22 @@ else
     exit 1
 fi
 OCEAN_DIR="$WRAPPER_DIR/oceankind_CV"
+
+# What this run trains. Every spelling is accepted here and NORMALIZED once:
+# TASK_KIND ("segment" or "detect") is what this script decides on (the base
+# weights, and whether a detection view of the dataset has to be built) AND
+# what is forwarded to train_wrapper.py. Forwarding the raw value instead would
+# hand the wrapper a spelling its own parser could reject, after this script
+# had already written dataset_detect/. TASK keeps the raw value for messages.
+TASK="${TCRMP_STEP6_TASK:-segment}"
+case "$(printf '%s' "$TASK" | tr '[:upper:]' '[:lower:]')" in
+    segment|seg|segmentation) TASK_KIND="segment" ;;
+    detect|detection|bbox)    TASK_KIND="detect" ;;
+    *)
+        echo "ERROR: unknown TCRMP_STEP6_TASK '$TASK'. Use 'segment' or 'detect'." >&2
+        exit 2
+        ;;
+esac
 
 cmd="${1:-}"
 shift || true
@@ -113,24 +144,45 @@ run_split() {
 
 run_train() {
     local STEP6="$1" NAME="$2"
-    local EPOCHS="${3:-500}" IMGSZ="${4:-512}" MODEL="${5:-yolo11m-seg.pt}"
+    local EPOCHS="${3:-500}" IMGSZ="${4:-512}" MODEL="${5:-}"
     if [ -z "$STEP6" ] || [ -z "$NAME" ]; then
         echo "usage: run_step6.sh train <step6_dir> <name> [epochs] [imgsz] [model]" >&2
         exit 2
+    fi
+    # Base weights: an explicit env path wins over the [model] argument, which
+    # wins over the task default. Both defaults are staged next to this script
+    # so nothing is downloaded mid-run.
+    if [ -n "${TCRMP_STEP6_MODEL_PATH:-}" ]; then
+        MODEL="$TCRMP_STEP6_MODEL_PATH"
+    elif [ -z "$MODEL" ]; then
+        if [ "$TASK_KIND" = "detect" ]; then MODEL="yolo11m.pt"; else MODEL="yolo11m-seg.pt"; fi
     fi
     local DATA_YAML="$STEP6/dataset/data.yaml"
     if [ ! -f "$DATA_YAML" ]; then
         echo "ERROR: $DATA_YAML not found. Run split first." >&2
         exit 3
     fi
+    if [ "$TASK_KIND" = "detect" ]; then
+        # A segmentation dataset gets a detection view (dataset_detect/:
+        # symlinked images, polygons reduced to boxes) built beside it and
+        # trains from that; a dataset whose labels are already boxes trains
+        # from its own data.yaml. Either way the path comes back on stdout.
+        DATA_YAML="$("$PY" "$WRAPPER_DIR/src/detect_dataset.py" prepare \
+            --dataset "$STEP6/dataset" --out "$STEP6/dataset_detect")"
+        if [ -z "$DATA_YAML" ] || [ ! -f "$DATA_YAML" ]; then
+            echo "ERROR: could not prepare a detection dataset from $STEP6/dataset." >&2
+            exit 4
+        fi
+    fi
     mkdir -p "$STEP6/runs"
-    echo "[step6] training on $DATA_YAML -> $STEP6/runs/$NAME (model=$MODEL epochs=$EPOCHS imgsz=$IMGSZ)"
+    echo "[step6] training on $DATA_YAML -> $STEP6/runs/$NAME (task=$TASK_KIND model=$MODEL epochs=$EPOCHS imgsz=$IMGSZ)"
 
-    # Core args — always set
+    # Core args, always set
     local -a ARGS=(
         --src "$DATA_YAML"
         --name "$NAME"
         --project "$STEP6/runs"
+        --task "$TASK_KIND"
         --model "$MODEL"
         --epochs "$EPOCHS"
         --imgsz "$IMGSZ"
@@ -187,7 +239,7 @@ case "$cmd" in
     all)
         STEP5="$1"; STEP6="$2"; NAME="$3"
         run_split "$STEP5" "$STEP6"
-        run_train "$STEP6" "$NAME" "${4:-500}" "${5:-512}" "${6:-yolo11m-seg.pt}"
+        run_train "$STEP6" "$NAME" "${4:-500}" "${5:-512}" "${6:-}"
         ;;
     *)
         echo "usage: run_step6.sh {split|train|all} ..." >&2

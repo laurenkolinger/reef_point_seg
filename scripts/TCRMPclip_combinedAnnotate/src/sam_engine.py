@@ -17,6 +17,7 @@ The exemplar/detector model (Sam3Model) loads cleanly and needs no backfill.
 import hashlib
 import logging
 import os
+import threading
 
 import numpy as np
 import torch
@@ -30,6 +31,10 @@ log = logging.getLogger(__name__)
 #   "video_backfill" full Sam3VideoModel loaded on CPU to lift nested weights
 # Tests and boot logs read this to prove the cache path is actually taken.
 LAST_TRACKER_LOAD_PATH = None
+
+# The three mask variants the tracker returns per prompt, smallest first.
+# _extract_mask indexes this tuple; set_mask_size validates against it.
+MASK_SIZES = ("tight", "medium", "generous")
 
 # Bump when the cache payload layout changes; stale files are simply ignored
 # (the fingerprint no longer matches) and rewritten on the next backfill.
@@ -225,27 +230,52 @@ class SAM3Engine:
         self._text_model = None
         self._text_proc = None
 
-        # Current image cache (for the tracker — no persistent embedding,
-        # but we cache the PIL image to avoid re-reading from disk)
+        # Current frame cache. The PIL image avoids repeated disk reads; the
+        # two embedding caches hold the vision-encoder output for that frame so
+        # every later prompt on it skips the encoder entirely.
         self._current_image_path = None
         self._current_image = None
         self._image_size = None  # (width, height)
+        self._image_embeddings = None     # tracker vision features for the current frame
+        self._exemplar_features = None    # Sam3Model vision features for the current frame
+        # Lock order, never nested the other way: take _prompt_lock alone, and
+        # take _exemplar_lock (model loading) before _prompt_lock, never inside
+        # it. _prompt_lock covers frame state plus the prompt that reads it, so
+        # embeddings captured for frame A can never meet frame B's sizes.
+        self._prompt_lock = threading.Lock()
+        self._exemplar_lock = threading.Lock()
 
     # ── Image loading ───────────────────────────────────────────────
 
     def set_image(self, image_path):
         """Load and cache image. Returns (width, height).
-        The tracker model processes the full image on each call (no persistent
-        embedding like SAM2), but caching avoids repeated disk reads."""
-        if self._current_image_path == image_path and self._current_image is not None:
+        Switching frames drops the cached vision-encoder output for the old
+        frame, so the first prompt on the new one recomputes it once."""
+        with self._prompt_lock:
+            if self._current_image_path == image_path and self._current_image is not None:
+                return self._image_size
+
+            self._current_image = Image.open(image_path).convert("RGB")
+            self._image_size = (self._current_image.width, self._current_image.height)
+            self._current_image_path = image_path
+            self._image_embeddings = None
+            self._exemplar_features = None
+
+            log.info("Loaded image %s (%dx%d)", image_path, *self._image_size)
             return self._image_size
 
-        self._current_image = Image.open(image_path).convert("RGB")
-        self._image_size = (self._current_image.width, self._current_image.height)
-        self._current_image_path = image_path
-
-        log.info("Loaded image %s (%dx%d)", image_path, *self._image_size)
-        return self._image_size
+    def clear_image(self):
+        """Forget the current frame and everything cached for it, so the next
+        set_image() reloads from disk. Callers must use this instead of nulling
+        _current_image_path by hand: that leaves the frame's vision-encoder
+        output (about 77 MB for the tracker) stranded on the GPU, and a later
+        prompt on a different frame would then reuse the wrong embeddings."""
+        with self._prompt_lock:
+            self._current_image_path = None
+            self._current_image = None
+            self._image_size = None
+            self._image_embeddings = None
+            self._exemplar_features = None
 
     # ── Single point segmentation ───────────────────────────────────
 
@@ -256,12 +286,21 @@ class SAM3Engine:
 
     # ── Refinement with accumulated clicks ──────────────────────────
 
-    def refine_mask(self, clicks, labels):
+    def refine_mask(self, clicks, labels, box=None):
         """Refine with multiple positive/negative clicks.
         clicks: list of (x, y) tuples
         labels: list of ints (1=positive, 0=negative)
+        box: optional [x_min, y_min, x_max, y_max] prompted alongside the clicks
         Returns result dict or None."""
-        return self._point_prompt(clicks, labels)
+        return self._point_prompt(clicks, labels, box=box)
+
+    # ── Mask size ───────────────────────────────────────────────────
+
+    def set_mask_size(self, size):
+        """Pick which of the three tracker variants later prompts return."""
+        if size not in MASK_SIZES:
+            raise ValueError(f"mask size must be one of {MASK_SIZES}, got {size!r}")
+        self.mask_size = size
 
     # ── Box prompt (redraw from scratch) ────────────────────────────
 
@@ -269,18 +308,21 @@ class SAM3Engine:
         """Segment using a bounding box prompt. Returns result dict or None."""
         assert self._current_image is not None, "Call set_image() first"
 
-        inputs = self._tracker_proc(
-            images=self._current_image,
-            input_boxes=[[[x_min, y_min, x_max, y_max]]],
-            return_tensors="pt",
-        ).to(self.device_tracker)
+        with self._prompt_lock:
+            emb = self._ensure_embeddings()
+            inputs = self._tracker_proc(
+                original_sizes=self._original_sizes(),
+                input_boxes=[[[x_min, y_min, x_max, y_max]]],
+                return_tensors="pt",
+            ).to(self.device_tracker)
+            fwd = {k: v for k, v in inputs.items() if k != "original_sizes"}
 
-        with torch.no_grad():
-            out = self._tracker(**inputs)
+            with torch.no_grad():
+                out = self._tracker(image_embeddings=emb, **fwd)
 
-        masks = self._tracker_proc.post_process_masks(
-            out.pred_masks.cpu(), inputs["original_sizes"]
-        )[0]
+            masks = self._tracker_proc.post_process_masks(
+                out.pred_masks.cpu(), inputs["original_sizes"]
+            )[0]
 
         binary = self._extract_mask(masks)
         if binary is None or binary.sum() == 0:
@@ -300,26 +342,31 @@ class SAM3Engine:
         Returns list of result dicts."""
         assert self._current_image is not None, "Call set_image() first"
 
+        # Outside _prompt_lock on purpose: loading takes _exemplar_lock, and the
+        # two locks must never be taken in that order (see __init__).
         self._ensure_exemplar_model()
 
         x_min, y_min, x_max, y_max = bbox
         try:
-            inputs = self._text_proc(
-                images=self._current_image,
-                input_boxes=[[[x_min, y_min, x_max, y_max]]],
-                input_boxes_labels=[[1]],
-                return_tensors="pt",
-            ).to(self.device_exemplar)
+            with self._prompt_lock:
+                feats = self._ensure_exemplar_features()
+                inputs = self._text_proc(
+                    original_sizes=self._original_sizes(),
+                    input_boxes=[[[x_min, y_min, x_max, y_max]]],
+                    input_boxes_labels=[[1]],
+                    return_tensors="pt",
+                ).to(self.device_exemplar)
+                fwd = {k: v for k, v in inputs.items() if k != "original_sizes"}
 
-            with torch.no_grad():
-                out = self._text_model(**inputs)
+                with torch.no_grad():
+                    out = self._text_model(vision_embeds=feats, **fwd)
 
-            results = self._text_proc.post_process_instance_segmentation(
-                out,
-                threshold=self.confidence_threshold,
-                mask_threshold=0.5,
-                target_sizes=inputs.get("original_sizes").tolist(),
-            )[0]
+                results = self._text_proc.post_process_instance_segmentation(
+                    out,
+                    threshold=self.confidence_threshold,
+                    mask_threshold=0.5,
+                    target_sizes=inputs["original_sizes"].tolist(),
+                )[0]
 
             output = []
             scores = results.get("scores", [])
@@ -342,53 +389,80 @@ class SAM3Engine:
     # ── Cleanup ─────────────────────────────────────────────────────
 
     def release(self):
-        """Free all GPU memory."""
+        """Free all GPU memory. The exemplar lock is held while the exemplar
+        model is dropped so a warm-up still in flight finishes and cannot
+        repopulate _text_model after this returns."""
         self._tracker = None
         self._tracker_proc = None
-        self._text_model = None
-        self._text_proc = None
+        with self._exemplar_lock:
+            self._text_model = None
+            self._text_proc = None
         self._current_image = None
         self._current_image_path = None
+        self._image_size = None
+        self._image_embeddings = None
+        self._exemplar_features = None
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         log.info("SAM3 engine released.")
 
     # ── Internal ────────────────────────────────────────────────────
 
-    def _point_prompt(self, points, labels):
-        """Run point prompt via tracker model. Returns result dict or None."""
+    def _ensure_embeddings(self):
+        """Run the tracker vision encoder once per frame; prompts reuse it."""
+        if self._image_embeddings is None:
+            px = self._tracker_proc(
+                images=self._current_image, return_tensors="pt"
+            ).to(self.device_tracker)
+            with torch.no_grad():
+                self._image_embeddings = self._tracker.get_image_embeddings(
+                    px["pixel_values"]
+                )
+        return self._image_embeddings
+
+    def _original_sizes(self):
+        """[[height, width]] of the current frame, the shape the processors want
+        when they are given prompts without an image."""
+        w, h = self._image_size
+        return [[h, w]]
+
+    def _point_prompt(self, points, labels, box=None):
+        """Run a point (and optional box) prompt on the cached embeddings.
+        Returns result dict or None."""
         assert self._current_image is not None, "Call set_image() first"
 
         # Format: 4 levels — [image_level][object_level][point_level][coords]
         # For single image, single object, N points:
         #   input_points=[[[ [x1,y1], [x2,y2], ... ]]]
         #   input_labels=[[[ l1, l2, ... ]]]
-        pts_nested = [[[list(p) for p in points]]]
-        lbl_nested = [[labels]]
+        with self._prompt_lock:
+            emb = self._ensure_embeddings()
+            proc_kw = dict(
+                original_sizes=self._original_sizes(),
+                input_points=[[[list(p) for p in points]]],
+                input_labels=[[labels]],
+                return_tensors="pt",
+            )
+            if box is not None:
+                proc_kw["input_boxes"] = [[[float(v) for v in box]]]
+            inputs = self._tracker_proc(**proc_kw).to(self.device_tracker)
+            fwd = {k: v for k, v in inputs.items() if k != "original_sizes"}
 
-        inputs = self._tracker_proc(
-            images=self._current_image,
-            input_points=pts_nested,
-            input_labels=lbl_nested,
-            return_tensors="pt",
-        ).to(self.device_tracker)
+            with torch.no_grad():
+                out = self._tracker(image_embeddings=emb, **fwd)
 
-        with torch.no_grad():
-            out = self._tracker(**inputs)
-
-        masks = self._tracker_proc.post_process_masks(
-            out.pred_masks.cpu(), inputs["original_sizes"]
-        )[0]
+            masks = self._tracker_proc.post_process_masks(
+                out.pred_masks.cpu(), inputs["original_sizes"]
+            )[0]
 
         binary = self._extract_mask(masks)
         if binary is None or binary.sum() == 0:
             return None
 
         # Tracker returns IoU scores per mask variant
-        iou_scores = out.iou_scores
         score = 0.9  # default
-        if iou_scores is not None:
-            score = float(iou_scores.cpu().flatten()[-1])
+        if getattr(out, "iou_scores", None) is not None:
+            score = float(out.iou_scores.cpu().flatten()[-1])
 
         return {
             'mask': binary.astype(bool),
@@ -399,8 +473,7 @@ class SAM3Engine:
     def _extract_mask(self, masks):
         """Extract the best binary mask from tracker output.
         Tracker returns 3 mask variants: tight(0), medium(1), generous(2)."""
-        size_idx = {"tight": 0, "medium": 1, "generous": 2}
-        idx = size_idx.get(self.mask_size, 2)
+        idx = MASK_SIZES.index(self.mask_size) if self.mask_size in MASK_SIZES else 2
 
         if masks.ndim == 4 and masks.shape[1] >= 3:
             mn = masks[0, idx].float().numpy()
@@ -414,13 +487,52 @@ class SAM3Engine:
         binary = (mn > 0.5).astype(np.uint8)
         return binary
 
-    def _ensure_exemplar_model(self):
-        """Lazily load the exemplar/text model on first use."""
-        if self._text_model is not None:
-            return
-        log.info("Loading SAM3 exemplar model on %s...", self.device_exemplar)
+    def _ensure_exemplar_features(self):
+        """Run the Sam3Model vision encoder once per frame; every exemplar scan
+        on that frame reuses the result."""
+        if self._exemplar_features is None:
+            px = self._text_proc(
+                images=self._current_image, return_tensors="pt"
+            ).to(self.device_exemplar)
+            with torch.no_grad():
+                self._exemplar_features = self._text_model.get_vision_features(
+                    px["pixel_values"]
+                )
+        return self._exemplar_features
+
+    def _load_exemplar_model(self):
+        """Pull the exemplar/text model and its processor onto the GPU."""
         from transformers import Sam3Model, Sam3Processor
         self._text_proc = _hf_load(Sam3Processor, "facebook/sam3")
         self._text_model = _hf_load(Sam3Model, "facebook/sam3").to(self.device_exemplar)
         self._text_model.eval()
-        log.info("Exemplar model ready.")
+
+    def _ensure_exemplar_model(self):
+        """Lazily load the exemplar/text model on first use (lock: a Scan that
+        arrives during warm-up waits instead of loading a second copy)."""
+        with self._exemplar_lock:
+            if self._text_model is not None:
+                return
+            log.info("Loading SAM3 exemplar model on %s...", self.device_exemplar)
+            self._load_exemplar_model()
+            log.info("Exemplar model ready.")
+
+    def _warm_exemplar(self):
+        """Warm-up thread body. A background load that fails must not raise out
+        of the thread (threading would print a bare traceback and the operator
+        would see nothing actionable); the lazy path retries on the first Scan."""
+        try:
+            self._ensure_exemplar_model()
+        except Exception as e:
+            log.warning("SAM3 exemplar warm-up failed (lazy load will retry "
+                        "on first Scan): %s", e)
+
+    def warm_exemplar_async(self):
+        """Load the exemplar model in a daemon thread right after boot so the
+        first Scan does not stall. TCRMP_EXEMPLAR_WARMUP=0 disables it."""
+        if os.environ.get("TCRMP_EXEMPLAR_WARMUP", "1") == "0":
+            return None
+        t = threading.Thread(target=self._warm_exemplar,
+                             name="sam3-exemplar-warmup", daemon=True)
+        t.start()
+        return t

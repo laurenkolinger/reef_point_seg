@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bounding Boxes - VEGA</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Syne:wght@600;700;800&display=swap">
+  <link rel="stylesheet" href="{{ base }}/static/boxes.css?v=20260915-review-fixes">
+</head>
+<body>
+<main class="bx">
+
+  <header class="bx-head">
+    <h1 class="bx-title">Bounding Boxes</h1>
+    <p class="bx-scope" id="bx-scope"
+       title="Bounding-box datasets from outside this project are staged separately. VICARIUS uses them for detector training and can convert them to outlines, but they are never part of a TCRMP project and never counted in coverage or STATS.">{{ coverage_note }}</p>
+  </header>
+
+  <p class="bx-flash" id="bx-flash" role="status" aria-live="polite" hidden></p>
+
+  <!-- 1 DATASETS ---------------------------------------------------- -->
+  <section class="bx-card" id="bx-sec-datasets" aria-labelledby="bx-h-datasets">
+    <h2 class="bx-h" id="bx-h-datasets">1. Staged datasets</h2>
+    <div class="bx-cards" id="bx-datasets"
+         title="VICARIUS lists the box datasets already staged under supporting_data/bbox_datasets, and a dataset staged by scripts/_boxes/ingest_yolo_boxes.py joins the list when Refresh is pressed. Each card shows what the last ingest wrote, which stager wrote it, whether it carries a names table and split pins, the terms the data carries, and how it is staged again."></div>
+    <!-- The Coral Intel action row. The page script moves it inside the Coral
+         Intel card once that dataset is staged, so each card carries the one
+         action that restages it; it stays here while nothing is staged. -->
+    <div class="bx-actions" id="bx-ingest-row">
+      <code class="bx-path" id="bx-source"
+            title="VICARIUS reads the Coral Intel distribution from this folder on this machine."></code>
+      <button type="button" id="bx-ingest" class="bx-btn bx-btn-go"
+              title="Copy the Coral Intel images and annotations into supporting_data/bbox_datasets/coral_intel, derive and verify the class names from the filenames, and write the class map, the license and the ingest manifest. Safe to run again: it copies only what changed.">Ingest or refresh Coral Intel</button>
+    </div>
+    <div class="bx-actions bx-actions-end" id="bx-list-row">
+      <button type="button" id="bx-refresh" class="bx-btn"
+              title="Read the staged datasets again and rebuild the cards, which is what a dataset staged in a terminal with scripts/_boxes/ingest_yolo_boxes.py needs. VICARIUS also reads them when the page opens and when an ingest or a conversion finishes.">Refresh</button>
+    </div>
+  </section>
+
+  <!-- 2 TRAIN IN VEGA -------------------------------------------------
+       The handoff. Training happens in the VEGA main window only: this
+       section makes (or reuses) the dataset's training project and opens
+       it there on Train Model. -->
+  <section class="bx-card" id="bx-sec-project" aria-labelledby="bx-h-project">
+    <h2 class="bx-h" id="bx-h-project">2. Train in VEGA</h2>
+    <p class="bx-note">VEGA trains in its main window; this press opens the dataset's training project there.</p>
+    <div class="bx-grid">
+      <label class="bx-field" for="bx-project-dataset">
+        <span class="bx-label">Dataset</span>
+        <select id="bx-project-dataset" class="bx-input"
+                title="Pick the staged box dataset VEGA trains on. Only fully staged datasets are listed, and VEGA reads the images where they are staged.">
+        </select>
+      </label>
+      <label class="bx-field" for="bx-project-by">
+        <span class="bx-label">Your initials</span>
+        <input id="bx-project-by" class="bx-input" type="text" autocomplete="off"
+               spellcheck="false" maxlength="4" placeholder="LO"
+               title="Type one to four letters. VEGA names a new project folder with them and records them as who made it; opening a project that already exists needs none.">
+      </label>
+    </div>
+    <p class="bx-note bx-note-inline bx-existing" id="bx-project-existing"
+       title="VICARIUS reports whether the chosen dataset already has a training project, and which one Train in VEGA opens."></p>
+    <div class="bx-actions">
+      <span class="bx-result">
+        <span class="bx-note bx-note-inline" id="bx-project-result"
+              title="VICARIUS names the project the last press handed to VEGA."></span>
+        <a class="bx-link" id="bx-project-link" href="#" target="reefpointseg_orchestrator" hidden
+           title="Open the project last handed to VEGA in the VEGA main window, for a browser that blocked the window the first time.">open it</a>
+      </span>
+      <span class="bx-btns">
+        <button type="button" id="bx-project-new" class="bx-btn" hidden
+                title="Make a second training project for this dataset and open it in VEGA instead of the existing one. VEGA gives it its own split and its own rounds ledger, so its runs are not comparable with the first project's.">Make a second project</button>
+        <button type="button" id="bx-project-open" class="bx-btn bx-btn-go"
+                title="Open this dataset's training project in the VEGA main window on Train Model, and make the project first when the dataset has none. Steps 1 to 4 are skipped because there is nothing to annotate.">Train in VEGA</button>
+      </span>
+    </div>
+  </section>
+
+  <!-- ADVANCED: the box-to-mask conversion, folded away so the two things
+       most people want (the dataset card and the handoff to VEGA) read
+       first. -->
+  <details class="bx-adv" id="bx-adv">
+    <summary class="bx-adv-summary"
+             title="Open the box-to-mask conversion, which turns staged boxes into outlines with SAM3. Training a detector does not need it: Train in VEGA reads the boxes as they are.">Advanced: convert boxes to masks</summary>
+
+  <!-- CONVERT ---------------------------------------------------------- -->
+  <section class="bx-card" id="bx-sec-convert" aria-labelledby="bx-h-convert">
+    <h2 class="bx-h" id="bx-h-convert">Boxes to masks</h2>
+    <p class="bx-note">SAM3 turns each box into an outline. Nobody has checked these outlines, so they are a starting point for training rather than reviewed labels.</p>
+    <div class="bx-grid">
+      <label class="bx-field" for="bx-convert-dataset">
+        <span class="bx-label">Dataset</span>
+        <select id="bx-convert-dataset" class="bx-input"
+                title="Pick the staged box dataset to convert. Only fully staged datasets are listed.">
+        </select>
+      </label>
+      <label class="bx-field" for="bx-convert-limit">
+        <span class="bx-label">Images to convert</span>
+        <input id="bx-convert-limit" class="bx-input" type="number" min="1" max="100000"
+               step="1" value="{{ default_limit }}"
+               title="Set how many records to convert this run, counted from the start of the dataset. Each one loads on the GPU, so start small and raise it once the outlines look right; the default is {{ default_limit }}.">
+      </label>
+      <label class="bx-field" for="bx-convert-name">
+        <span class="bx-label">Output name</span>
+        <input id="bx-convert-name" class="bx-input" type="text" autocomplete="off"
+               spellcheck="false" placeholder="coral_intel_smoke5"
+               title="Name the output folder under inprocess/_bbox with letters, digits, underscore and hyphen. Leave it empty and VICARIUS uses the dataset name plus a timestamp.">
+      </label>
+    </div>
+    <div class="bx-actions">
+      <label class="bx-check" for="bx-keep-degenerate">
+        <input id="bx-keep-degenerate" type="checkbox"
+               title="Tick this to also prompt SAM3 with boxes that cover the whole frame. Those boxes say only that the species is somewhere in the picture, so their outlines are usually the whole image; off is the default.">
+        <span class="bx-label">Include whole-frame boxes</span>
+      </label>
+      <button type="button" id="bx-convert" class="bx-btn bx-btn-go"
+              title="Run SAM3 on this machine's GPU over the chosen dataset and write a YOLO segmentation dataset to inprocess/_bbox. One job runs at a time.">Convert boxes to masks</button>
+    </div>
+  </section>
+
+  <!-- PROGRESS ------------------------------------------------------- -->
+  <section class="bx-card" id="bx-sec-progress" aria-labelledby="bx-h-progress">
+    <h2 class="bx-h" id="bx-h-progress">Progress</h2>
+    <div class="bx-progress-top">
+      <span class="bx-status" id="bx-status" aria-live="polite"
+            title="VICARIUS checks the running process on every refresh, so a job that has died reports its exit code rather than looking alive.">Idle</span>
+      <button type="button" id="bx-stop" class="bx-btn bx-btn-stop" disabled
+              title="Stop the running job. Whatever it already wrote to disk is kept.">Stop</button>
+    </div>
+    <pre class="bx-log" id="bx-log"
+         title="VICARIUS shows the last lines the running job printed."></pre>
+  </section>
+
+  <!-- OUTPUTS --------------------------------------------------------- -->
+  <section class="bx-card" id="bx-sec-outputs" aria-labelledby="bx-h-outputs">
+    <h2 class="bx-h" id="bx-h-outputs">Converted datasets</h2>
+    <p class="bx-note">Conversions written to inprocess/_bbox. Each one is a YOLO segmentation dataset with a manifest recording the box behind every outline.</p>
+    <div class="bx-tablewrap">
+      <table class="bx-table">
+        <thead>
+          <tr>
+            <th title="VICARIUS names each conversion by its output folder under inprocess/_bbox.">Conversion</th>
+            <th title="Images counts how many images carry at least one outline.">Images</th>
+            <th title="Polygons counts how many boxes SAM3 turned into an outline.">Polygons</th>
+            <th title="Built is when the conversion was written, in Atlantic Standard Time.">Built</th>
+          </tr>
+        </thead>
+        <tbody id="bx-outputs-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  </details>
+
+  <footer class="bx-foot"><span>VEGA - built by Lauren Olinger</span></footer>
+
+</main>
+<script>window.BOXES_BASE = "{{ base }}";</script>
+<script src="{{ base }}/static/boxes.js?v=20260915-review-fixes"></script>
+</body>
+</html>

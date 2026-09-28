@@ -7,18 +7,27 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap">
-  <link rel="stylesheet" href="{{ base }}/static/labels.css">
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Syne:wght@600;700;800&display=swap">
+  <!-- The shared VICARIUS workflow block (tokens, chrome, glyphs, bubble,
+       choices, buttons, rows, footer) served by the orchestrator, then this
+       page's own rules. Same two files, same order, as the Coverage Matrix.
+       The ?v= pin on all four assets is the orchestrator's ASSET_VERSION
+       (pipeline_orchestrator/app.py) written by hand; raise it whenever
+       labels.css or labels.js changes, or a browser keeps the old copy.
+       The vocabulary search, category and sort are remembered per browser
+       under the vega.labels. prefix (labels.js). -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='vicarius_workflow.css') }}?v=20260917-plain">
+  <link rel="stylesheet" href="{{ base }}/static/labels.css?v=20260917-plain">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vega_tour.css') }}?v=20260917-plain">
 </head>
 <body>
-  <main class="lb" aria-labelledby="lb-title">
+  <main class="page lb" aria-labelledby="lb-title">
 
-    <header class="lb-head">
-      <h1 id="lb-title" class="lb-title">Label Manager</h1>
-      <p class="lb-sub">The species-code vocabulary every project seeds from.
-         Add new codes, edit a name or category, compose remaps, and re-run the
-         recode by hand. Codes are referenced everywhere downstream, so they are
-         minted once and never changed.</p>
+    <header class="head">
+      <h1 id="lb-title" class="title">Label Manager</h1>
+      <button type="button" class="tip"
+              title="The Label Manager holds the species-code vocabulary every new project seeds from. VICARIUS mints a code once and keeps it forever, because projects, masks and training sets all point at it."
+              aria-label="About the Label Manager"><span>i</span></button>
     </header>
 
     <!-- ============================================================== -->
@@ -27,91 +36,119 @@
     <section class="lb-sec" id="sec-vocab" aria-labelledby="vocab-h">
       <div class="lb-sec-head">
         <h2 id="vocab-h" class="lb-sec-title">Vocabulary</h2>
-        <p class="lb-sec-note">The species codes. Add a new label, or edit the
-           name and category of an existing one. A code itself is locked once it
-           exists.</p>
+        <button type="button" class="tip"
+                title="A label is one species or cover code plus the name and category it is shown under. Edit changes the name and the category; the code itself stays as it was minted."
+                aria-label="About the vocabulary"><span>i</span></button>
+        <span class="lb-count" id="vocab-count" aria-live="polite"></span>
       </div>
 
-      <div class="lb-toolbar">
-        <div class="lb-field lb-field-search">
-          <label for="vocab-search">Find a label</label>
-          <input type="search" id="vocab-search" autocomplete="off"
-                 placeholder="code, name, or category..."
-                 title="Show only rows whose code, name, or category contains this text">
+      <dl class="choices">
+        <div>
+          <dt><label for="vocab-search">Find a label</label>
+              <button type="button" class="tip"
+                      title="Type part of a code, a name or a category to show only the rows that carry it."
+                      aria-label="About finding a label"><span>?</span></button></dt>
+          <dd><input type="search" id="vocab-search" class="w-search" autocomplete="off"
+                     placeholder="code, name, or category"></dd>
         </div>
-        <div class="lb-field lb-field-cat">
-          <label for="vocab-cat">Category</label>
-          <select id="vocab-cat"
-                  title="Show only rows in one category">
-            <option value="">All categories</option>
-          </select>
+        <div>
+          <dt><label for="vocab-cat">Category</label>
+              <button type="button" class="tip"
+                      title="Pick one category to show only its rows. All categories is the default."
+                      aria-label="About the category filter"><span>?</span></button></dt>
+          <dd>
+            <select id="vocab-cat" class="w-select">
+              <option value="">All categories</option>
+            </select>
+            <span class="mini-actions">
+              <button type="button" id="vocab-clear" class="btn btn-mini" hidden>Clear filters</button>
+            </span>
+          </dd>
         </div>
-        <div class="lb-toolbar-actions">
-          <button type="button" id="vocab-add" class="lb-btn lb-btn-accent"
-                  title="Add a brand new species code to the vocabulary">
-            Add label
-          </button>
-        </div>
-      </div>
+      </dl>
 
-      <div class="lb-paths" id="vocab-paths" aria-live="polite"></div>
+      <!-- The action row hides as a whole while the add form is open, so the
+           form takes its place instead of sitting under an empty row. -->
+      <div class="actions" id="vocab-actions">
+        <button type="button" id="vocab-add" class="btn btn-primary"
+                title="Mint a new species code. VICARIUS writes it to the canonical vocabulary and mirrors it to the copy every project reads.">
+          Add label
+        </button>
+      </div>
 
       <!-- Add row form (hidden until Add label is pressed) -->
       <form class="lb-addrow" id="vocab-addform" hidden
             aria-label="Add a new label">
-        <div class="lb-addrow-grid">
-          <div class="lb-field">
-            <label for="add-code">Code</label>
-            <input type="text" id="add-code" autocomplete="off"
-                   placeholder="UPPERCASE" inputmode="text"
-                   title="The immutable code. Uppercase, non-empty, unique. It cannot be changed later.">
+        <dl class="choices">
+          <div>
+            <dt><label for="add-code">Code</label>
+                <button type="button" class="tip"
+                        title="Type the code in capitals, with no spaces. VICARIUS refuses a code that already exists, and no edit can change it later."
+                        aria-label="About the code"><span>?</span></button></dt>
+            <dd><input type="text" id="add-code" autocomplete="off"
+                       placeholder="CODE" inputmode="text"></dd>
           </div>
-          <div class="lb-field">
-            <label for="add-category">Category</label>
-            <input type="text" id="add-category" autocomplete="off"
-                   list="cat-list" placeholder="e.g. CORAL"
-                   title="A non-empty category. Reuse an existing one or type a new one.">
-            <datalist id="cat-list"></datalist>
+          <div>
+            <dt><label for="add-category">Category</label>
+                <button type="button" class="tip"
+                        title="Reuse one of the categories already in the list, or type a new one. The Category filter offers every category in use."
+                        aria-label="About the category"><span>?</span></button></dt>
+            <dd><input type="text" id="add-category" autocomplete="off"
+                       list="cat-list" placeholder="Coral">
+              <datalist id="cat-list"></datalist></dd>
           </div>
-          <div class="lb-field">
-            <label for="add-name">Name</label>
-            <input type="text" id="add-name" autocomplete="off"
-                   placeholder="full label name"
-                   title="A non-empty display name for this code.">
+          <div>
+            <dt><label for="add-name">Name</label>
+                <button type="button" class="tip"
+                        title="Write the full name this code stands for. VICARIUS shows a species binomial in italics wherever the code appears."
+                        aria-label="About the name"><span>?</span></button></dt>
+            <dd><input type="text" id="add-name" class="w-name" autocomplete="off"
+                       placeholder="Genus species"></dd>
           </div>
+        </dl>
+        <div class="actions">
+          <button type="submit" id="add-save" class="btn btn-primary"
+                  title="VICARIUS backs up the canonical file, writes the new row, and mirrors the copy so the two stay byte-identical.">Save new label</button>
+          <button type="button" id="add-cancel" class="btn">Cancel</button>
         </div>
-        <div class="lb-addrow-foot">
-          <p class="lb-confirm-note">
-            Saving backs up the canonical file and mirrors the duplicate so the
-            two stay byte-identical.
-          </p>
-          <div class="lb-addrow-buttons">
-            <button type="button" id="add-cancel" class="lb-btn"
-                    title="Discard this new label without saving">Cancel</button>
-            <button type="submit" id="add-save" class="lb-btn lb-btn-accent"
-                    title="Validate, back up, write, and mirror">Save new label</button>
-          </div>
-        </div>
-        <p class="lb-inline-error" id="add-error" role="alert" hidden></p>
+        <div class="lb-inline-error" id="add-error" role="alert" hidden></div>
       </form>
 
       <div class="lb-table-wrap">
-        <p class="lb-empty" id="vocab-empty" hidden>
+        <!-- Two empty lines, never both: the vocabulary has no labels at all,
+             or the remembered search and category match none of the labels
+             it has (labels.js decides on the total, not the filtered rows). -->
+        <div class="lb-empty" id="vocab-empty" hidden>
           No labels yet. Use Add label to mint the first species code.
-        </p>
+        </div>
+        <div class="lb-empty" id="vocab-nomatch" hidden>
+          No label matches these filters. Press Clear filters to show all
+          <span id="vocab-nomatch-total">0</span> labels.
+        </div>
         <table class="lb-table" id="vocab-table" hidden>
           <thead>
             <tr>
-              <th class="col-code" scope="col">Code</th>
-              <th class="col-category" scope="col">Category</th>
-              <th class="col-name" scope="col">Name</th>
+              <th class="col-name" scope="col" data-sort="name">
+                <button type="button" class="lb-sort"
+                        title="Sort the rows by name. Press again to reverse the order, and a third time to restore the file order.">Name</button>
+              </th>
+              <th class="col-code" scope="col" data-sort="code">
+                <button type="button" class="lb-sort"
+                        title="Sort the rows by code. Press again to reverse the order, and a third time to restore the file order.">Code</button>
+                <button type="button" class="tip"
+                        title="A code is minted once and never changes, because every project, mask and training set points at it. Edit changes the name and the category only."
+                        aria-label="About label codes"><span>?</span></button>
+              </th>
+              <th class="col-category" scope="col" data-sort="category">
+                <button type="button" class="lb-sort"
+                        title="Sort the rows by category. Press again to reverse the order, and a third time to restore the file order.">Category</button>
+              </th>
               <th class="col-edit" scope="col">Edit</th>
             </tr>
           </thead>
           <tbody id="vocab-tbody"></tbody>
         </table>
       </div>
-      <p class="lb-count" id="vocab-count" aria-live="polite"></p>
     </section>
 
     <!-- ============================================================== -->
@@ -120,20 +157,19 @@
     <section class="lb-sec" id="sec-remaps" aria-labelledby="remaps-h">
       <div class="lb-sec-head">
         <h2 id="remaps-h" class="lb-sec-title">Remaps</h2>
-        <p class="lb-sec-note">A remap collapses one code into another (old to
-           new) before the recode runs. The active remap log is shown below.
-           Composing a new one writes a new timestamped file; nothing is ever
-           overwritten.</p>
+        <button type="button" class="tip"
+                title="A remap collapses one code into another before the recode runs. VICARIUS writes each one to its own timestamped log and never overwrites an earlier log."
+                aria-label="About remaps"><span>i</span></button>
       </div>
 
       <div class="lb-remaps-cols">
         <!-- Active remap log -->
-        <div class="lb-card" id="remap-active-card">
-          <h3 class="lb-card-title">Active remap log</h3>
+        <div class="lb-col" id="remap-active-card">
+          <h3 class="lb-col-title">Active remap log</h3>
           <div class="lb-card-meta" id="remap-active-meta"></div>
-          <p class="lb-empty" id="remap-active-empty" hidden>
+          <div class="lb-empty" id="remap-active-empty" hidden>
             No remap logs yet. Compose one to seed the recode.
-          </p>
+          </div>
           <table class="lb-table lb-table-sm" id="remap-active-table" hidden>
             <thead>
               <tr>
@@ -148,39 +184,37 @@
             <h4 class="lb-excludes-h">Excluded codes</h4>
             <div class="lb-chips" id="remap-active-exchips"></div>
           </div>
-          <details class="lb-history">
-            <summary title="All remap logs, newest first">All remap logs</summary>
+          <details class="util lb-history">
+            <summary>All remap logs</summary>
             <ul class="lb-history-list" id="remap-history"></ul>
           </details>
         </div>
 
         <!-- Compose a new remap log -->
-        <div class="lb-card" id="remap-compose-card">
-          <h3 class="lb-card-title">Compose a new remap log</h3>
-          <p class="lb-card-note">Each row collapses an old code into a new one.
-             Use exclude to drop a code from the recode entirely.</p>
+        <div class="lb-col" id="remap-compose-card">
+          <h3 class="lb-col-title">Compose a new remap log</h3>
           <div class="lb-compose-rows" id="compose-rows"></div>
           <div class="lb-compose-actions">
-            <button type="button" id="compose-add-remap" class="lb-btn"
-                    title="Add another old to new remap row">Add remap</button>
-            <button type="button" id="compose-add-exclude" class="lb-btn"
-                    title="Add a code to exclude from the recode">Add exclude</button>
+            <button type="button" id="compose-add-remap" class="btn"
+                    title="Add one more old code to new code pair to this draft.">Add remap</button>
+            <button type="button" id="compose-add-exclude" class="btn"
+                    title="Name a code the recode should drop instead of rewrite.">Add exclude</button>
           </div>
-          <div class="lb-field">
-            <label for="compose-note">Note (optional)</label>
-            <input type="text" id="compose-note" autocomplete="off"
-                   placeholder="why this remap..."
-                   title="A short note stored in the new remap log header">
+          <dl class="choices">
+            <div>
+              <dt><label for="compose-note">Note</label>
+                  <button type="button" class="tip"
+                          title="Write why this remap exists. VICARIUS stores the line in the new log's header, and leaving it blank is allowed."
+                          aria-label="About the note"><span>?</span></button></dt>
+              <dd><input type="text" id="compose-note" class="w-name" autocomplete="off"
+                         placeholder="why this remap"></dd>
+            </div>
+          </dl>
+          <div class="actions">
+            <button type="button" id="compose-save" class="btn btn-primary"
+                    title="VICARIUS writes a new timestamped remap log. It leaves every earlier log alone and does not run the recode.">Save new remap log</button>
           </div>
-          <div class="lb-compose-foot">
-            <p class="lb-confirm-note">
-              This writes a new timestamped remap log. It never overwrites an
-              existing one, and it does not run the recode.
-            </p>
-            <button type="button" id="compose-save" class="lb-btn lb-btn-accent"
-                    title="Write a new timestamped remap log">Save new remap log</button>
-          </div>
-          <p class="lb-inline-error" id="compose-error" role="alert" hidden></p>
+          <div class="lb-inline-error" id="compose-error" role="alert" hidden></div>
         </div>
       </div>
     </section>
@@ -191,33 +225,26 @@
     <section class="lb-sec" id="sec-locations" aria-labelledby="loc-h">
       <div class="lb-sec-head">
         <h2 id="loc-h" class="lb-sec-title">Locations and recode</h2>
-        <p class="lb-sec-note">The canonical paths this manager reads and writes,
-           shown read-only. The recode regenerates the recoded master codes that
-           new projects seed from. It is manual, and it backs up the prior
-           outputs first.</p>
+        <button type="button" class="tip"
+                title="These are the files this manager reads and writes, shown as they are on disk. The recode rebuilds the recoded master codes that new projects seed from, and VICARIUS backs up the previous outputs first."
+                aria-label="About locations and the recode"><span>i</span></button>
       </div>
 
       <dl class="lb-locations" id="loc-list" aria-live="polite"></dl>
 
-      <div class="lb-recode">
-        <div class="lb-recode-text">
-          <h3 class="lb-card-title">Re-run recode</h3>
-          <p class="lb-card-note" id="recode-note">
-            Regenerates the recoded master codes from the canonical inputs and
-            the latest remap log. The prior recode outputs are backed up first.
-          </p>
-        </div>
-        <button type="button" id="recode-run" class="lb-btn lb-btn-accent"
-                title="Back up prior outputs, then regenerate the recoded master codes">
+      <div class="actions">
+        <button type="button" id="recode-run" class="btn btn-primary"
+                title="VICARIUS backs up the prior recode outputs, then rebuilds them from the canonical vocabulary and the latest remap log.">
           Re-run recode
         </button>
+        <span class="lb-recode-note" id="recode-note"></span>
       </div>
-      <p class="lb-inline-error" id="recode-error" role="alert" hidden></p>
+      <div class="lb-inline-error" id="recode-error" role="alert" hidden></div>
       <pre class="lb-recode-result" id="recode-result" hidden></pre>
     </section>
 
-    <footer class="lb-foot">
-      <span id="lb-generated"></span>
+    <footer class="foot">
+      <span class="stamp" id="lb-generated"></span>
       <span class="lb-attr">Reef Point Seg - built by Lauren Olinger</span>
     </footer>
   </main>
@@ -227,12 +254,10 @@
        aria-labelledby="modal-title">
     <div class="lb-modal-card">
       <h3 class="lb-modal-title" id="modal-title">Confirm recode</h3>
-      <p class="lb-modal-body" id="modal-body"></p>
+      <div class="lb-modal-body" id="modal-body"></div>
       <div class="lb-modal-actions">
-        <button type="button" id="modal-cancel" class="lb-btn"
-                title="Close without running">Cancel</button>
-        <button type="button" id="modal-confirm" class="lb-btn lb-btn-accent"
-                title="Run the recode now">Yes, re-run recode</button>
+        <button type="button" id="modal-cancel" class="btn">Cancel</button>
+        <button type="button" id="modal-confirm" class="btn btn-primary">Yes, re-run recode</button>
       </div>
     </div>
   </div>
@@ -241,6 +266,9 @@
   <div class="lb-toasts" id="lb-toasts" aria-live="polite" aria-atomic="false"></div>
 
   <script>window.LABELS_BASE = {{ base|tojson }};</script>
-  <script src="{{ base }}/static/labels.js"></script>
+  <script src="{{ url_for('static', filename='vicarius_tooltips.js') }}?v=20260917-plain"></script>
+  <script src="{{ base }}/static/labels.js?v=20260917-plain"></script>
+<script src="{{ url_for('static', filename='vega_tour_content.js') }}?v=20260917-plain"></script>
+<script src="{{ url_for('static', filename='vega_tour.js') }}?v=20260917-plain"></script>
 </body>
 </html>

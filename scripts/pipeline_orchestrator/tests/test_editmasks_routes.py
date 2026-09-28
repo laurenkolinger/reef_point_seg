@@ -45,6 +45,16 @@ class _FakeCompleted:
 
 subprocess.run = lambda *a, **k: _FakeCompleted()
 
+
+def _blocked_popen(*a, **k):
+    raise AssertionError(f"subprocess.Popen reached: {a[0] if a else k.get('args')!r}")
+
+
+# Same rule for Popen (2026-09-02 hotfix): the folder route spawns xdg-open
+# through subprocess.Popen, which a subprocess.run stub never sees, and each
+# such spawn used to open a real file-manager window on the operator's desktop.
+subprocess.Popen = _blocked_popen
+
 _RESULTS = []
 
 
@@ -123,8 +133,10 @@ def test_run_missing_segmentations_json_is_4xx():
         check(r.status_code >= 400, f"expected 4xx, got {r.status_code}")
         data = r.get_json()
         check(data.get("success") is False, f"expected success=false: {data}")
-        check("run step 4 first" in data.get("error", "").lower(),
-              f"error message should point at Step 4: {data}")
+        # 2026-09-01: user-facing step references go through app.step_ref(), so
+        # the message names the sidebar tile and its displayed number.
+        check(appmod.step_ref("step4test").lower() in data.get("error", "").lower(),
+              f"error message should point at the Place + Segment tile: {data}")
     finally:
         appmod.current_project = None
         shutil.rmtree(tmp, ignore_errors=True)
@@ -166,7 +178,7 @@ def test_run_happy_path_launches_editmasks_app():
         check(r.status_code == 200, f"status {r.status_code}: {data}")
         check(data.get("success") is True, f"expected success: {data}")
         check(data.get("phase") == "ui_ready", f"expected ui_ready phase: {data}")
-        check(data.get("ui_port") == 5085, f"expected ui_port 5085 (editMasks default): {data}")
+        check(data.get("ui_port") == 5083, f"expected ui_port 5083 (editMasks default): {data}")
 
         check(captured.get("runner_key") == "editmasks",
               f"expected runner key 'editmasks': {captured.get('runner_key')}")
@@ -200,16 +212,16 @@ def test_run_already_running_reuses_port():
     orig_flask_stage = appmod.runner.run_flask_stage
     orig_find_free_port = appmod.find_free_port
     appmod.runner.run_flask_stage = lambda *a, **k: {"error": "already running (pid 123)"}
-    appmod.find_free_port = lambda preferred: 5085
+    appmod.find_free_port = lambda preferred: 5083
     appmod.runner.ports = dict(getattr(appmod.runner, "ports", {}) or {})
-    appmod.runner.ports["editmasks"] = 5085
+    appmod.runner.ports["editmasks"] = 5083
     try:
         r = client.post("/api/step/editmasks/run", json={})
         data = r.get_json()
         check(r.status_code == 200, f"status {r.status_code}: {data}")
         check(data.get("success") is True, f"expected success on reuse: {data}")
         check(data.get("already_running") is True, f"expected already_running flag: {data}")
-        check(data.get("ui_port") == 5085, f"expected reused port 5085: {data}")
+        check(data.get("ui_port") == 5083, f"expected reused port 5083: {data}")
     finally:
         appmod.runner.run_flask_stage = orig_flask_stage
         appmod.find_free_port = orig_find_free_port
@@ -225,13 +237,13 @@ def test_status_reflects_runner_and_health():
     appmod.runner.poll_status = lambda step: {"running": True, "exit_code": None}
     appmod.runner.health_check = lambda port: True
     appmod.runner.ports = dict(getattr(appmod.runner, "ports", {}) or {})
-    appmod.runner.ports["editmasks"] = 5085
+    appmod.runner.ports["editmasks"] = 5083
     try:
         r = client.get("/api/step/editmasks/status")
         data = r.get_json()
         check(r.status_code == 200, f"status {r.status_code}: {data}")
         check(data.get("healthy") is True, f"expected healthy=true: {data}")
-        check(data.get("port") == 5085, f"expected port 5085: {data}")
+        check(data.get("port") == 5083, f"expected port 5083: {data}")
     finally:
         appmod.runner.poll_status = orig_poll
         appmod.runner.health_check = orig_health
@@ -245,7 +257,7 @@ def test_stop_kills_runner_and_clears_state():
     killed = {}
     orig_kill = appmod.runner.kill
     appmod.runner.kill = lambda step: killed.setdefault("step", step)
-    appmod.editmasks_state.update(running=True, port=5085, project_id="x", input_dir="y")
+    appmod.editmasks_state.update(running=True, port=5083, project_id="x", input_dir="y")
     try:
         r = client.post("/api/step/editmasks/stop", json={})
         data = r.get_json()
@@ -262,12 +274,22 @@ def test_stop_kills_runner_and_clears_state():
 
 def test_folder_refuses_path_outside_project_and_opens_export_dir():
     client, tmp, state, export_dir = _client_with_project()
+    # The route's spawn is host_open.open_in_file_manager, which refuses temp
+    # fixtures and VICARIUS_HOST_OPEN=0 (run_all_tests.sh) before any Popen.
+    # This test covers path resolution and the guard, so record the opener
+    # call instead of spawning (the spawn itself is pinned by
+    # tests/test_host_open_guard.py and test_open_folder_routes.py).
+    opened = []
+    orig_open = appmod._open_in_file_manager
+    appmod._open_in_file_manager = lambda p: (opened.append(p) or (True, ""))
     try:
         r_ok = client.post("/api/step/editmasks/folder")
         check(r_ok.status_code == 200, f"in-project folder call should succeed: {r_ok.get_json()}")
         data = r_ok.get_json()
         check(data.get("path") == os.path.abspath(export_dir),
               f"folder should open the step4test export dir: {data}")
+        check(opened == [os.path.abspath(export_dir)],
+              f"opener called once with the export dir: {opened}")
 
         # Guard invariant: the resolved export dir must live under project_dir
         # (the same check the route performs) so an out-of-project export can
@@ -277,6 +299,7 @@ def test_folder_refuses_path_outside_project_and_opens_export_dir():
         check(export_dir_abs.startswith(project_dir_abs + os.sep) or export_dir_abs == project_dir_abs,
               "test fixture invariant broken: export_dir must be inside project_dir")
     finally:
+        appmod._open_in_file_manager = orig_open
         appmod.current_project = None
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -287,7 +310,7 @@ def test_reset_stops_service_and_never_touches_export():
     killed = {}
     orig_kill = appmod.runner.kill
     appmod.runner.kill = lambda step: killed.setdefault("step", step)
-    appmod.editmasks_state.update(running=True, port=5085, out_dir=export_dir,
+    appmod.editmasks_state.update(running=True, port=5083, out_dir=export_dir,
                                   project_id="x", input_dir="y")
     try:
         with open(seg_path) as f:

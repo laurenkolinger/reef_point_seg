@@ -70,7 +70,7 @@ def _project_id_from_dir(export_dir):
     return os.path.basename(os.path.dirname(os.path.abspath(export_dir))) or 'project'
 
 
-def _upsert_registry_for_frame(filename, seg, export_dir):
+def _upsert_registry_for_frame(filename, seg, export_dir, reviewer=''):
     """Upsert every mask of this frame (accepted AND rejected) into the
     permanent cross-project mask registry, keyed by canonical uid. Never
     raises: a registry hiccup must never break the export.
@@ -95,7 +95,11 @@ def _upsert_registry_for_frame(filename, seg, export_dir):
 
         for mask in seg.get('masks', []):
             try:
-                rec = build_registry_record(filename, mask, project_id, project_name)
+                # Identity: the mask's own reviewer wins, else the export-time
+                # session reviewer the caller passed; blank stays blank.
+                rec = build_registry_record(
+                    filename, mask, project_id, project_name,
+                    reviewer=(mask.get('reviewer') or reviewer))
                 if rec is None:
                     continue
                 reg.upsert(rec)
@@ -104,6 +108,35 @@ def _upsert_registry_for_frame(filename, seg, export_dir):
                             filename, e)
     except Exception as e:
         log.warning("Registry upsert failed for %s (non-fatal): %s", filename, e)
+
+
+def _write_export_eml(export_dir, stats):
+    """Emit eml.xml beside this export (spec Task 12). Never raises: an
+    EML failure must never break the export.
+
+    The try/except below deliberately covers the sys.path setup and the
+    import too, not just the write_eml() call: it mirrors
+    _upsert_registry_for_frame's broad wrap above, on the same reasoning
+    (an export must complete even if _reefreview cannot be reached at all,
+    not only if write_eml itself raises).
+    """
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        scripts_dir = os.path.dirname(os.path.dirname(here))
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from _reefreview.eml_writer import write_eml
+
+        dataset_name = _project_id_from_dir(export_dir)
+        description = (
+            "YOLO-seg export for %s: %d images, %d masks, %d classes." % (
+                dataset_name, stats.get('exported_images', 0),
+                stats.get('exported_masks', 0), stats.get('total_classes', 0),
+            )
+        )
+        write_eml(export_dir, dataset_name, description)
+    except Exception as e:
+        log.warning("EML write failed for %s (non-fatal): %s", export_dir, e)
 
 
 def update_data_yaml(export_dir, class_map):
@@ -127,7 +160,7 @@ def update_data_yaml(export_dir, class_map):
     log.info("Updated data.yaml with %d classes", len(sorted_names))
 
 
-def export_batch(segmentations, export_dir, class_map, symlink=True):
+def export_batch(segmentations, export_dir, class_map, symlink=True, reviewer=''):
     """Export a batch of segmented images to YOLO format.
 
     Args:
@@ -136,10 +169,14 @@ def export_batch(segmentations, export_dir, class_map, symlink=True):
         export_dir: root output directory
         class_map: species -> class_id dict (will be extended)
         symlink: if True, symlink images instead of copying
+        reviewer: initials of the session reviewer; stamped onto every
+                  accepted mask that has no 'reviewer' yet and carried into
+                  the registry rows (blank leaves masks untouched)
 
     Returns:
         dict with export stats
     """
+    reviewer = str(reviewer or '').strip().upper()[:8]
     images_dir = os.path.join(export_dir, 'all_images')
     labels_dir = os.path.join(export_dir, 'all_labels')
     os.makedirs(images_dir, exist_ok=True)
@@ -156,7 +193,14 @@ def export_batch(segmentations, export_dir, class_map, symlink=True):
         # content-stable uid. Runs before any skip guard below so a frame
         # whose masks are all rejected (or otherwise excluded from export)
         # still lands in the registry. Never fatal to the export.
-        _upsert_registry_for_frame(filename, seg, export_dir)
+        # Identity (D2): an accepted mask that reached export without a
+        # reviewer gets the session reviewer now, so the exported record
+        # and the registry row both say who signed it off.
+        if reviewer:
+            for m in seg.get('masks', []):
+                if m.get('status') == 'accepted' and not m.get('reviewer'):
+                    m['reviewer'] = reviewer
+        _upsert_registry_for_frame(filename, seg, export_dir, reviewer=reviewer)
 
         image_path = seg.get('image_path_abs')
         if not image_path or not os.path.exists(image_path):
@@ -234,4 +278,5 @@ def export_batch(segmentations, export_dir, class_map, symlink=True):
         'total_classes': len(class_map),
     }
     log.info("Export complete: %s", stats)
+    _write_export_eml(export_dir, stats)
     return stats

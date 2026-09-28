@@ -1,0 +1,32 @@
+# ======================================================================
+# Evaluate Model settings (VEGA preset format): "Coral Intel study, test split"
+#
+# The one scoring protocol for every model in the Coral Intel replication
+# study (coral_intel_*.yaml in this folder), read by
+# scripts/_ablation/coral_intel_vega_driver.py. The test split is the 15
+# percent of source photos held out before any augmentation, so no
+# augmented copy of a test photo was in training.
+#
+#   conf_threshold 0.001  keeps the whole precision-recall curve, which
+#                         mean average precision is the area under.
+#   iou_threshold 0.6     VEGA Evaluate's ranking default, so these runs sit
+#                         in the same runs table as every other VEGA run.
+#   imgsz 640             the replicate's size. The driver sends each run's
+#                         own training size (1024 for B2) in its place.
+#   batch 8               images per scoring pass; memory only, not the score.
+#   preview_count 8       eight test photos drawn with truth and predictions
+#                         in each report.
+# ======================================================================
+
+_meta:
+  name: "Coral Intel study, test split"
+  description: "Held-out test photos, confidence 0.001, NMS IoU 0.6, the run's own image size, 8 preview pages."
+
+params:
+  split: test
+  imgsz: 640
+  conf_threshold: 0.001
+  iou_threshold: 0.6
+  preview_count: 8
+  batch: 8
+  pdf_export_dir: ""

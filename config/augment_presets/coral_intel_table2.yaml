@@ -1,0 +1,81 @@
+# ======================================================================
+# Offline augmentation recipe: "Coral Intel Table 2"
+#
+# Read by scripts/_ablation/coral_intel_offline_aug.py, which builds the
+# staged box dataset supporting_data/bbox_datasets/coral_intel_t2aug from
+# supporting_data/bbox_datasets/coral_intel. VEGA's trainer has no offline
+# augmentation, so the variants are written to disk as images and labels
+# before training, the way the paper describes.
+#
+# Source: Cordero E, Sherman CE, Yadav P, Kumar Raju V, Townsend JE,
+# Courtney TA (2026). Coral Intel: a YOLOv8 deep learning framework for
+# monitoring Caribbean corals. Intelligent Marine Technology and Systems
+# 4:18. doi:10.1007/s44295-026-00107-5. Table 2 and section 2.4, read in
+# full from the Springer page on 2026-09-26.
+#
+# What the paper says and what this file does with it:
+#   Variants        "Each original image produced at least two to three
+#                   times augmented variants" (sec. 2.4). Here: the
+#                   original plus 2 variants, 3 images per training photo.
+#   Where           Training photos only. The paper's evaluation set holds
+#                   4,843 images, 15 percent of the 32,423 augmented images,
+#                   so it was very likely split after augmenting, with
+#                   copies of evaluation photos in training. This recipe
+#                   splits by source photo first and never augments
+#                   validation or test photos.
+#   Split           70 / 15 / 15 (sec. 2.5), stratified on each photo's
+#                   rarest species, seed 32 (Table 2).
+#   Flips           "vertical/horizontal flips": each with probability 0.5.
+#   90 degree       "90 degree rotations; clockwise/counterclockwise;
+#                   upside-down": one of none, clockwise, counterclockwise,
+#                   180, uniformly.
+#   Rotation        plus or minus 13 degrees, black corners, same size.
+#   Shear           plus or minus 10 degrees, horizontal and vertical.
+#   Hue             plus or minus 15 degrees of hue angle.
+#   Saturation      minus 25 to plus 25 percent.
+#   Exposure        minus 10 to plus 10 percent.
+#   Blur            Gaussian, sigma up to 1.5 px.
+#   Noise           salt and pepper on up to 0.1 percent of pixels.
+#   Not stated      whether Roboflow ran the augmentation (Roboflow is named
+#                   only for labelling), contrast range (named in sec. 2.4
+#                   with no range, so not applied), stretch or fit resize
+#                   (images stay at native size; the trainer letterboxes).
+#
+# Boxes follow every geometric transform by their four corners; the
+# enclosing box is kept and clipped to the frame. A box under min_box_px
+# on a side, or keeping less than min_visible_area_frac of its area after
+# clipping, is dropped.
+#
+# label_dir labels keeps the 1,278 full-frame boxes the ingest flagged
+# (1,273 photos carry nothing else). The paper trained with them, and with
+# the ingest's labels_localized/ those photos would train and score as
+# coral-free. Lauren chose to keep them on 2026-09-26.
+# ======================================================================
+
+_meta:
+  name: "Coral Intel Table 2 offline augmentation"
+  description: "Original plus 2 variants per training photo; flips, 90 degree turns, rotation 13, shear 10, hue 15 deg, saturation 25 pct, exposure 10 pct, blur 1.5 px, noise 0.1 pct; 70/15/15 split by source photo, seed 32."
+  source: "Cordero et al. 2026, Intelligent Marine Technology and Systems 4:18, Table 2 and sec. 2.4 to 2.5"
+
+params:
+  variants: 2
+  seed: 32
+  valid_frac: 0.15
+  test_frac: 0.15
+  stratify: rarest_class
+  split_order: before_augmentation
+  label_dir: labels
+  jpeg_quality: 95
+  flip_horizontal_p: 0.5
+  flip_vertical_p: 0.5
+  rot90_choices: [none, cw, ccw, r180]
+  rotation_deg: 13
+  shear_deg_x: 10
+  shear_deg_y: 10
+  hue_deg: 15
+  saturation_frac: 0.25
+  exposure_frac: 0.10
+  blur_sigma_max_px: 1.5
+  noise_pixel_frac_max: 0.001
+  min_box_px: 2
+  min_visible_area_frac: 0.20

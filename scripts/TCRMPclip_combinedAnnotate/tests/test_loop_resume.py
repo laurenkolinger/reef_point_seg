@@ -53,6 +53,10 @@ os.environ['TCRMP_EXPORT_DIR'] = _EXPORT_DIR
 os.environ['TCRMP_SESSION_MODE'] = 'resume'
 os.environ['TCRMP_MANUAL_ANNOTATE'] = '1'
 os.environ['TCRMP_PROVENANCE_SOURCE'] = 'step4loop'
+# The orchestrator always launches an annotator with the opener's initials, and
+# accepting a mask is refused without them (test_reviewer_required covers the
+# refusal). Seed the same way a real loop-resume launch does.
+os.environ['TCRMP_REVIEWER'] = 'LO'
 os.environ.setdefault('TCRMP_TARGET_SPECIES', 'AA')
 
 import config as cfg  # noqa: E402

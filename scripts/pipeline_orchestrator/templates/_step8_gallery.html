@@ -1,0 +1,25 @@
+{# VEGA inference gallery card for the Step 7: Model Inference panel.
+   Var-free fragment: the host page includes it and orchestrator_gallery.js
+   fills the run picker, the header lines and the tiles from
+   /api/step/8/runs and /api/step/8/manifest. Styling is scoped under
+   .vega-gallery in orchestrator_gallery.css. The host wires the
+   vega:verdict event the card dispatches on this root. #}
+<section class="vega-gallery" id="s8-gallery-card" aria-labelledby="s8-gallery-heading">
+  <div class="vg-head">
+    <h3 id="s8-gallery-heading">Inference results</h3>
+    <button type="button" class="vg-tip" data-tip-kind="section"
+      title="Confidence is the model's own score for a detection from 0 to 1, and the overlap threshold is the box overlap beyond which VEGA keeps only the stronger of two detections. A blind spot is a run where more than one image in five got no detection, which suggests the model has not seen images like these."><span>i</span></button>
+    <span class="vg-spacer"></span>
+    <button type="button" class="btn btn-outline btn-sm" id="s8-gallery-refresh"
+      title="Re-read the list of inference runs and the selected run's results. VEGA keeps the selected run when it still exists and otherwise shows the newest.">Refresh</button>
+  </div>
+  <div class="vg-row">
+    <label class="vg-label" for="s8-gallery-run">Inference run</label>
+    <button type="button" class="vg-tip" data-tip-for="s8-gallery-run"
+      title="Choose which inference run the gallery shows; the newest is selected when the panel opens. VEGA lists runs from this project and from the module's shared folder inprocess/_models/_inference, newest first."><span>?</span></button>
+    <select id="s8-gallery-run" class="vg-select"></select>
+  </div>
+  <p class="vg-status" id="s8-gallery-status" role="status" hidden></p>
+  <div class="vg-header" id="s8-gallery-header"></div>
+  <div class="vg-tiles" id="s8-gallery-tiles"></div>
+</section>

@@ -1,7 +1,9 @@
 """Module-lock gate (VICARIUS platform contract, Task B1): while the lock
-registry marks reef_point_seg locked, GET / serves the minimal vic-lock-page
-(never the SPA, never the ?project_dir= auto-open) and every /api/, /labels,
-/expertids, /matrix path refuses with 423 JSON; /static assets stay served.
+registry marks reef_point_seg locked, a browser navigation to any page of
+this module serves the minimal vic-lock-page (never the SPA, never the
+?project_dir= auto-open), and every API call refuses with 423 JSON, whether
+it is under /api/ or under a dashboard's own /api/ prefix; /static assets
+stay served.
 Fail-open: a missing, empty, or corrupt registry means unlocked (one stderr
 warning per distinct error), and VICARIUS_LOCK_BYPASS=1 forces unlocked.
 Run with github_repo/env/bin/python.
@@ -75,11 +77,26 @@ j = r.get_json(silent=True) or {}
 check(j.get("error") == "locked", f"423 body error is 'locked' (got {j.get('error')!r})")
 check(j.get("message") == lock_status.LOCK_MESSAGE, "423 body message == LOCK_MESSAGE")
 
-# d. locked: blueprint pages refuse with 423 too
-r = client.get("/labels/")
-check(r.status_code == 423, f"locked GET /labels/ is 423 (got {r.status_code})")
-r = client.get("/matrix/")
-check(r.status_code == 423, f"locked GET /matrix/ is 423 (got {r.status_code})")
+# d. locked: a person navigating to any dashboard mounted beside the main
+# window gets the same lock page the contract requires, and the data routes
+# behind those dashboards refuse with 423. Before 2026-09-16 the pages
+# themselves answered a navigation with raw JSON.
+for page in ("/labels/", "/matrix/", "/expertids/", "/boxes/", "/annotate"):
+    r = client.get(page, headers={"Accept": "text/html,application/xhtml+xml"})
+    check(r.status_code == 200 and b"vic-lock-page" in r.data,
+          f"locked navigation to {page} is the lock page (got {r.status_code})")
+for api in ("/labels/api/vocabulary", "/matrix/api/data", "/expertids/api/status",
+            "/boxes/api/datasets"):
+    r = client.get(api, headers={"Accept": "text/html,application/xhtml+xml"})
+    check(r.status_code == 423, f"locked GET {api} is 423 (got {r.status_code})")
+    body = r.get_json(silent=True) or {}
+    check(body.get("error") == "locked", f"{api} 423 body error is 'locked' (got {body})")
+# A fetch that asks for JSON is code, not a navigation, whatever the path.
+r = client.get("/matrix/", headers={"Accept": "application/json"})
+check(r.status_code == 423, f"locked JSON fetch of /matrix/ is 423 (got {r.status_code})")
+# A POST is never a navigation.
+r = client.post("/matrix/api/prefer", json={})
+check(r.status_code == 423, f"locked POST /matrix/api/prefer is 423 (got {r.status_code})")
 
 # e. locked: static assets stay served (the lock page may style itself)
 r = client.get("/static/style.css")

@@ -348,7 +348,7 @@
         ? '<div class="pic"><img class="base" src="' + BASE + '/catalog/' + uidE + '/image.jpg' + libQ + '" alt="">'
           + (t.has_overlay ? '<img class="ov" src="' + BASE + '/catalog/' + uidE + '/overlay.png' + libQ + '" style="opacity:0.45">' : '')
           + '</div>'
-        : '<div class="pic"><span style="color:#667;font-size:11px">no image</span></div>';
+        : '<div class="pic"><span style="color:var(--mut);font-size:11px">no image</span></div>';
       tile.innerHTML = pic
         + '<div class="meta"><span class="mode ' + _esc(t.mode) + '">' + _esc(t.mode || '?') + '</span>'
         + '<span class="code">' + _esc(t.code || '?') + '</span>'

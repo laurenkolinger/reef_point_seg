@@ -11,6 +11,9 @@ Layers (CONTRACTS §9):
            same-species masks (and leaves a different-species overlap alone);
            app._merge_imported_review_fields merges imported expert/pending
            fields onto in-memory masks without clobbering operator edits.
+  REVIEWER: GET/POST /api/reviewer (normalized, env fallback, same contract
+           as the annotator twins) and /api/export_batch passing the current
+           reviewer into export_batch so step-5 registry rows carry initials.
 
 The SAM3 engine is never loaded (none of these paths need it).
 """
@@ -18,6 +21,7 @@ The SAM3 engine is never loaded (none of these paths need it).
 import os
 import sys
 import re
+import shutil
 import subprocess
 import tempfile
 import traceback
@@ -376,6 +380,76 @@ def test_field_merge_matches_by_id_when_no_uid():
     check(current[0]['species'] == 'OFAV', 'species not promoted on id match')
 
 
+def test_reviewer_route_and_export_stamp():
+    # The orchestrator seeds TCRMP_REVIEWER and pushes /api/reviewer to a
+    # reused step-5 process; the export must hand that reviewer to
+    # export_batch (which stamps accepted masks and the registry rows).
+    import app
+    app.app.config['TESTING'] = True
+    client = app.app.test_client()
+    saved_env = os.environ.get('TCRMP_REVIEWER')
+    saved_attrs = {k: getattr(app, k) for k in
+                   ('export_batch', '_export_review_bundle', 'render_segmentation_overlays', 'flush_all')}
+    session_keys = ('reviewer', 'review_files', 'review_offset', 'review_batch_size',
+                    'export_dir', 'segmentations_by_year', 'class_map')
+    saved_session = {k: app.session.get(k) for k in session_keys}
+    tmp = tempfile.mkdtemp(prefix='seg_reviewer_')
+    try:
+        os.environ['TCRMP_REVIEWER'] = 'env'
+        app.session['reviewer'] = ''
+        r = client.get('/api/reviewer')
+        check(r.status_code == 200 and r.get_json().get('reviewer') == 'ENV',
+              f'GET /api/reviewer -> env default, normalized (got {r.get_data(as_text=True)!r})')
+        r = client.post('/api/reviewer', json={'reviewer': '  ab '})
+        check(r.get_json().get('reviewer') == 'AB', 'POST /api/reviewer strips + uppercases')
+        r = client.post('/api/reviewer', json={'reviewer': 'abcdefghijk'})
+        check(r.get_json().get('reviewer') == 'ABCDEFGH', 'POST /api/reviewer caps at 8 chars')
+        r = client.post('/api/reviewer', json={'reviewer': ''})
+        check(r.get_json().get('reviewer') == 'ENV', 'blank POST falls back to the env default')
+        client.post('/api/reviewer', json={'reviewer': 'ab'})
+        check(app._current_reviewer() == 'AB', '_current_reviewer reads the session value')
+
+        got = {}
+
+        def fake_export(segs, export_dir, class_map, symlink=True, reviewer=''):
+            got['reviewer'] = reviewer
+            got['n'] = len(segs)
+            return {'exported_images': len(segs), 'exported_masks': 0}
+
+        app.export_batch = fake_export
+        app._export_review_bundle = lambda *a, **k: {}
+        app.render_segmentation_overlays = lambda *a, **k: None
+        app.flush_all = lambda: None
+        fn = 'TCRMP20201022_clip_SCP_T101.jpeg'
+        seg = {'image_path': fn, 'image_path_abs': os.path.join(tmp, fn),
+               'image_width': W, 'image_height': H,
+               'masks': [_mask(0, 'PA', _rect_mask(0, 10, 0, 10), status='accepted')],
+               'reviewed': True, 'exported': False}
+        app.session['segmentations_by_year'] = {'2020': {fn: seg}}
+        app.session['review_files'] = [fn]
+        app.session['review_offset'] = 0
+        app.session['review_batch_size'] = 10
+        app.session['export_dir'] = tmp
+        app.session['class_map'] = {}
+        r = client.post('/api/export_batch')
+        check(r.status_code == 200, f'/api/export_batch -> {r.status_code} {r.get_data(as_text=True)[:200]}')
+        check(got.get('reviewer') == 'AB' and got.get('n') == 1,
+              f'export_batch received reviewer=AB for the one image (got {got})')
+        lo = seg.get('label_outcomes') or {}
+        check(lo.get('PA', {}).get('reviewer') == 'AB', f'label_outcomes carry the reviewer (got {lo})')
+    finally:
+        for k, v in saved_attrs.items():
+            setattr(app, k, v)
+        for k, v in saved_session.items():
+            app.session[k] = v
+        if saved_env is None:
+            os.environ.pop('TCRMP_REVIEWER', None)
+        else:
+            os.environ['TCRMP_REVIEWER'] = saved_env
+        shutil.rmtree(tmp, ignore_errors=True)
+    check(not os.path.exists(tmp), 'temp export dir removed')
+
+
 def test_field_merge_no_disk_match_is_noop():
     import app
     current = [{'id': 1, 'review_uid': 'nope', 'species': 'REVIEW', 'status': 'pending'}]
@@ -409,6 +483,8 @@ if __name__ == '__main__':
     run(test_field_merge_pending_no_expert_does_not_promote_species)
     run(test_field_merge_matches_by_id_when_no_uid)
     run(test_field_merge_no_disk_match_is_noop)
+    print('reviewer identity:')
+    run(test_reviewer_route_and_export_stamp)
 
     n_fail = sum(1 for _, ok, _ in _RESULTS if not ok)
     n_pass = sum(1 for _, ok, _ in _RESULTS if ok)

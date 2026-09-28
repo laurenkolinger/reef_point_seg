@@ -1,0 +1,14 @@
+{#- Step 6 on screen (internal step 7): the evaluation report card. Var-free;
+    the host page includes it inside panel-7 in place of the old
+    s7-report-block and calls loadStep7ReportCard(runDir) from
+    static/orchestrator_report.js, which writes one-line states into
+    .vega-report-status and the rendered card into .vega-report-body. Styles live
+    in static/orchestrator_report.css, scoped under .vega-report. -#}
+<section class="vega-report" id="s7-report-card" aria-labelledby="s7-report-title">
+  <div class="vega-report-head">
+    <h3 class="vega-report-title" id="s7-report-title">Evaluation report</h3>
+    <button type="button" class="tip" title="VICARIUS scores the chosen run's best weights on one split of its dataset (test, val or train): precision is the share of predictions that were correct, recall the share of labeled corals the model found, and mAP50 and mAP50-95 average precision over overlap thresholds (IoU) of 0.5 and of 0.5 to 0.95. A detector is scored on boxes; a segmenter on outlines and boxes." aria-label="About the evaluation report"><span>i</span></button>
+  </div>
+  <div class="vega-report-status" role="status" aria-live="polite"><div class="vega-report-empty">No evaluation has been run for this training run yet.</div></div>
+  <div class="vega-report-body"></div>
+</section>

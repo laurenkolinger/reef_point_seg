@@ -1,0 +1,250 @@
+/* VEGA guided tour. Every rule is scoped under .vega-tour (the overlay root)
+   or .vega-tour-chip (the button that opens it). Tokens come from the page's
+   shared stylesheet; each carries its spec value as a fallback so the tour
+   reads the same on a page that has not linked vicarius_workflow.css.
+   Type per the workflow page design, version 2: title Syne 700 17 px, body
+   Inter 14 px, count and chips Space Mono 12 px, buttons Space Mono 12 px
+   uppercase (the version 2 legibility floor outranks the 11 px button of
+   version 1); nothing under 12 px. */
+
+/* The first screen's dim. There is no control on the page to glow yet, so the
+   page dims whole and the callout's track choice is the only thing to act on.
+   It takes no pointer events, so the product underneath stays usable. */
+.vega-tour-veil {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 9000;
+  background: rgba(10, 10, 15, 0.62);
+  pointer-events: none;
+}
+
+/* The glow. One element draws three things at once, in paint order: the
+   magenta halo on top, a wider soft bloom under it, and the dimmed backdrop
+   last, which is a 200vmax spread that cuts the anchor out of the dim for
+   free. Every colour is an alpha wash of --magenta (226, 0, 116) or of --bg
+   (10, 10, 15), as the tokens section of the design allows. */
+.vega-tour-ring {
+  position: fixed;
+  z-index: 9001;
+  border: 2px solid var(--magenta, #E20074);
+  border-radius: var(--radius-lg, 3px);
+  box-shadow:
+    0 0 0 3px rgba(226, 0, 116, 0.45),
+    0 0 26px 10px rgba(226, 0, 116, 0.55),
+    0 0 0 200vmax rgba(10, 10, 15, 0.62);
+  pointer-events: none;
+}
+/* The pulse: a second ring just outside the first, so the animation changes
+   nothing about the anchor's own geometry. Without motion it stays as a
+   strong static second ring, which the design requires. */
+.vega-tour-ring::after {
+  content: "";
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  bottom: -7px;
+  left: -7px;
+  border: 2px solid var(--magenta, #E20074);
+  border-radius: var(--radius-lg, 3px);
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .vega-tour-ring::after { animation: vega-tour-pulse 1.9s ease-in-out infinite; }
+}
+
+@keyframes vega-tour-pulse {
+  0% { opacity: 0.18; transform: scale(0.99); }
+  50% { opacity: 0.85; transform: scale(1.03); }
+  100% { opacity: 0.18; transform: scale(0.99); }
+}
+
+/* The tour is hosted by pages with their own type rules: the desktop launcher
+   uppercases option text, the matrix and labels pages set their own transforms.
+   The callout states its own, so a step reads identically on every surface, and
+   only the buttons are uppercase, which is what the design spec reserves it for. */
+.vega-tour-callout, .vega-tour-callout * { text-transform: none; }
+.vega-tour-callout .vega-tour-btn { text-transform: uppercase; }
+.vega-tour-callout {
+  position: fixed;
+  z-index: 9002;
+  box-sizing: border-box;
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  padding: 16px;
+  background: var(--surface-light, #191926);
+  border: 1px solid var(--border, #2a2a38);
+  border-left: 3px solid var(--magenta, #E20074);
+  border-radius: var(--radius-lg, 3px);
+  color: var(--text, #F5EDF0);
+  font-family: var(--font-body, 'Inter', ui-sans-serif, -apple-system, sans-serif);
+  font-size: 14px;
+  line-height: 1.5;
+  box-shadow: 0 8px 28px rgba(5, 5, 8, 0.7);
+  outline: none;
+}
+/* The dialog takes focus on open so the arrow keys work at once; the anchor
+   ring is the one decoration on screen, so the container draws no outline
+   of its own. Every button inside keeps the shared focus ring. */
+.vega-tour-callout:focus,
+.vega-tour-callout:focus-visible { outline: none; }
+
+.vega-tour-count {
+  font-family: var(--font-mono, 'Space Mono', ui-monospace, Menlo, monospace);
+  font-size: 12px;
+  color: var(--text-dim, #b0a7ab);
+}
+
+.vega-tour-title {
+  margin: 4px 0 8px;
+  font-family: var(--font-display, 'Syne', sans-serif);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--text, #F5EDF0);
+}
+
+.vega-tour-body {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text, #F5EDF0);
+}
+.vega-tour-body em { font-style: italic; }
+.vega-tour-body code {
+  font-family: var(--font-mono, 'Space Mono', ui-monospace, Menlo, monospace);
+  font-size: 12px;
+  color: var(--text-dim, #b0a7ab);
+  border: 1px solid var(--border-dim, #1d1d26);
+  border-radius: var(--radius, 2px);
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+/* The line the callout adds when the anchored control is not on screen: with
+   no forward button it is the way out, so it reads as an instruction. */
+.vega-tour-where {
+  margin: 10px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-dim, #1d1d26);
+  font-family: var(--font-mono, 'Space Mono', ui-monospace, Menlo, monospace);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--pink, #FFB3D9);
+}
+
+.vega-tour-live {
+  margin: 10px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-dim, #1d1d26);
+  font-family: var(--font-mono, 'Space Mono', ui-monospace, Menlo, monospace);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--warning, #FFB800);
+}
+.vega-tour-live.is-done { color: var(--success, #00FFB3); }
+.vega-tour-live.is-failed { color: var(--error, #FF4D6D); }
+
+.vega-tour-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-dim, #1d1d26);
+}
+.vega-tour-opt {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  column-gap: 8px;
+  align-items: start;
+  min-height: 28px;
+  padding: 4px 0;
+  cursor: pointer;
+  font-size: 14px;
+}
+.vega-tour-opt input {
+  width: 14px;
+  height: 14px;
+  margin: 3px 0 0;
+  accent-color: var(--magenta, #E20074);
+}
+.vega-tour-opt-name { font-weight: 500; }
+.vega-tour-opt-blurb {
+  grid-column: 2;
+  font-size: 13px;
+  color: var(--text-dim, #b0a7ab);
+}
+
+.vega-tour-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-dim, #1d1d26);
+}
+.vega-tour-btn {
+  min-height: 28px;
+  padding: 0 12px;
+  background: transparent;
+  border: 1px solid var(--border, #2a2a38);
+  border-radius: var(--radius-lg, 3px);
+  color: var(--text, #F5EDF0);
+  font-family: var(--font-mono, 'Space Mono', ui-monospace, Menlo, monospace);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.vega-tour-btn:hover { background: var(--surface, #11111a); }
+.vega-tour-btn.is-primary {
+  border-color: var(--magenta, #E20074);
+  background: var(--magenta-dark, #B8005C);
+  color: var(--text, #F5EDF0);
+}
+.vega-tour-btn.is-primary:hover { color: var(--pink-soft, #FFE6F2); }
+.vega-tour-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.vega-tour-btn:focus-visible {
+  outline: 2px solid var(--pink, #FFB3D9);
+  outline-offset: 2px;
+}
+.vega-tour-exit { margin-left: auto; }
+
+.vega-tour-chip {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 9000;
+  min-height: 32px;
+  padding: 0 14px;
+  background: var(--surface, #11111a);
+  border: 1px solid var(--magenta, #E20074);
+  border-radius: var(--radius-lg, 3px);
+  color: var(--text, #F5EDF0);
+  font-family: var(--font-mono, 'Space Mono', ui-monospace, Menlo, monospace);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(5, 5, 8, 0.6);
+}
+.vega-tour-chip:hover { color: var(--pink, #FFB3D9); }
+.vega-tour-chip:focus-visible {
+  outline: 2px solid var(--pink, #FFB3D9);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1000px) {
+  .vega-tour-callout { width: 310px; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .vega-tour-callout { transition: opacity 0.15s ease; }
+}

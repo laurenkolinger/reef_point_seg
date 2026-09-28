@@ -1,0 +1,47 @@
+# ======================================================================
+# Offline augmentation recipe: "Coral Intel Table 2, split after augmenting"
+#
+# The same Table 2 transforms, seed and fractions as coral_intel_table2.yaml,
+# with one change: split_order after_augmentation. Every photograph (not only
+# the training ones) gets two augmented copies, and the resulting images are
+# then split 70/15/15 one image at a time, so copies of the same photograph
+# can sit in training and in test at once. 10,361 photographs make 31,083
+# images, close to the paper's 32,423.
+#
+# This is the order the Coral Intel counts would allow if the authors
+# augmented before splitting (their 4,843-image evaluation set is 15 percent
+# of the augmented total). It exists to measure how far that overlap raises
+# the scores, by training the published settings on it. It is not a dataset
+# to select or report a model from.
+#
+# Built by scripts/_ablation/coral_intel_offline_aug.py into
+# supporting_data/bbox_datasets/coral_intel_t2aug_leaky.
+# ======================================================================
+
+_meta:
+  name: "Coral Intel Table 2, split after augmenting"
+  description: "Every photo plus 2 Table 2 variants, then a 70/15/15 split image by image (seed 32), so copies of one photo can sit in training and test; used only to measure that overlap."
+  source: "Cordero et al. 2026, Intelligent Marine Technology and Systems 4:18, Table 2 and sec. 2.4 to 2.5"
+
+params:
+  variants: 2
+  seed: 32
+  valid_frac: 0.15
+  test_frac: 0.15
+  stratify: rarest_class
+  split_order: after_augmentation
+  label_dir: labels
+  jpeg_quality: 95
+  flip_horizontal_p: 0.5
+  flip_vertical_p: 0.5
+  rot90_choices: [none, cw, ccw, r180]
+  rotation_deg: 13
+  shear_deg_x: 10
+  shear_deg_y: 10
+  hue_deg: 15
+  saturation_frac: 0.25
+  exposure_frac: 0.10
+  blur_sigma_max_px: 1.5
+  noise_pixel_frac_max: 0.001
+  min_box_px: 2
+  min_visible_area_frac: 0.20

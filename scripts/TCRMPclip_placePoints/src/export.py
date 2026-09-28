@@ -21,6 +21,17 @@ from PIL import Image, ImageDraw, ImageFont
 
 LORES_LONG_EDGE = 1920
 
+# ── Expert-review flag lock, 2026-09-06 (LO) ─────────────────────────
+# Lauren Olinger suspended expert-review flagging across every annotator on
+# 2026-09-06: no new review tag may reach a mask. Place Points writes the POINT
+# that the annotator later turns into a flagged mask, so the tag is refused here
+# too. This is the ONE switch for this file: set it back to True and the export
+# writes the tag again exactly as it did before, with nothing else to change.
+REVIEW_TAGGING_ENABLED = False
+
+# The species code that means "send this to an outside taxonomic expert".
+REVIEW_CODE = 'REVIEW'
+
 
 def _lores_twin(raw_src):
     """Deterministic lores path for an ALREADY-RESOLVED raw image.
@@ -196,12 +207,86 @@ def _load_fonts_3(size_large=48, size_small=28, size_tiny=20):
 
 # ── SAM click prompts JSON ───────────────────────────────────────────
 
+def _reads_as_review(value):
+    """Report whether one field value spells the REVIEW code.
+
+    Case and surrounding whitespace are normalised, so a hand-edited frame file
+    carrying ' review ' is caught as readily as the front end's own 'REVIEW'.
+
+    Args:
+        value: any field value; a non-string answers False rather than raising.
+
+    Returns:
+        True when the value reads as the expert-review code.
+
+    Example:
+        >>> _reads_as_review(' Review ')
+        True
+    """
+    if not isinstance(value, str):
+        return False
+    return value.strip().upper() == REVIEW_CODE
+
+
+def review_tag_requested(pt):
+    """Report whether one point asks to be flagged for expert review.
+
+    Deliberately broader than the downstream read predicate: it tests the
+    'review' key for truth and both species spellings independently, so closing
+    one arm never leaves another open.
+
+    Args:
+        pt: a point dict from a Place Points frame. Anything that is not a dict
+            answers False, so a malformed record can never stop an export.
+
+    Returns:
+        True when the point carries an expert-review tag in any of its spellings.
+
+    Example:
+        >>> review_tag_requested({'species_code': 'REVIEW'})
+        True
+    """
+    if not isinstance(pt, dict):
+        return False
+    if pt.get('review'):
+        return True
+    return _reads_as_review(pt.get('species_code')) or _reads_as_review(pt.get('species'))
+
+
+def count_review_tag_requests(points):
+    """Count how many points in one frame ask for the expert-review tag.
+
+    Args:
+        points: an iterable of point dicts, or None for a frame with no points.
+
+    Returns:
+        The number of points whose tag the lock suppresses.
+    """
+    if not points:
+        return 0
+    return sum(1 for pt in points if review_tag_requested(pt))
+
+
 def build_sam_entry(raw_filename, points):
     """Build a single entry for sam_click_prompts.json.
 
     Matches cpc_all format: {raw_image, points: [{label, species,
     name, category, x, y, point_type}]}
     Manually added points include 'added': true.
+
+    While REVIEW_TAGGING_ENABLED is False, a point asking for the expert-review
+    tag is still exported with its geometry, its letter and its name, but the
+    two fields the annotator reads as the flag are withheld: no 'review' key is
+    written, and a species that spells REVIEW is written empty so the mask is
+    born unlabelled instead of flagged. A real species code beside a stray
+    'review' boolean is kept, because only the tag is being refused.
+
+    Args:
+        raw_filename: the raw image filename this entry is keyed on.
+        points: the frame's point dicts.
+
+    Returns:
+        The entry dict for this frame.
     """
     sam_points = []
     for pt in points:
@@ -216,12 +301,16 @@ def build_sam_entry(raw_filename, points):
         }
         if pt.get('added'):
             sp['added'] = True
-        # REVIEW points flow downstream as their OWN positive SAM3 prompt (not a
-        # negative refinement like non-target '?'); step 5 segments them, tags
-        # the mask REVIEW, and ships it to the expert-review site (never trained).
-        if pt.get('review') or pt.get('species_code') == 'REVIEW':
-            sp['review'] = True
-            sp['species'] = 'REVIEW'
+        if review_tag_requested(pt):
+            if REVIEW_TAGGING_ENABLED:
+                # REVIEW points flow downstream as their OWN positive SAM3 prompt
+                # (not a negative refinement like non-target '?'); step 5 segments
+                # them, tags the mask REVIEW, and ships it to the expert-review
+                # site (never trained).
+                sp['review'] = True
+                sp['species'] = REVIEW_CODE
+            elif _reads_as_review(sp['species']):
+                sp['species'] = ''
         sam_points.append(sp)
     return {
         'raw_image': f"raw/{raw_filename}",
@@ -266,7 +355,10 @@ def export_batch(detections, export_dir, log_fn=None, lores_mode=None):
 
     Returns:
         dict with export stats: {exported_raw, exported_pts, point_records,
-                                  test_images, years_affected, lores_delivered}
+                                  test_images, years_affected, lores_delivered,
+                                  review_tags_dropped}
+        where review_tags_dropped counts the points whose expert-review tag the
+        2026-09-06 lock withheld from sam_click_prompts.json.
     """
     if log_fn is None:
         log_fn = lambda msg: None
@@ -287,6 +379,7 @@ def export_batch(detections, export_dir, log_fn=None, lores_mode=None):
         'test_images': 0,
         'years_affected': set(),
         'lores_delivered': 0,
+        'review_tags_dropped': 0,
     }
 
     for year, year_dets in sorted(by_year.items()):
@@ -332,7 +425,10 @@ def export_batch(detections, export_dir, log_fn=None, lores_mode=None):
                     shutil.copy2(copy_src, dst)
                 stats['exported_raw'] += 1
 
-            # Build SAM entry
+            # Build SAM entry. Under the 2026-09-06 lock the entry carries no
+            # expert-review tag, so count what was withheld before it is gone.
+            if not REVIEW_TAGGING_ENABLED:
+                stats['review_tags_dropped'] += count_review_tag_requests(points)
             sam_data[raw_name] = build_sam_entry(raw_name, points)
 
             # Build CSV rows
@@ -377,6 +473,12 @@ def export_batch(detections, export_dir, log_fn=None, lores_mode=None):
 
         log_fn(f"  Year {year}: {len(year_dets)} images, "
                f"{len(csv_rows)} points exported")
+
+    if stats['review_tags_dropped']:
+        log_fn(f"  VICARIUS has suspended expert-review flagging since 2026-09-06: "
+               f"{stats['review_tags_dropped']} point(s) exported without a "
+               f"{REVIEW_CODE} tag, position kept, label left empty for the "
+               f"annotator to fill in.")
 
     stats['years_affected'] = sorted(stats['years_affected'])
     return stats

@@ -3,9 +3,10 @@
 #
 # Why this preset exists:
 #   Ultralytics has several knobs that interact subtly (imgsz must match
-#   the training imgsz, conf=0.25 is the library default, iou=0.6 is the
-#   NMS merge threshold most papers report). Getting these right gives
-#   the "honest" headline metrics on held-out data.
+#   the training imgsz, conf=0.001 is the library's validation default and
+#   keeps the whole precision-recall curve, iou=0.6 is the NMS merge
+#   threshold most papers report). Getting these right gives the "honest"
+#   headline metrics on held-out data.
 #
 # How to use:
 #   Step 7 panel → "Load preset" dropdown → select this file → Import.
@@ -28,8 +29,13 @@ params:
                               # Mismatch distorts every metric. The Quick-start button
                               # auto-detects this per run — prefer it over this static value.
 
-  conf_threshold: 0.25        # Drop predictions with conf < this. Ultralytics default.
-                              # Lower → more predictions (higher recall, lower precision).
+  conf_threshold: 0.001       # Drop predictions with conf < this. The ultralytics
+                              # validation default, and the one honest choice for a
+                              # measurement: mAP is the area under the whole
+                              # precision-recall curve, so a higher cut-off removes
+                              # its tail and understates the score. Step 8 (inference)
+                              # keeps a high threshold instead, where only confident
+                              # boxes are wanted.
 
   iou_threshold: 0.6          # NMS merge threshold. Predictions overlapping more than
                               # this on the same object get deduplicated. 0.6 is standard.

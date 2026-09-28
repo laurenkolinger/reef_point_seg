@@ -6,134 +6,504 @@
   <title>Coverage Matrix - Reef Point Seg</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Same three families, same roles, as the shared VICARIUS workflow page
+       design: Inter for body prose, Syne for display headings, Space Mono
+       for buttons, micro-labels and data chrome. -->
   <link rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap">
-  <link rel="stylesheet" href="{{ base }}/static/matrix.css">
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Syne:wght@600;700;800&display=swap">
+  <link rel="stylesheet" href="{{ shared }}/vicarius_workflow.css?v={{ v }}">
+  <link rel="stylesheet" href="{{ base }}/static/matrix.css?v={{ v }}">
+  <link rel="stylesheet" href="{{ shared }}/vega_tour.css?v={{ v }}">
 </head>
 <body>
-  <main class="mx" aria-labelledby="mx-title">
+<main class="page" aria-labelledby="mx-title">
 
-    <header class="mx-head">
-      <h1 id="mx-title" class="mx-title">Coverage Matrix</h1>
-      <p class="mx-sub">Every image against every label across all reviewed projects.
-         Where they intersect tells you what has been looked at, and what has not.</p>
-    </header>
+  <header class="head">
+    <h1 class="title" id="mx-title">Coverage Matrix</h1>
+    <button type="button" class="tip"
+            title="The Coverage Matrix lists every image against every label from all reviewed projects. Each cell tells you whether a reviewer looked for that label on that image, and what they found."
+            aria-label="About the Coverage Matrix"><span>i</span></button>
+  </header>
 
-    <!-- Top summary bar: headline counts + percent found + legend -->
-    <section class="mx-summary">
-      <div class="mx-summary-top">
-        <div class="mx-summary-line" id="mx-headline" aria-live="polite">Loading the coverage matrix...</div>
-        <button type="button" id="mx-rescan" class="mx-rescan"
-                title="Rescan every project and rebuild the grid now. Use this after archiving or annotating a project so the matrix reflects the change (it also refreshes automatically when you return to this tab).">
-          Rescan
-        </button>
-      </div>
-      <ul class="mx-legend" id="mx-legend" aria-label="What each cell color means">
-        <li class="lg" data-outcome="not_reviewed">
-          <span class="chip chip-not-reviewed" aria-hidden="true"></span>
-          <span class="lg-text"><b>Not reviewed</b> - no project has looked at this pair yet</span>
-        </li>
-        <li class="lg" data-outcome="not_found">
-          <span class="chip chip-not-found" aria-hidden="true"></span>
-          <span class="lg-text"><b>Reviewed, not found</b> - looked for this label, it was not present</span>
-        </li>
-        <li class="lg" data-outcome="pending_expert"
-            title="A mask on this image is still flagged for expert review. The label is the tentative expert guess, or REVIEW when no guess exists yet. Counts as not found until an expert accepts an ID.">
-          <span class="chip chip-pending-expert" aria-hidden="true"></span>
-          <span class="lg-text"><b>Awaiting expert review</b> - flagged for an expert, no accepted ID yet</span>
-        </li>
-        <li class="lg" data-outcome="found_manual">
-          <span class="chip chip-found-manual" aria-hidden="true"></span>
-          <span class="lg-text"><b>Found by hand</b> - a person drew this label on the image</span>
-        </li>
-        <li class="lg" data-outcome="found_ai">
-          <span class="chip chip-found-ai" aria-hidden="true"></span>
-          <span class="lg-text"><b>Found, AI assisted</b> - accepted from an AI suggestion</span>
-        </li>
-        <li class="lg" data-outcome="found_model">
-          <span class="chip chip-found-model" aria-hidden="true"></span>
-          <span class="lg-text"><b>Found by model</b> - predicted by a trained model</span>
-        </li>
-        <li class="lg" data-outcome="found_expert"
-            title="An expert reviewed this mask and accepted a final ID for it. The strongest outcome; it wins over every other outcome when projects disagree.">
-          <span class="chip chip-found-expert" aria-hidden="true"></span>
-          <span class="lg-text"><b>Expert verified</b> - carries an accepted expert ID</span>
-        </li>
-      </ul>
-      <div class="mx-project-note" id="mx-project-note" aria-live="polite" hidden></div>
-    </section>
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button type="button" id="mx-tab-matrix" class="tab" role="tab" aria-selected="true" aria-controls="mx-view-matrix"
+            title="Show the grid: one row per image, one column per label.">Matrix</button>
+    <button type="button" id="mx-tab-stats" class="tab" role="tab" aria-selected="false" aria-controls="mx-view-stats"
+            title="Show the counts: how many masks each label has, which sites and years they come from, and who reviewed them.">Stats</button>
+    <button type="button" id="mx-tab-training" class="tab" role="tab" aria-selected="false" aria-controls="mx-view-training"
+            title="Show the three stages that turn reviewed masks into a trained model.">Training Sets</button>
+  </nav>
 
-    <!-- Controls: search rows, show/hide columns, filter outcomes -->
-    <section class="mx-controls" aria-label="Filters">
-      <div class="ctrl ctrl-search">
-        <label for="mx-search">Find image rows</label>
-        <input type="search" id="mx-search" autocomplete="off"
-               placeholder="type part of an image name..."
-               title="Show only image rows whose basename contains this text">
-      </div>
+  <!-- ══════════════════════════════════════════════════════════════════
+       MATRIX view: summary, legend, filters, the grid and (nested per the
+       controller ruling) the cell drawer.
+       ══════════════════════════════════════════════════════════════════ -->
+  <section id="mx-view-matrix" class="board" role="tabpanel" aria-labelledby="mx-tab-matrix">
 
-      <div class="ctrl ctrl-outcome">
-        <label for="mx-outcome">Show outcomes</label>
-        <select id="mx-outcome"
-                title="Limit the grid to cells with a particular outcome">
-          <option value="all">All outcomes</option>
-          <option value="found_expert"
-                  title="Only cells whose mask carries an accepted expert ID">Expert verified only</option>
-          <option value="found_manual">Found by hand only</option>
-          <option value="found_ai">Found, AI assisted only</option>
-          <option value="found_model">Found by model only</option>
-          <option value="pending_expert"
-                  title="Only cells with a mask still flagged for expert review">Awaiting expert review only</option>
-          <option value="not_found">Reviewed, not found only</option>
-        </select>
-      </div>
+    <div class="summary">
+      <p class="headline" id="mx-headline" aria-live="polite"><span id="mx-attention" hidden></span>Loading the coverage matrix...</p>
+      <button type="button" id="mx-rescan" class="btn"
+              title="Rescan every project now. VICARIUS also rescans on its own each time the Coverage Matrix comes back into view.">Rescan</button>
+    </div>
 
-      <div class="ctrl ctrl-project">
-        <label for="mx-project">Isolate a project</label>
-        <select id="mx-project"
-                title="Pick a project to see only the cells it contributes. Cells ringed in accent are unique to that project (they leave the matrix if you archive it); dimmed cells are shared with another active project (they stay). The count next to each name is how many cells it touches.">
-          <option value="all">All projects</option>
-        </select>
-      </div>
+    <ul class="legend" id="mx-legend" aria-label="What each cell color means">
+      <li class="lg" data-outcome="not_reviewed" tabindex="0" title="No project has looked for this label on this image yet.">
+        <span class="chip" aria-hidden="true"></span>Not reviewed</li>
+      <li class="lg" data-outcome="not_found" tabindex="0" title="A reviewer looked for this label on the image and it was not there.">
+        <span class="chip c-not-found" aria-hidden="true"></span>Reviewed, not found</li>
+      <li class="lg" data-outcome="pending_expert" tabindex="0"
+          title="A mask is flagged for an expert and none has accepted an ID yet; VICARIUS counts the cell as not found until one does.">
+        <span class="chip c-pending" aria-hidden="true"></span>Awaiting expert review</li>
+      <li class="lg" data-outcome="found_manual" tabindex="0" title="A person drew this label on the image.">
+        <span class="chip c-manual" aria-hidden="true"></span>Found by hand</li>
+      <li class="lg" data-outcome="found_ai" tabindex="0" title="A reviewer accepted an AI suggestion for this label on the image.">
+        <span class="chip c-ai" aria-hidden="true"></span>Found, AI assisted</li>
+      <li class="lg" data-outcome="found_expert" tabindex="0"
+          title="An expert accepted a final ID for this label on the image. This outcome wins over every other when projects disagree.">
+        <span class="chip c-expert" aria-hidden="true"></span>Expert verified</li>
+    </ul>
+    <div class="note" id="mx-project-note" aria-live="polite" hidden></div>
 
-      <div class="ctrl ctrl-labels">
-        <div class="ctrl-labels-head">
-          <label id="mx-labels-label">Show label columns</label>
-          <span class="ctrl-labels-actions">
-            <button type="button" id="mx-labels-all"
-                    title="Show every label column">all</button>
-            <button type="button" id="mx-labels-none"
-                    title="Hide every label column">none</button>
-          </span>
+    <div class="filters">
+      <dl class="choices">
+        <div>
+          <dt><label for="mx-search">Find image rows</label>
+              <button type="button" class="tip"
+                      title="Type part of an image name to show only the matching rows."
+                      aria-label="About finding image rows"><span>?</span></button></dt>
+          <dd><input type="search" id="mx-search" autocomplete="off" class="w-search"
+                     placeholder="part of an image name"
+                     title="Type part of an image name to show only the matching rows."></dd>
         </div>
-        <div class="mx-labels-box" id="mx-labels"
-             role="group" aria-labelledby="mx-labels-label"
-             title="Tick a label to show its column, untick to hide it"></div>
+        <div>
+          <dt><label for="mx-outcome">Show outcomes</label>
+              <button type="button" class="tip"
+                      title="Rows with no cell in the chosen outcome drop out of the grid."
+                      aria-label="About showing outcomes"><span>?</span></button></dt>
+          <dd>
+            <select id="mx-outcome" class="w-select">
+              <option value="all">All outcomes</option>
+              <option value="needs_attention">Needs attention only</option>
+              <option value="found_expert">Expert verified only</option>
+              <option value="found_manual">Found by hand only</option>
+              <option value="found_ai">Found, AI assisted only</option>
+              <option value="pending_expert">Awaiting expert review only</option>
+              <option value="not_found">Reviewed, not found only</option>
+            </select>
+          </dd>
+        </div>
+      </dl>
+      <dl class="choices">
+        <div>
+          <dt><label for="mx-project">Isolate a project</label>
+              <button type="button" class="tip"
+                      title="A ring marks a cell only that project holds, which leaves the grid if the project is archived; a dimmed cell is shared with another project and stays."
+                      aria-label="About isolating a project"><span>?</span></button></dt>
+          <dd>
+            <select id="mx-project" class="w-select">
+              <option value="all">All projects</option>
+            </select>
+          </dd>
+        </div>
+        <div>
+          <dt><span id="mx-labels-label">Show label columns</span>
+              <button type="button" class="tip"
+                      title="Untick a label to hide its column from the grid; tick it again to bring it back."
+                      aria-label="About label columns"><span>?</span></button></dt>
+          <dd class="dd-list" role="group" aria-labelledby="mx-labels-label">
+            <div class="opts" id="mx-labels"></div>
+            <span class="mini-actions">
+              <button type="button" id="mx-labels-all">Tick all</button>
+              <button type="button" id="mx-labels-none">Untick all</button>
+            </span>
+          </dd>
+        </div>
+      </dl>
+      <div class="filter-actions">
+        <button type="button" id="mx-clear-filters" class="btn btn-mini" hidden>Clear filters</button>
+        <button type="button" id="mx-copy-csv" class="btn btn-mini"
+                title="Copy the rows and columns now shown as CSV text.">Copy as CSV</button>
+      </div>
+    </div>
+
+    <div class="body">
+      <div class="grid-area">
+        <div class="grid-wrap" id="mx-grid-wrap">
+          <div class="mx-empty" id="mx-empty" hidden>No reviewed projects yet. Annotate a project (step 4, Place + Segment)
+             to populate the matrix.</div>
+          <table class="grid" id="mx-grid" hidden>
+            <thead id="mx-thead"></thead>
+            <tbody id="mx-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Cell drawer: opened by clicking a reviewed cell; filled by the cell
+           drawer module (loaded at the bottom of the page). Nested inside
+           the matrix board (controller ruling), directly after the grid,
+           not after the popover. -->
+      <aside class="drawer" id="mx-cell" role="dialog" aria-labelledby="mx-cell-title" hidden>
+        <div class="drawer-head">
+          <h2 class="drawer-title" id="mx-cell-title"></h2>
+          <button type="button" class="tip" title="Esc closes the cell." aria-label="About this cell"><span>i</span></button>
+          <button type="button" id="mx-cell-close" class="btn btn-mini">Close</button>
+        </div>
+        <p class="drawer-where" id="mx-cell-where" tabindex="0"></p>
+        <div class="drawer-sub">
+          <span class="sci" id="mx-cell-species"></span>
+          <span id="mx-cell-label" class="lchip"></span>
+          <span id="mx-cell-outcome" class="outcome"></span>
+        </div>
+        <div id="mx-cell-status" class="status" role="status" aria-live="polite"></div>
+        <div id="mx-cell-error" class="err" hidden></div>
+
+        <dl class="choices">
+          <div>
+            <dt><label for="mx-by">Your initials</label>
+                <button type="button" class="tip"
+                        title="VICARIUS records them with each saved choice and remembers them in this browser for next time."
+                        aria-label="About your initials"><span>?</span></button></dt>
+            <dd><input type="text" id="mx-by" maxlength="8" autocomplete="off" class="w-initials" placeholder="initials"
+                       title="Type your initials. VICARIUS records them with the choice."></dd>
+          </div>
+        </dl>
+
+        <div id="mx-cell-tabs" class="ptabs" role="tablist" aria-label="Projects that annotated this image"></div>
+
+        <div class="mx-cell-viewer">
+          <div class="mx-cell-canvas-wrap" id="mx-cell-canvas-wrap">
+            <canvas id="mx-cell-canvas" width="480" height="360" aria-describedby="mx-cell-caption"></canvas>
+            <div id="mx-cell-tip" class="mx-cell-tip" role="tooltip" hidden></div>
+          </div>
+          <div id="mx-cell-caption" class="vh">The image with this label's masks drawn strong. Hover a mask for its uid, status, source, reviewer and area.</div>
+
+          <dl class="choices">
+            <div>
+              <dt><label for="mx-cell-opacity">Mask opacity</label>
+                  <button type="button" class="tip"
+                          title="Drag to set how solid the mask fills are drawn. At 0 only the outlines stay."
+                          aria-label="About mask opacity"><span>?</span></button></dt>
+              <dd>
+                <input type="range" id="mx-cell-opacity" min="0" max="100" value="45"
+                       title="Drag to set how solid the mask fills are drawn. At 0 only the outlines stay.">
+                <label class="opt"><input type="checkbox" id="mx-cell-others"> Show other labels</label>
+              </dd>
+            </div>
+          </dl>
+        </div>
+
+        <section class="dsec" aria-labelledby="mx-cell-masks-h">
+          <div class="dsec-head">
+            <h3 id="mx-cell-masks-h">Masks for this label</h3>
+            <button type="button" class="tip"
+                    title="Tick the masks that should stand for this label on this image, then save the choice; only accepted masks can be ticked."
+                    aria-label="About the masks"><span>i</span></button>
+          </div>
+          <div id="mx-cell-masks" class="masks"></div>
+          <div id="mx-cell-composites" class="mx-cell-dim" tabindex="0"
+               title="A set built before a new choice keeps its old masks until it is rebuilt."></div>
+          <div class="actions">
+            <button type="button" id="mx-cell-prefer" class="btn btn-primary"
+                    title="Save the ticked masks as the choice for this label on this image; training sets built afterwards take them.">Use these masks</button>
+            <button type="button" id="mx-cell-clear" class="btn"
+                    title="Clear the saved choice; training sets then take the accepted masks from the project with the strongest outcome.">Clear choice</button>
+          </div>
+          <div id="mx-cell-pref" class="result" aria-live="polite"></div>
+        </section>
+
+        <section class="dsec" aria-labelledby="mx-cell-projects-h">
+          <div class="dsec-head">
+            <h3 id="mx-cell-projects-h">Linked projects</h3>
+            <button type="button" class="tip" title="Open a project in the pipeline to change its masks."
+                    aria-label="About linked projects"><span>i</span></button>
+          </div>
+          <div id="mx-cell-projects" class="rows"></div>
+        </section>
+      </aside>
+    </div>
+
+  </section><!-- /mx-view-matrix -->
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       STATS view: totals, species, charts and the reviewer table. Filled
+       by the stats module (loaded at the bottom of the page) from
+       /matrix/api/stats.
+       ══════════════════════════════════════════════════════════════════ -->
+  <section id="mx-view-stats" class="stats" role="tabpanel" aria-labelledby="mx-tab-stats" hidden>
+
+    <div class="stats-head">
+      <span class="asof" id="mx-stats-head" aria-live="polite">Statistics load when this tab opens.</span>
+      <span class="stats-ctl">
+        <label for="mx-stats-status">Masks counted</label>
+        <button type="button" class="tip"
+                title="Accepted only counts the masks a reviewer accepted. All statuses also counts pending and rejected masks, so the totals show every mask ever recorded."
+                aria-label="About masks counted"><span>?</span></button>
+        <span class="selwrap"><select id="mx-stats-status" class="sel">
+          <option value="accepted" selected>Accepted only</option>
+          <option value="all">All statuses</option>
+        </select></span>
+        <button type="button" id="mx-stats-refresh" class="btn"
+                title="Rescan every project on disk and redraw the totals and charts.">Refresh</button>
+      </span>
+    </div>
+    <div id="mx-stats-error" class="err" hidden></div>
+
+    <div class="stats-form">
+      <dl class="choices">
+        <div id="mx-stats-totals">
+          <dt>Totals <button type="button" class="tip"
+                              title="Totals count the masks that match the chosen status, and the images, labels and projects those masks come from. A reviewer is counted only when a mask records the initials of the person who accepted it."
+                              aria-label="About totals"><span>?</span></button></dt>
+          <dd id="mx-stats-kpis" class="totals"></dd>
+        </div>
+        <div>
+          <dt><span id="mx-stats-species-label">Species shown</span>
+              <button type="button" class="tip"
+                      title="Ticked species appear in every chart, in the color of their swatch. The chip beside each name is its label code, PA for Porites astreoides, and the number is how many counted masks carry it."
+                      aria-label="About species in the charts"><span>?</span></button></dt>
+          <dd class="dd-list" role="group" aria-labelledby="mx-stats-species-label">
+            <div class="opts" id="mx-stats-species"></div>
+            <span class="mini-actions">
+              <button type="button" id="mx-stats-species-all">Tick all</button>
+              <button type="button" id="mx-stats-species-none">Untick all</button>
+            </span>
+          </dd>
+        </div>
+      </dl>
+    </div>
+
+    <div class="mx-chart-legend" id="mx-stats-legend" hidden></div>
+
+    <div class="figs">
+      <figure class="fig wide" id="mx-chart-species">
+        <figcaption class="fig-cap"><h2>Masks per species</h2>
+          <button type="button" class="tip"
+                  title="Each bar is the number of accepted masks that carry one label, across every project on disk."
+                  aria-label="About masks per species"><span>i</span></button></figcaption>
+        <div class="mx-chart-body"></div>
+      </figure>
+      <figure class="fig" id="mx-chart-year">
+        <figcaption class="fig-cap"><h2>Masks by year</h2>
+          <button type="button" class="tip"
+                  title="Each column is the number of accepted masks from one survey year, read from the image name."
+                  aria-label="About masks by year"><span>i</span></button></figcaption>
+        <div class="mx-chart-body"></div>
+      </figure>
+      <figure class="fig right" id="mx-chart-images-year">
+        <figcaption class="fig-cap"><h2>Images reviewed per year</h2>
+          <button type="button" class="tip"
+                  title="Each column is the number of images from one survey year that carry at least one accepted mask."
+                  aria-label="About images reviewed per year"><span>i</span></button></figcaption>
+        <div class="mx-chart-body"></div>
+      </figure>
+      <figure class="fig" id="mx-chart-site">
+        <figcaption class="fig-cap"><h2>Masks by site</h2>
+          <button type="button" class="tip"
+                  title="Each bar is the number of accepted masks from one site, read from the site code in the image name, longest bar first."
+                  aria-label="About masks by site"><span>i</span></button></figcaption>
+        <div class="mx-chart-body"></div>
+      </figure>
+      <figure class="fig right" id="mx-chart-images-site">
+        <figcaption class="fig-cap"><h2>Images reviewed per site</h2>
+          <button type="button" class="tip"
+                  title="Each bar is the number of images from one site that carry at least one accepted mask, in the same site order as Masks by site."
+                  aria-label="About images reviewed per site"><span>i</span></button></figcaption>
+        <div class="mx-chart-body"></div>
+      </figure>
+      <figure class="fig" id="mx-chart-reviewers">
+        <figcaption class="fig-cap"><h2>Masks per reviewer</h2>
+          <button type="button" class="tip"
+                  title="Counts the masks that carry each reviewer's initials, at the counted status; a mask with no recorded reviewer shows as unrecorded."
+                  aria-label="About masks per reviewer"><span>i</span></button></figcaption>
+        <div id="mx-stats-reviewers"></div>
+      </figure>
+      <figure class="fig right" id="mx-stats-excluded">
+        <figcaption class="fig-cap"><h2>Left out of these counts</h2>
+          <button type="button" class="tip" title="VICARIUS keeps the left-out masks in the mask registry, the file that records every mask."
+                  aria-label="About left out of these counts"><span>i</span></button></figcaption>
+        <div class="mx-chart-body"></div>
+      </figure>
+    </div>
+
+  </section><!-- /mx-view-stats -->
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       TRAINING SETS view: the three-stage rail (build a training set,
+       create a training project, train), plus registry hygiene.
+       ══════════════════════════════════════════════════════════════════ -->
+  <section id="mx-view-training" role="tabpanel" aria-labelledby="mx-tab-training" hidden>
+
+    <section class="stages" aria-label="Training workflow">
+
+      <nav class="rail" id="mx-train-rail" aria-label="Stages">
+        <ol role="tablist" aria-orientation="vertical">
+          <li role="presentation">
+            <button type="button" class="stage" role="tab" id="mx-stage-1" aria-controls="mx-pane-1" aria-selected="true">
+              <span class="node">1</span>
+              <span class="stage-name">Build a training set</span>
+              <span class="stage-meta"></span>
+            </button>
+          </li>
+          <li role="presentation">
+            <button type="button" class="stage" role="tab" id="mx-stage-2" aria-controls="mx-pane-2" aria-selected="false">
+              <span class="node">2</span>
+              <span class="stage-name">Create a training project</span>
+              <span class="stage-meta"></span>
+            </button>
+          </li>
+          <li role="presentation">
+            <button type="button" class="stage" role="tab" id="mx-stage-3" aria-controls="mx-pane-3" aria-selected="false"
+                    title="Go to stage 3, where you open a training project in the pipeline window and start Train yourself.">
+              <span class="node">3</span>
+              <span class="stage-name">Train</span>
+              <span class="stage-meta"></span>
+            </button>
+          </li>
+        </ol>
+      </nav>
+
+      <!-- Stage 1: build a training set (the former "Composite exports"). -->
+      <div class="pane" id="mx-pane-1" role="tabpanel" aria-labelledby="mx-stage-1">
+        <div class="pane-head">
+          <h2>Build a training set</h2>
+          <button type="button" class="tip"
+                  title="A training set is the folder of images and masks a model learns from. For each image and label, VICARIUS takes the masks you chose when you opened that cell in the matrix; where you made no choice, it takes the accepted masks from the project with the strongest review outcome."
+                  aria-label="About building a training set"><span>i</span></button>
+        </div>
+
+        <dl class="choices">
+          <div>
+            <dt><span id="mx-composite-labels-label">Labels</span>
+                <button type="button" class="tip"
+                        title="Tick the labels the model should learn; a label is the code for one coral species or group, such as PA for Porites astreoides. The number beside each label is how many masks reviewers have accepted for it across all reviewed projects."
+                        aria-label="About labels"><span>?</span></button></dt>
+            <dd class="dd-list" role="group" aria-labelledby="mx-composite-labels-label">
+              <div class="opts" id="mx-composite-labels"></div>
+              <span class="mini-actions">
+                <button type="button" id="mx-composite-labels-all">Tick all</button>
+                <button type="button" id="mx-composite-labels-none">Untick all</button>
+              </span>
+            </dd>
+          </div>
+          <div>
+            <dt><span id="mx-composite-projects-label">Projects</span>
+                <button type="button" class="tip"
+                        title="Tick the projects whose masks may go into the training set; a project is one batch of reef images that was annotated and reviewed."
+                        aria-label="About projects"><span>?</span></button></dt>
+            <dd class="dd-list" role="group" aria-labelledby="mx-composite-projects-label">
+              <div class="opts" id="mx-composite-projects"></div>
+              <span class="mini-actions">
+                <button type="button" id="mx-composite-projects-all">Tick all</button>
+                <button type="button" id="mx-composite-projects-none">Untick all</button>
+              </span>
+            </dd>
+          </div>
+          <div>
+            <dt><span id="mx-composite-sources-label">Mask sources</span>
+                <button type="button" class="tip"
+                        title="Choose which kinds of masks go into the training set; a mask is the outline of one coral colony on an image. A mask was either drawn by a person, predicted by a trained model, or proposed automatically, and only masks a reviewer accepted ever go in."
+                        aria-label="About mask sources"><span>?</span></button></dt>
+            <dd role="radiogroup" id="mx-composite-sources" aria-labelledby="mx-composite-sources-label">
+              <label class="opt"><input type="radio" name="mx-composite-source" id="mx-composite-source-all" value="all" checked> All sources</label>
+              <label class="opt" title="Only masks a person drew or edited by hand go in.">
+                <input type="radio" name="mx-composite-source" id="mx-composite-source-hand" value="hand"> Hand-drawn only</label>
+              <label class="opt" title="Masks a person drew or a trained model predicted go in; automatic proposals stay out.">
+                <input type="radio" name="mx-composite-source" id="mx-composite-source-hand-model" value="hand_model"> Hand-drawn and model-predicted</label>
+            </dd>
+          </div>
+          <div>
+            <dt><label for="mx-composite-name">Name</label>
+                <button type="button" class="tip"
+                        title="Name the training set with letters, digits, dots, underscores and dashes, or leave the field blank and VICARIUS names it by build date and time."
+                        aria-label="About the name"><span>?</span></button></dt>
+            <dd>
+              <input type="text" id="mx-composite-name" autocomplete="off" class="w-name" placeholder="composite_YY-MM-DD_HHMM"
+                     title="Type a name for the training set, or leave it blank and VICARIUS names it by date and time.">
+              <label class="opt" title="If the name is taken and this is unticked, VICARIUS keeps the existing set and refuses the build.">
+                <input type="checkbox" id="mx-composite-rebuild"> Replace an existing set of the same name</label>
+            </dd>
+          </div>
+          <div>
+            <dt><label for="mx-stats-by">Your initials</label>
+                <button type="button" class="tip"
+                        title="VICARIUS records your initials as the builder of the set and remembers them in this browser for next time."
+                        aria-label="About your initials"><span>?</span></button></dt>
+            <dd><input type="text" id="mx-stats-by" maxlength="8" autocomplete="off" class="w-initials" placeholder="initials"
+                       title="Type your initials. VICARIUS records them as the builder of this set."></dd>
+          </div>
+        </dl>
+
+        <div class="actions">
+          <button type="button" id="mx-composite-build" class="btn btn-primary"
+                  title="VICARIUS writes the set to a new folder and lists it in stage 2.">Build training set</button>
+        </div>
+        <div id="mx-composite-result" class="result" aria-live="polite"></div>
+      </div>
+
+      <!-- Stage 2: create a training project from a built set. -->
+      <div class="pane" id="mx-pane-2" role="tabpanel" aria-labelledby="mx-stage-2" hidden>
+        <div class="pane-head">
+          <h2>Create a training project</h2>
+          <button type="button" class="tip"
+                  title="A training project is a normal pipeline project that opens at the Train step. VICARIUS creates one from a training set and links to the set's images rather than copying them, so the images stay in one place on disk."
+                  aria-label="About training projects"><span>i</span></button>
+        </div>
+
+        <dl class="choices">
+          <div>
+            <dt><label for="mx-train-by">Your initials</label>
+                <button type="button" class="tip"
+                        title="VICARIUS records your initials as the creator and puts them in the project folder name."
+                        aria-label="About your initials"><span>?</span></button></dt>
+            <dd><input type="text" id="mx-train-by" maxlength="8" autocomplete="off" class="w-initials" placeholder="initials"
+                       title="Type your initials. VICARIUS records them as the creator of the project."></dd>
+          </div>
+        </dl>
+
+        <ul class="rows" id="mx-composites" aria-label="Training sets"></ul>
+      </div>
+
+      <!-- Stage 3: open a training project and start Train yourself. -->
+      <div class="pane" id="mx-pane-3" role="tabpanel" aria-labelledby="mx-stage-3" hidden>
+        <div class="pane-head">
+          <h2>Train</h2>
+          <button type="button" class="tip"
+                  title="Open a training project in the pipeline window and start the Train step there yourself. VICARIUS has already marked steps 1 to 4 as skipped, because the training set replaced them."
+                  aria-label="About training"><span>i</span></button>
+        </div>
+
+        <ul class="rows" id="mx-train-projects" aria-label="Training projects"></ul>
       </div>
     </section>
 
-    <!-- The grid itself (the hero). Scrolls horizontally on small screens. -->
-    <section class="mx-grid-wrap" id="mx-grid-wrap" aria-label="Coverage grid">
-      <div class="mx-empty" id="mx-empty" hidden>
-        No reviewed projects yet. Annotate a project in Step 5 or the 4.test
-        combined annotator and its coverage appears here.
+    <details class="util mx-hygiene-details">
+      <summary title="Show the housekeeping tools for the mask registry, the file behind the matrix that records every mask.">Registry hygiene</summary>
+      <div class="util-body">
+        <div id="mx-hygiene"></div>
+        <button type="button" id="mx-purge" class="btn btn-danger"
+                title="Purge the registry rows that automated tests left behind and that match no live project. VICARIUS asks you to confirm, then backs up the registry file before it removes them.">Purge test rows</button>
       </div>
-      <table class="mx-grid" id="mx-grid" hidden>
-        <thead id="mx-thead"></thead>
-        <tbody id="mx-tbody"></tbody>
-      </table>
-    </section>
+      <div id="mx-purge-result" class="result" aria-live="polite"></div>
+    </details>
 
-    <footer class="mx-foot">
-      <span id="mx-generated"></span>
-      <span class="mx-attr">Reef Point Seg - built by Lauren Olinger</span>
-    </footer>
-  </main>
+  </section><!-- /mx-view-training -->
 
-  <!-- Provenance popover, positioned next to the hovered cell -->
-  <div class="mx-pop" id="mx-pop" role="tooltip" hidden></div>
+  <footer class="foot">
+    <span class="stamp" id="mx-generated"></span>
+    <span>Reef Point Seg - built by Lauren Olinger</span>
+  </footer>
 
-  <script>window.MATRIX_BASE = {{ base|tojson }};</script>
-  <script src="{{ base }}/static/matrix.js"></script>
+</main>
+
+<!-- Provenance popover, positioned next to the hovered cell. -->
+<div class="mx-pop" id="mx-pop" role="tooltip" hidden></div>
+
+<script>window.MATRIX_BASE = {{ base|tojson }};</script>
+<script src="{{ shared }}/vicarius_tooltips.js?v={{ v }}"></script>
+<script src="{{ base }}/static/matrix_cell.js?v={{ v }}"></script>
+<script src="{{ base }}/static/matrix_stats.js?v={{ v }}"></script>
+<script src="{{ base }}/static/matrix.js?v={{ v }}"></script>
+<script src="{{ shared }}/vega_tour_content.js?v={{ v }}"></script>
+<script src="{{ shared }}/vega_tour.js?v={{ v }}"></script>
 </body>
 </html>

@@ -18,13 +18,17 @@ No pytest. Run with the unified env python:
 import os
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from PIL import Image
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SRC = os.path.join(os.path.dirname(_HERE), "src")
+_SCRIPTS = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, _SRC)
+sys.path.insert(0, _SCRIPTS)
 
 import export_yolo as EY
+from _reefreview import eml_writer as _EW
 
 _fail = 0
 
@@ -139,6 +143,51 @@ for emp_name in ("EMP1.txt", "EMP2.txt"):
     check(os.path.exists(lp), f"empty-frame label file exists: {emp_name}")
     if os.path.exists(lp):
         check(open(lp).read().strip() == "", f"empty-frame label is blank: {emp_name}")
+
+# ── EML companion file (spec Task 12) ────────────────────────────────────────
+eml_path = os.path.join(export_dir, "eml.xml")
+check(os.path.exists(eml_path), "eml.xml written beside the export")
+if os.path.exists(eml_path):
+    try:
+        ET.parse(eml_path)
+        eml_parses = True
+    except ET.ParseError:
+        eml_parses = False
+    check(eml_parses, "eml.xml parses as well-formed XML")
+
+
+def _boom(*_a, **_k):
+    raise RuntimeError("simulated EML failure")
+
+
+# A write_eml failure must never break the export: monkeypatch the module
+# attribute export_yolo's _write_export_eml actually looks up (_reefreview.
+# eml_writer.write_eml) to raise, export a fresh frame into a new dir, and
+# confirm the normal outputs still land with no eml.xml.
+_orig_write_eml = _EW.write_eml
+_EW.write_eml = _boom
+try:
+    export_dir2 = os.path.join(d, "out_eml_fail")
+    stats2 = EY.export_batch({"POS1.jpg": segs["POS1.jpg"]}, export_dir2, {}, symlink=False)
+finally:
+    _EW.write_eml = _orig_write_eml
+
+check(
+    stats2.get("exported_images") == 1,
+    f"export still succeeds when write_eml raises (got {stats2})",
+)
+check(
+    os.path.exists(os.path.join(export_dir2, "all_images", "POS1.jpg")),
+    "normal export outputs (all_images) still written when write_eml raises",
+)
+check(
+    os.path.exists(os.path.join(export_dir2, "all_labels", "POS1.txt")),
+    "normal export outputs (all_labels) still written when write_eml raises",
+)
+check(
+    not os.path.exists(os.path.join(export_dir2, "eml.xml")),
+    "no eml.xml written when write_eml raises",
+)
 
 print("PASS" if _fail == 0 else f"{_fail} FAILED")
 sys.exit(1 if _fail else 0)

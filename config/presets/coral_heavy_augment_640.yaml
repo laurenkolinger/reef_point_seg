@@ -1,0 +1,214 @@
+# ======================================================================
+# Step 6 training preset: "Coral heavy augmentation, 640 px"
+#
+# Written 2026-09-15 by LO. This is the recipe Lauren presses Start
+# Training with on the Coral Intel subset; it is meant to be run again
+# and again, not once.
+#
+# What it is for:
+#   A DETECTOR (task detect, box labels, no polygons) on the Coral Intel
+#   subset: 256 by 256 pixel coral photographs, one species per box, cut
+#   down to the 32 species that carry at least 100 localised boxes.
+#   The subset is staged at
+#   /mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/
+#   supporting_data/bbox_datasets/coral_intel_subset and holds 8,348
+#   images, 32 classes and 11,995 boxes. That folder is the one to pick on
+#   the Bounding Boxes page when minting the training project this recipe
+#   runs in; the parent below is not, because it carries 59 classes, 27 of
+#   which have too few boxes to detect.
+#   Parent dataset, and the source of the licence and the citation:
+#   /mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/
+#   supporting_data/bbox_datasets/coral_intel (LICENSE.md there: the
+#   annotations are CC BY 4.0 and cite Cordero et al. 2026, the
+#   photographs are third party and stay on this box). The subset copies
+#   those terms verbatim, so they follow the data into training.
+#   Measured over the parent's 12,969 localised boxes on 2026-09-15, the
+#   median box covers 27 percent of its frame and 21 percent of boxes
+#   cover less than 5 percent. These are close-up photographs of one
+#   colony, not reef frames: the two coral SEGMENTATION presets in this
+#   folder (tuned_v1_regularized.yaml, yolo26l_heavy_seg_aug.yaml) are
+#   the recipes for those.
+#
+# Where the numbers come from:
+#   fish_heavy_augment_640.yaml, the run3 recipe from the October 2025
+#   fish ablation (test mAP50 0.904 on 34 classes at 640 px), re-aimed at
+#   these photographs by Lauren on 2026-09-15. No coral run has scored
+#   this recipe yet, so nothing below is a measurement: it is a starting
+#   point, and the first run's scores replace this paragraph.
+#
+# What each value away from the fish recipe is doing:
+#   epochs 600, patience 80   8,348 images is a small set, and the cosine
+#                             schedule below spends its last third at a
+#                             low learning rate. Patience 80 lets that
+#                             tail finish instead of stopping in it.
+#   cos_lr true               The fish run used a linear decay over 350
+#                             epochs. Over 600 the cosine decay to
+#                             lrf 0.01 of lr0 is the gentler finish.
+#   close_mosaic 15           The last 15 epochs train with mosaic off,
+#                             on whole undistorted photographs, which is
+#                             what inference sees.
+#   hsv_s 0.7, hsv_v 0.5      The photographs come from three archives
+#                             (GBIF, CoralNet, Corals of the World) with
+#                             different white balance and exposure, so
+#                             saturation and brightness jitter go above
+#                             the fish recipe's 0.5 and 0.4.
+#   degrees 12, flipud 0.5    A colony photographed from above has no up.
+#                             Both flips and a small rotation are
+#                             label-preserving here; the fish recipe kept
+#                             flipud 0.0 because a fish has an up.
+#   scale 0.6                 Teaches the same colony at other apparent
+#                             sizes, which is the main thing separating
+#                             one of these photographs from the next.
+#   shear 0, perspective 0    The fish recipe used 2.0 and 0.0001. A
+#                             close-up of one colony has almost no
+#                             perspective to learn from, and shear bends
+#                             the colony outline, which is a cue that
+#                             separates species in this set. A judgement,
+#                             not an ablation.
+#   mosaic 0.6, mixup 0.12    Below the fish recipe's 1.0 and 0.15.
+#                             Mosaic tiles four images into one, and on a
+#                             256 px source that leaves each colony small
+#                             and soft. At 0.6 roughly two images in five
+#                             are still seen whole. The mixup field steps in
+#                             0.05, so 0.12 is off its spinner grid: type it
+#                             rather than clicking the arrows, which move to
+#                             0.10 or 0.15.
+#   imgsz 640                 Every image is upscaled from its native
+#                             256 px. 640 is kept anyway: it is the scale
+#                             the COCO-pretrained weights were trained
+#                             at, and it is the fish recipe's scale,
+#                             which keeps the two comparable. What it
+#                             buys is room at the small end: the median
+#                             box is 133 px on the source and 333 px at
+#                             640, and the smallest tenth are 33 px on
+#                             the source and 83 px at 640, which a
+#                             detector can still work with.
+#   model yolo11l.pt          The largest DETECTION checkpoint staged on
+#                             this box, at scripts/TCRMPtrain_oceankindCV/
+#                             yolo11l.pt, which is the directory the
+#                             training process runs in, so a bare file
+#                             name resolves without a download. yolo11x.pt
+#                             is offered by the model picker but is not
+#                             staged, and lab DNS is unreliable.
+#   device "0,1"              Both RTX 5090s. batch 32 is the total across
+#                             the pair, 16 per card.
+#   box 7.5, cls 0.5,         Ultralytics defaults, unchanged, as in the
+#   dfl 1.5, lr0, lrf,        fish recipe, so a difference in the scores
+#   momentum, weight_decay,   comes from the augmentation and the data
+#   warmup_epochs, optimizer  rather than from the loss or the optimizer.
+#   valid_ratio 0.2,          The fish recipe's split fractions: 70
+#   test_ratio 0.1            percent train, 20 validation, 10 test.
+#
+# Caution one, hue:
+#   hsv_h 0.1 is a deliberate middle setting and it has NOT been ablated.
+#   The coral segmentation presets in this folder jitter hue by 0.03, the
+#   fish detector by 0.3, and Lauren set 0.1 on 2026-09-15. Coral species
+#   here separate partly on colour, so 0.3 was too much and 0.03 leaves
+#   the model exposed to the colour cast of an archive it has not seen.
+#   The first ablation worth running is this recipe at 0.03 against this
+#   recipe at 0.1, everything else held.
+#
+# Caution two, copy-paste:
+#   copy_paste is 0.0 on purpose, not by oversight. Ultralytics skips the
+#   copy-paste augmentation whenever the labels carry no polygon, and a
+#   box dataset carries none, so any non-zero value here would read on
+#   the Train panel as an augmentation that is running and would in fact
+#   do nothing. The coral segmentation presets set 0.2 and 0.4 because
+#   their labels are polygons. copy_paste_mode is still shipped so that
+#   applying this preset writes the field rather than keeping whatever a
+#   previously loaded preset left in it; at probability 0.0 it is inert.
+#
+# What this file is for, and how the panel finds it:
+#   The _meta block below declares task: detect and subject: coral, and
+#   those two keys are the whole of how the Train panel decides which
+#   recipe to offer. Set the Training task to Detector and the Subject to
+#   coral and this file is the one recipe that matches, so VICARIUS
+#   selects it in the Load preset dropdown and applies it to a project
+#   that has no training settings saved yet. Set either control to
+#   anything else and this recipe is not listed at all. No file name and
+#   no folder order takes part in that decision, which is what changed on
+#   2026-09-15: before that day the recipe that won was whichever name
+#   sorted first among those carrying a flag, and this file, arriving
+#   beside fish_heavy_augment_640.yaml and sorting before it, would have
+#   taken every box dataset's opening recipe away from the fish detector
+#   with nothing on the panel saying so. A second recipe declaring
+#   detect and coral now takes nothing from this one either: the panel
+#   applies neither, names both, and asks the operator to pick.
+#
+# How to use:
+#   Step 6 panel, Load preset dropdown, pick this file, Import. Values
+#   below overwrite the form fields they name and anything not listed is
+#   left alone. A training project whose saved Step 6 config carries
+#   these values AND preset_id: coral_heavy_augment_640.yaml opens with
+#   them in place and skips the auto-apply. The two halves do different
+#   jobs and both are needed: the saved values are what fills the form,
+#   and the marker is only what stops a default preset being applied over
+#   them. A project saved with the marker and nothing else opens on the
+#   Train panel's own fallbacks (epochs 500, imgsz 512, batch -1,
+#   patience 50, hue 0.2) with nothing on screen saying the recipe is not
+#   this one.
+#
+# What checks this file:
+#   scripts/pipeline_orchestrator/tests/test_step6_preset_default.py, run
+#   with env/bin/python from the clone root. It pins every value below
+#   against the approved recipe, refuses a key the Train form cannot
+#   apply, and proves that Detector plus coral reaches this recipe while
+#   Detector plus fish reaches fish_heavy_augment_640.yaml.
+# ======================================================================
+
+_meta:
+  name: "Coral heavy augmentation, 640 px"
+  description: "Coral Intel subset detector: yolo11l at 640 px, batch 32 on two GPUs, 600 epochs with cosine decay and patience 80, hue 0.1, saturation 0.7, brightness 0.5, mosaic 0.6, mixup 0.12, rotation 12, scale 0.6, both flips."
+  # What this recipe is for. The Train panel offers it when its Training
+  # task control says Detector and its Subject control says coral.
+  task: detect
+  subject: coral
+
+params:
+  # Core training
+  model: yolo11l.pt
+  epochs: 600
+  imgsz: 640
+  batch: 32
+  patience: 80
+  device: "0,1"
+  valid_ratio: 0.2
+  test_ratio: 0.1
+
+  # Schedule and optimizer
+  cos_lr: true
+  close_mosaic: 15
+  optimizer: auto
+  lr0: 0.01
+  lrf: 0.01
+  momentum: 0.937
+  weight_decay: 0.0005
+  warmup_epochs: 3.0
+
+  # Loss weights (ultralytics defaults, unchanged)
+  box: 7.5
+  cls: 0.5
+  dfl: 1.5
+
+  # Colour jitter. See caution one above before changing hsv_h.
+  hsv_h: 0.1
+  hsv_s: 0.7
+  hsv_v: 0.5
+  bgr: 0.0
+
+  # Geometry
+  degrees: 12
+  translate: 0.1
+  scale: 0.6
+  shear: 0
+  perspective: 0
+  flipud: 0.5
+  fliplr: 0.5
+
+  # Sample mixing. See caution two above: copy_paste does nothing on box
+  # labels, so it is held at 0.0 rather than looking like it is running.
+  mosaic: 0.6
+  mixup: 0.12
+  cutmix: 0.0
+  copy_paste: 0.0
+  copy_paste_mode: flip

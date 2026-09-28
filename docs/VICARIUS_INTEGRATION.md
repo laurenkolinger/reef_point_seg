@@ -172,8 +172,9 @@ products:
 - Step 4 raw-image copies: keep source basename (`TCRMP20180502_clip_BIX_T103.jpeg`).
 - Step 5 YOLO labels: `{source_id}.txt` sharing the source basename.
 - Step 6 runs: `{project_id}_{YYYYMMDD_HHMMSS}` if user leaves `run_name` blank.
-- Step 8 inference outputs: `overlays/{source_id}.jpg`,
-  `crops/{source_id}_det{NN}.jpg`.
+- Step 8 inference outputs: `overlays/{source_id}.jpg`. No crops are written:
+  `--save_crops` is accepted for compatibility and recorded under
+  `ignored_flags` in `manifest.json`.
 
 When the model is promoted to VICARIUS `/models/`, use semantic versioning
 per the naming convention:

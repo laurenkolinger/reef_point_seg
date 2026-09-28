@@ -79,6 +79,11 @@ os.environ['TCRMP_PROVENANCE_SOURCE'] = 'edit'
 os.environ['TCRMP_MANUAL_ANNOTATE'] = '1'
 os.environ['TCRMP_MASK_REGISTRY_DIR'] = _REGISTRY_DIR
 os.environ.setdefault('TCRMP_TARGET_SPECIES', 'AA,PA')
+# Relabelling an ALREADY accepted mask is a judgement on accepted work and
+# carries the same identity requirement as making it (test_reviewer_required
+# covers the refusal). Fixing accepted masks IS this editor's job, and the
+# orchestrator always launches it with the opener's initials, so seed them.
+os.environ['TCRMP_REVIEWER'] = 'LO'
 
 import config as cfg  # noqa: E402
 import mask_ops  # noqa: E402
@@ -234,6 +239,11 @@ with A.app.test_client() as c:
         check(len(non_edit) == 0,
               f"every label_provenance.csv row has source=='edit' (found non-edit rows: {non_edit})")
 
+
+# cleanup: the seeded export, raw images and temp registry
+import shutil
+shutil.rmtree(_ROOT, ignore_errors=True)
+check(not os.path.exists(_ROOT), "temp root removed")
 
 print("PASS" if _fail == 0 else f"{_fail} FAILED")
 sys.exit(1 if _fail else 0)

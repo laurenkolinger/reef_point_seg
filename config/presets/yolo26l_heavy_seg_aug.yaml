@@ -1,11 +1,11 @@
 # ======================================================================
-# Step 6 training preset — "YOLO 26l-seg, heavy seg augmentation"
+# Step 6 training preset: "YOLO 26l-seg: heavy seg aug"
 #
 # Why this preset exists:
 #   Benchmarking yolo11l-seg on 18aprilpm_PA, the best-performing ablation
 #   was `ablation_02_heavy_seg_aug2`: mAP50-95(M) 0.5782 at epoch 573
-#   (vs ~0.555 for the baseline aug recipe). The aug recipe — not the
-#   model size — was the lever that moved the needle.
+#   (vs ~0.555 for the baseline aug recipe). The aug recipe, not the
+#   model size, was the lever that moved the needle.
 #
 #   A parallel yolo26m-seg run with baseline aug tied the 11l baseline
 #   (~0.554) but did not beat the heavy-aug result, so we could not tell
@@ -14,7 +14,7 @@
 #   This preset isolates the architecture by pairing yolo26l-seg with the
 #   heavy_seg_aug2 hyperparameters. If the final mAP50-95(M) clears
 #   ~0.58, the architecture is pulling weight and 26l becomes the new
-#   default; if it lands at ~0.55-0.57, stick with 11l + heavy aug.
+#   default; if it comes in at ~0.55 to 0.57, stick with 11l + heavy aug.
 #
 # How to use:
 #   Step 6 panel → "Load preset" dropdown → select this file → Import.
@@ -23,7 +23,14 @@
 # ======================================================================
 
 _meta:
-  name: "YOLO 26l-seg — heavy seg aug"
+  # What this recipe is for. The Train panel offers it when its Training task
+  # control says Segmentation and its Subject control says coral. So does
+  # tuned_v1_regularized.yaml, the regularized recipe beside it, and while
+  # both declare the same pair the panel applies neither: it lists the two by
+  # name and asks the operator to pick.
+  task: segment
+  subject: coral
+  name: "YOLO 26l-seg: heavy seg aug"
   description: "yolo26l-seg + ablation_02 heavy aug recipe (mosaic 0.7 / mixup 0.2 / copy_paste 0.4). Architecture-vs-recipe isolation test; target mAP50-95(M) ~0.58+."
 
 params:
@@ -74,7 +81,7 @@ params:
   # ── Optimizer & LR schedule ───────────────────────────────────────
   optimizer: auto
   lr0: 0.01                       # Matches ablation_02. (ablation_05/06 tried 0.005 and did
-                                  # not beat 0.01 — don't drop lr0 unless you also raise epochs.)
+                                  # not beat 0.01, so don't drop lr0 unless you also raise epochs.)
   lrf: 0.01
   momentum: 0.937
   weight_decay: 0.0005

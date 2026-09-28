@@ -24,8 +24,10 @@ House harness style: standalone script, no pytest. Env vars are set BEFORE
 
 Run: env/bin/python scripts/TCRMPclip_editMasks/tests/test_expert_lock.py
 """
+import atexit
 import json
 import os
+import shutil
 import sys
 import tempfile
 from datetime import datetime
@@ -39,6 +41,10 @@ sys.path.insert(0, SRC)
 
 # -- Build the temp seeded export BEFORE import (env vars must be set first) --
 _ROOT = tempfile.mkdtemp(prefix='expert_lock_test_')
+# Remove it however the run ends. Without this every board run leaves one
+# directory behind in the system temp folder; 34 had piled up by 2026-09-06,
+# which the house rule on test artifacts forbids (TODO T20260905-165500).
+atexit.register(shutil.rmtree, _ROOT, ignore_errors=True)
 _EXPORT_DIR = os.path.join(_ROOT, 'export')
 _SEG_DIR = os.path.join(_EXPORT_DIR, 'segmentations')
 os.makedirs(_SEG_DIR, exist_ok=True)
@@ -61,6 +67,11 @@ os.environ['TCRMP_EXPORT_DIR'] = _EXPORT_DIR
 os.environ['TCRMP_SESSION_MODE'] = 'edit'
 os.environ['TCRMP_PROVENANCE_SOURCE'] = 'edit'
 os.environ['TCRMP_MANUAL_ANNOTATE'] = '1'
+# The orchestrator always launches this editor with the opener's initials, and
+# accepting a mask is refused without them (test_reviewer_required covers the
+# refusal). Seed the same way a real launch does, so the expert-lock refusal
+# under test is the one being exercised.
+os.environ['TCRMP_REVIEWER'] = 'LO'
 os.environ.setdefault('TCRMP_TARGET_SPECIES', 'AA')
 
 import config as cfg  # noqa: E402
@@ -84,9 +95,15 @@ def _make_mask(mask_id, x0, species='AA', name='Acropora agaricites', category='
 # (a) an ordinary PA mask -- editable
 _mask_ordinary = _make_mask(0, 10, species='PA', name='Porites astreoides')
 
-# (b) a REVIEW mask -- expert-locked via species=='REVIEW' + review=True
+# (b) a REVIEW mask -- expert-locked via species=='REVIEW' + review=True.
+# This fixture stands for a mask flagged BEFORE the expert-review lock of
+# 2026-09-06, so it is stamped after the build rather than through it:
+# mask_ops.build_mask_dict now refuses to give a new mask a review tag, and a
+# fixture built with species='REVIEW' would come back with an empty species.
 _mask_review = _make_mask(1, 100, species='REVIEW', name='Flagged for expert review',
                            category='Review')
+_mask_review['species'] = 'REVIEW'
+_mask_review['category'] = 'Review'
 _mask_review['review'] = True
 
 # (c) a mask carrying expert_id={'mode': 'EXPERT'} -- expert-locked via expert_id
@@ -327,6 +344,10 @@ with A.app.test_client() as c:
     check(set(merge_masks_before.keys()) == {2, 4},
           f"merge frame starts with exactly masks 2 and 4 (got {sorted(merge_masks_before.keys())})")
 
+    _locked_rle_before = {
+        m['id']: m for m in A.session['segmentations'][_MERGE_FRAME_NAME]['masks']
+    }[2]['rle']
+
     r_merge = c.post(f'/api/image/{_MERGE_FRAME_NAME}/merge_same_id')
     check(r_merge.status_code == 200,
           f"POST merge_same_id -> 200 (got {r_merge.status_code})")
@@ -336,8 +357,15 @@ with A.app.test_client() as c:
     merge_masks_after = {m['id']: m for m in json.loads(r_after_merge.data)['masks']}
     check(2 in merge_masks_after,
           f"locked mask (2) was NOT removed/absorbed by merge_same_id (got ids {sorted(merge_masks_after.keys())})")
-    check(merge_masks_after.get(2, {}).get('rle') == merge_masks_before[2]['rle'],
-          "locked mask (2) RLE geometry is byte-identical after merge_same_id (not unioned into)")
+    # /api/image answers with wire masks (no rle: see app.wire_mask), so the
+    # visible geometry is compared here and the stored RLE is compared straight
+    # from the session store, which is what a union would actually rewrite.
+    check(merge_masks_after.get(2, {}).get('polygon_px') == merge_masks_before[2]['polygon_px']
+          and merge_masks_after.get(2, {}).get('area') == merge_masks_before[2]['area'],
+          "locked mask (2) geometry is unchanged after merge_same_id (not unioned into)")
+    _stored = {m['id']: m for m in A.session['segmentations'][_MERGE_FRAME_NAME]['masks']}
+    check(_stored[2]['rle'] == _locked_rle_before,
+          "locked mask (2) stored RLE is byte-identical after merge_same_id")
     check(merge_masks_after.get(2, {}).get('expert_id', {}).get('mode') == 'EXPERT',
           f"locked mask (2) still carries expert_id.mode == 'EXPERT' (got {merge_masks_after.get(2, {}).get('expert_id')})")
     check(4 in merge_masks_after,

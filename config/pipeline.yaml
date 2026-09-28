@@ -151,7 +151,15 @@ step_defaults:
     split: test
     imgsz: 512
     batch: 8
-    conf_threshold: 0.25
+    # Measurement, not deployment. Mean average precision is the area under
+    # the whole precision-recall curve, so the evaluation has to keep the
+    # low-confidence tail of the predictions; a higher cut-off removes that
+    # tail and reports a lower score than the weights earn. Measured on
+    # TRAIN_coral_intel_20260902_224223 (2026-09-15): the same weights, split
+    # and image size score mAP50 0.623 at conf 0.25 and 0.685 at conf 0.001.
+    # 0.001 is also the Ultralytics validation default. Step 8 (inference)
+    # keeps its own, higher, deployment threshold.
+    conf_threshold: 0.001
     iou_threshold: 0.6
     preview_count: 8
     pdf_export_dir: ''

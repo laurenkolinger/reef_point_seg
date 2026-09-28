@@ -27,6 +27,7 @@ from mask_ops import (
     rle_encode, rle_decode, mask_to_polygon, mask_bbox, mask_centroid,
     resolve_overlaps, merge_close_masks, check_no_overlap, union_masks,
     build_mask_dict, update_mask_geometry, merge_overlapping_same_id,
+    REVIEW_TAGGING_ENABLED, REVIEW_LOCKED_MSG, review_tag_requested,
 )
 from export_yolo import load_class_map, save_class_map, export_batch, update_data_yaml
 from render_overlay import render_segmentation_overlays
@@ -49,13 +50,62 @@ except Exception as _re_err:  # pragma: no cover
     _REVIEW_OK = False
     print(f"[review] _reefreview unavailable, expert-review export disabled: {_re_err}")
 
-# Load target species from TCRMPcvr_chooseImages config
+# Where the label list is cleaned of the expert-review tag (Lauren Olinger,
+# 2026-09-06). A target label of REVIEW draws a live, armable REVIEW control in
+# the label row, which offers the operator a control every add route answers
+# with a 409. The entry is DROPPED and logged rather than refused, because
+# TCRMP_TARGET_SPECIES comes from a launcher and refusing a whole launch over
+# one entry would cost the operator the session. Logged with print(): log() is
+# not defined yet when this runs at import time.
+def _drop_review_labels(labels, source):
+    """Remove every label that spells out the expert-review tag.
+
+    Parameters:
+        labels: the label codes read from one source, in their original order.
+        source: plain words naming where they came from, for the log line.
+
+    Returns:
+        list: the labels that are not the review tag, in their original order.
+        The list comes back unchanged when review tagging is enabled again, so
+        flipping REVIEW_TAGGING_ENABLED reverses this with no other edit.
+
+    Example:
+        _drop_review_labels(['PA', 'review'], 'TCRMP_TARGET_SPECIES') returns
+        ['PA'] and prints one line naming 'review'.
+    """
+    if REVIEW_TAGGING_ENABLED:
+        return list(labels)
+    kept, dropped = [], []
+    for label in labels:
+        if review_tag_requested({'species': label}):
+            dropped.append(label)
+        else:
+            kept.append(label)
+    if dropped:
+        print(f"[review-lock] dropped {len(dropped)} target label(s) spelling "
+              f"out the expert-review tag from {source}: {', '.join(dropped)}. "
+              f"{REVIEW_LOCKED_MSG}")
+    return kept
+
+
 def _load_target_species():
+    """The target species codes this app offers, in priority order.
+
+    Reads the orchestrator override TCRMP_TARGET_SPECIES first, then the
+    TARGET_SPECIES line of TCRMPcvr_chooseImages' config.py, then a built-in
+    default list. Every source is passed through _drop_review_labels, so no
+    source can arm the suspended expert-review flag.
+
+    Returns:
+        list: the species codes, in the order the source gave them.
+    """
     import re
     # Pipeline orchestrator override
     env_sp = os.environ.get('TCRMP_TARGET_SPECIES', '')
     if env_sp:
-        return [s.strip() for s in env_sp.split(',') if s.strip()]
+        return _drop_review_labels(
+            [s.strip() for s in env_sp.split(',') if s.strip()],
+            'TCRMP_TARGET_SPECIES')
     config_path = os.path.join(REPO_DIR, 'TCRMPcvr_chooseImages', 'src', 'config.py')
     try:
         with open(config_path) as f:
@@ -63,11 +113,15 @@ def _load_target_species():
                 if line.strip().startswith('TARGET_SPECIES'):
                     match = re.search(r'\[(.+)\]', line)
                     if match:
-                        return [s.strip().strip('"').strip("'")
-                                for s in match.group(1).split(',')]
+                        return _drop_review_labels(
+                            [s.strip().strip('"').strip("'")
+                             for s in match.group(1).split(',')],
+                            config_path)
     except FileNotFoundError:
         pass
-    return ['OFRA', 'PA', 'OA', 'OFAV', 'AL', 'MC', 'AA']
+    return _drop_review_labels(
+        ['OFRA', 'PA', 'OA', 'OFAV', 'AL', 'MC', 'AA'],
+        'the built-in default target list')
 
 TARGET_SPECIES = _load_target_species()
 
@@ -77,6 +131,54 @@ def _is_review(p):
     a non-target '?' point, which is a negative refinement click), shipped to the
     expert-review site, and never trained."""
     return bool(p.get('review')) or p.get('species', p.get('species_code', '')) == 'REVIEW'
+
+
+def _review_tag_refused(payload):
+    """Report whether a request body must be refused for asking to tag a mask.
+
+    Expert-review flagging is locked (Lauren Olinger, 2026-09-06): no mask may
+    GAIN a review tag. This app is archived from the orchestrator sidebar but is
+    still launchable through POST /api/step/5/run, and it writes into the same
+    segmentation files and the same mask registry as the named annotators, so
+    the lock covers it too.
+
+    This test is deliberately broader than _is_review above, which classifies
+    masks already stored on disk and must not move.
+
+    The gap between this test and _is_review widened on 2026-09-06, when the
+    category joined the spellings the refusal catches. This test recognises
+    FOUR, each normalised for case and whitespace and each read on its own: a
+    truthy 'review' key, a 'species', a 'species_code' or a 'category' that
+    spells out REVIEW. _is_review recognises TWO: a truthy 'review' key or a
+    species of exactly 'REVIEW'. The asymmetry is deliberate. What may be
+    WRITTEN is judged as widely as the tag can be spelled; what the masks
+    already on disk MEAN is judged by _is_review, which drives the expert
+    export, the training filter and the provenance ledger.
+
+    Args:
+        payload: the parsed request body, one relabel entry, a point info dict
+            out of a prompt file, or a candidate mask dict. A value with no
+            dict-like get() answers False rather than raising, so an unparsed
+            body can be passed straight in.
+
+    Returns:
+        bool: True when the lock is on and this payload asks for a review tag,
+        in any spelling mask_ops.review_tag_requested recognises.
+    """
+    return not REVIEW_TAGGING_ENABLED and review_tag_requested(payload)
+
+
+def _review_locked_response():
+    """The refusal every route returns when a request asks for a new tag.
+
+    Returns:
+        tuple: a Flask (response, status) pair carrying HTTP 409 and
+        {'ok': False, 'review_locked': True, 'error': REVIEW_LOCKED_MSG}. Every
+        VICARIUS annotator answers with this exact shape, so the browser has a
+        single case to recognise.
+    """
+    return jsonify({'ok': False, 'review_locked': True,
+                    'error': REVIEW_LOCKED_MSG}), 409
 
 
 def _load_target_label_info():
@@ -163,6 +265,21 @@ session = {
     # Currently-embedded image for refinement
     'current_review_image': None,
 }
+
+
+# ── Reviewer identity ────────────────────────────────────────────
+# Same contract as the annotator twins: the orchestrator seeds TCRMP_REVIEWER
+# at launch and POSTs /api/reviewer to a reused process, so the session value
+# tracks whoever opened the project last. Blank stays blank.
+
+def _norm_reviewer(value):
+    """Initials as stored everywhere: stripped, uppercased, at most 8 chars."""
+    return str(value or '').strip().upper()[:8]
+
+
+def _current_reviewer():
+    """Session reviewer, else the TCRMP_REVIEWER env default; '' when unknown."""
+    return _norm_reviewer(session.get('reviewer') or os.environ.get('TCRMP_REVIEWER', ''))
 
 
 def log(msg, year=None):
@@ -602,6 +719,15 @@ def _process_single_image(engine, item, export_dir):
     neg_clicks = [(p['x'], p['y']) for p in negatives]
 
     raw_masks = []
+    # build_mask_dict is the one place a mask is born, and it counts every
+    # expert-review tag it drops on a process-wide tally. This frame's own
+    # figure is counted here rather than read as a difference of that tally,
+    # because the tally is not this frame's alone: the exemplar scan route
+    # derives its point_info from an existing mask, so a scan seeded from one of
+    # the masks flagged before the lock builds a tagged point_info on its own
+    # request thread while this loop runs. Counting per call keeps the logged
+    # number exact; the running total stays with review_tags_dropped().
+    review_tags_lost = 0
     for pt in targets:
         if neg_clicks:
             # Multi-point prompt: [positive, *negatives] with labels [1, 0…0].
@@ -620,12 +746,18 @@ def _process_single_image(engine, item, export_dir):
                 simplify_epsilon=cfg.POLYGON_SIMPLIFY_EPSILON,
             )
             if mask_dict is not None:
-                # REVIEW prompts produce a real mask, but it is flagged so YOLO
-                # export skips it and the batch export ships it to the expert.
-                if _is_review(pt):
-                    mask_dict['review'] = True
-                    mask_dict['species'] = 'REVIEW'
-                    mask_dict['category'] = 'Review'
+                # Expert-review flagging is locked (2026-09-06). A REVIEW prompt
+                # read back out of ids/sam_click_prompts.json still produces a
+                # real mask, but the mask is born untagged: build_mask_dict
+                # blanks a REVIEW species and category itself, and the stamp
+                # that used to set the review boolean here is gone. This pass
+                # has no request body for a route-level refusal to inspect, so
+                # the count logged below is how the run says what it dropped
+                # instead of doing it silently. The condition is the one
+                # build_mask_dict counted its own drop on, read on the same
+                # prompt and only where a mask was actually built.
+                if _review_tag_refused(pt):
+                    review_tags_lost += 1
                 mask_dict['mask'] = result['mask']
                 raw_masks.append(mask_dict)
 
@@ -657,6 +789,11 @@ def _process_single_image(engine, item, export_dir):
         'reviewed': False,
         'exported': False,
     }
+
+    if review_tags_lost > 0:
+        log(f"[review-lock] {filename}: {review_tags_lost} point(s) asked for an "
+            f"expert-review tag and got an ordinary mask instead (flagging is "
+            f"locked; masks flagged before 2026-09-06 keep theirs)", year)
 
     session['segmentations_by_year'].setdefault(year, {})[filename] = seg_dict
     render_segmentation_overlays(seg_dict, filename, export_dir, year, stage="auto")
@@ -845,7 +982,13 @@ def get_image_data(filename):
 
 @app.route('/api/image/<path:filename>/masks', methods=['PUT'])
 def update_masks(filename):
-    """Bulk update mask statuses (accept/reject)."""
+    """Bulk update mask statuses (accept/reject).
+
+    Statuses only: this route reads `updates` and nothing else, so it carries no
+    relabel field and cannot write a species or a review flag. A relabel field
+    added here in future needs the same refusal POST /add carries, or the
+    2026-09-06 expert-review lock reopens on this app.
+    """
     seg, year = _find_segmentation(filename)
     if not seg:
         return jsonify({'error': 'not found'}), 404
@@ -864,7 +1007,7 @@ def update_masks(filename):
     # finishes this frame, and upsert the flat ledger. Non-fatal on failure.
     from provenance import compute_label_outcomes, write_provenance_csv
     _source = os.environ.get('TCRMP_PROVENANCE_SOURCE', 'step5')
-    _reviewer = session.get('reviewer', os.environ.get('TCRMP_REVIEWER', ''))
+    _reviewer = _current_reviewer()
     outcomes = compute_label_outcomes(
         seg, TARGET_SPECIES, source=_source, reviewer=_reviewer)
     seg['label_outcomes'] = outcomes
@@ -903,7 +1046,7 @@ def accept_all_masks(filename):
     # finishes this frame, and upsert the flat ledger. Non-fatal on failure.
     from provenance import compute_label_outcomes, write_provenance_csv
     _source = os.environ.get('TCRMP_PROVENANCE_SOURCE', 'step5')
-    _reviewer = session.get('reviewer', os.environ.get('TCRMP_REVIEWER', ''))
+    _reviewer = _current_reviewer()
     outcomes = compute_label_outcomes(
         seg, TARGET_SPECIES, source=_source, reviewer=_reviewer)
     seg['label_outcomes'] = outcomes
@@ -1375,6 +1518,10 @@ _OPERATOR_OWNED_FIELDS = (
     'refinement_clicks', 'draw_edits', 'source_type', 'source_x', 'source_y',
 )
 # Imported review fields a disk reload MAY merge in (expert pipeline output).
+# Deliberately exempt from the 2026-09-06 review-flag lock: restoring a tag that
+# is already written on disk is preservation, not addition, and it is the leg of
+# the expert round trip that brings an identification home. The lock refuses new
+# tags arriving from a request body or a prompt file, never one already stored.
 _IMPORTED_REVIEW_FIELDS = ('reviews', 'expert_id', 'review_uid', 'review')
 
 
@@ -1682,6 +1829,11 @@ def add_mask(filename):
     its RLE + polygon get re-computed without the new mask's footprint.
     Rejected masks are untouched (they're "deleted" in the user's mental
     model, so they can't block a new mask either).
+
+    Review-flag lock (2026-09-06): a body asking for an expert-review tag is
+    refused with the shared 409 and creates nothing. This route read the species
+    straight out of the body and had no guard of any kind, so both arms of the
+    tag reached the stored mask.
     """
     import numpy as np
 
@@ -1694,6 +1846,8 @@ def add_mask(filename):
         return jsonify({'error': 'SAM3 engine not loaded'}), 500
 
     data = request.json
+    if _review_tag_refused(data):
+        return _review_locked_response()
     click_x = data['click_x']
     click_y = data['click_y']
     species = data.get('species', '')
@@ -1761,10 +1915,47 @@ def _derive_project_id(export_dir):
     return os.path.basename(os.path.dirname(os.path.abspath(export_dir))) or 'project'
 
 
+def _count_review_masks(to_export, batch_files):
+    """How many masks in this batch carry an expert-review tag.
+
+    Parameters:
+        to_export: {filename: segmentation dict} for the batch.
+        batch_files: the filenames in the batch, in export order.
+
+    Returns:
+        The number of tagged masks, counted with the same two spellings the
+        export selector itself reads: the review boolean, or a species of
+        REVIEW. A frame missing from to_export contributes nothing.
+    """
+    n_review = 0
+    for fn in batch_files:
+        seg = to_export.get(fn) or {}
+        for m in seg.get('masks', []):
+            if m.get('review') or m.get('species') == 'REVIEW':
+                n_review += 1
+    return n_review
+
+
 def _export_review_bundle(to_export, batch_files):
     """Ship this batch's REVIEW-flagged masks to the expert-review repo +
     library, and auto-relabel any that a past expert already identified.
-    Best-effort: any failure is logged and never breaks the YOLO export."""
+    Best-effort: any failure is logged and never breaks the YOLO export.
+
+    SUSPENDED while REVIEW_TAGGING_ENABLED is False (2026-09-06). This app is
+    archived from the orchestrator sidebar but is still launchable through
+    POST /api/step/5/run, and this is its one path that publishes outward: it
+    mints a fresh review identifier onto every already-flagged mask and pushes
+    the bundle to a public GitHub Pages repository. The function returns early
+    with the count of masks it did not publish, in the shape the two named
+    annotators use. Reversing it is the one constant, never the environment
+    variable TCRMP_REVIEW_GIT_PUSH, which any hand launch can flip back.
+    """
+    if not REVIEW_TAGGING_ENABLED:
+        n_review = _count_review_masks(to_export, batch_files)
+        log(f"[review-lock] expert-review export SUSPENDED: {n_review} flagged "
+            f"mask(s) in this batch were not published and not given a review "
+            f"identifier. {REVIEW_LOCKED_MSG}")
+        return {'disabled': True, 'review_masks_skipped': n_review}
     if not _REVIEW_OK:
         return None
     try:
@@ -1804,6 +1995,17 @@ def _export_review_bundle(to_export, batch_files):
         return {'error': str(e)}
 
 
+@app.route('/api/reviewer', methods=['GET', 'POST'])
+def api_reviewer():
+    """GET -> {'reviewer'}; POST {'reviewer'} sets session['reviewer']
+    (normalized) and echoes it back. The orchestrator pushes the latest
+    opener here when it reuses a live step 5 process."""
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        session['reviewer'] = _norm_reviewer(data.get('reviewer'))
+    return jsonify({'reviewer': _current_reviewer()})
+
+
 @app.route('/api/export_batch', methods=['POST'])
 def do_export():
     """Export current batch to YOLO Segmentation format."""
@@ -1826,6 +2028,7 @@ def do_export():
     stats = export_batch(
         to_export, export_dir, session['class_map'],
         symlink=cfg.SYMLINK_IMAGES,
+        reviewer=_current_reviewer(),
     )
 
     # Ship REVIEW-flagged masks to the expert-review GitHub-Pages repo + the
@@ -1837,7 +2040,7 @@ def do_export():
     # flat ledger upsert means this supersedes any earlier finish-time row.
     from provenance import compute_label_outcomes, write_provenance_csv
     _source = os.environ.get('TCRMP_PROVENANCE_SOURCE', 'step5')
-    _reviewer = session.get('reviewer', os.environ.get('TCRMP_REVIEWER', ''))
+    _reviewer = _current_reviewer()
     # Mark exported and generate reviewed overlay images
     for fn in batch_files:
         seg, year = _find_segmentation(fn)

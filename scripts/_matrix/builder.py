@@ -4,8 +4,12 @@
 call (no cache), so a deleted / purged project simply stops contributing.
 
 Primary data source is each project's `label_provenance.csv` ledger(s).
-A project with NO ledger anywhere falls back to deriving label outcomes
-from its legacy step5 `segmentations.json` files.
+A processing directory with no ledger of its own falls back to deriving
+label outcomes from the legacy `segmentations.json` files under it.
+
+Registry rows never replace a project wholesale: they are upserted over
+their own (basename, label) cells, so a project whose registry holds five
+of its masks still shows every other cell the ledger/legacy chain knows.
 """
 
 import csv
@@ -20,6 +24,12 @@ if _PKG_SCRIPTS not in sys.path:
     sys.path.insert(0, _PKG_SCRIPTS)
 
 from _reefreview.mask_registry import MaskRegistry  # noqa: E402
+# The one list of project.json project_type values that mean "trains from a
+# prepared source, holds no annotation work". Imported rather than copied so a
+# third kind of training source cannot be added there and silently start
+# feeding the matrix here. training_projects.py imports nothing from _matrix,
+# so this direction carries no cycle.
+from _reefreview.training_projects import TRAINING_PROJECT_TYPES  # noqa: E402
 
 # Conflict-resolution strength: higher wins when >1 project covers the
 # same (image, label) pair. pending_expert beats not_found only; any
@@ -35,6 +45,29 @@ _OUTCOME_STRENGTH = {
 
 # Mask source_types that count as a hand-drawn (manual) annotation.
 _MANUAL_SOURCE_TYPES = {"manual_box", "manual_click"}
+
+# project.json project_type of a run dir minted from a prepared training
+# source. Two kinds exist and both are skipped here:
+#
+#   composite_training  minted from a composite training set. Its step4test
+#                       dir is a symlink INTO the composite it trains on, so
+#                       scanning it would count every mask in that set a
+#                       second time and feed the matrix its own output. The
+#                       matrix learns about these from composite.json's
+#                       linked_projects list instead.
+#   bbox_training       minted from a staged detection dataset. That imagery
+#                       is not TCRMP survey data and must never reach the mask
+#                       registry, the coverage matrix or STATS at all.
+#
+# TRAINING_PROJECT_TYPES is the one list, owned by
+# _reefreview/training_projects.py. Nothing here names a single type: a
+# comparison against one would silently stop skipping the other.
+
+
+def is_training_project(meta):
+    """True for a project.json that trains from a prepared source, of either
+    kind. Every scan of annotation work skips these."""
+    return (meta or {}).get("project_type") in TRAINING_PROJECT_TYPES
 
 
 def _is_review_mask(m):
@@ -118,6 +151,109 @@ def _has_model(project_dir):
     return bool(glob.glob(pattern))
 
 
+def _upper_initials(value):
+    return str(value or "").strip().upper()
+
+
+def project_identity(meta):
+    """(creator_initials, opened_by) for a project.json document.
+
+    creator_initials: project.json ``initials``, else the initials of the
+    first access_log entry whose action is "create".
+    opened_by: the initials of the LATEST access_log entry (open or create,
+    the launcher writes both), falling back to the creator initials. Both
+    uppercased; '' when nothing is recorded. Nothing is inferred into the
+    data: this only reads what the launcher already wrote.
+    """
+    meta = meta or {}
+    log = [e for e in (meta.get("access_log") or []) if isinstance(e, dict)]
+    creator = _upper_initials(meta.get("initials"))
+    if not creator:
+        for entry in log:
+            if entry.get("action") == "create":
+                creator = _upper_initials(entry.get("initials"))
+                break
+    opened_by = ""
+    for entry in reversed(log):
+        ini = _upper_initials(entry.get("initials"))
+        if ini:
+            opened_by = ini
+            break
+    return creator, opened_by or creator
+
+
+def scan_projects(inprocess_root):
+    """Every live run_* project directly under inprocess_root that carries a
+    readable project.json, sorted by directory name. Each entry:
+    {project_id, name, run_dir, project_dir, initials, opened_by,
+     created_at, target_species, has_model, meta}. Names come from
+    project.json at scan time (auto names change as Step 3 runs).
+
+    Training projects (project_type "composite_training" or "bbox_training")
+    are NOT returned: they are downstream consumers of a prepared training
+    source, never a source of annotation work. A composite project's step4test
+    dir is a symlink into the composite itself, and a bbox project trains on
+    imagery from outside the TCRMP survey. See is_training_project."""
+    out = []
+    for project_dir in sorted(glob.glob(os.path.join(inprocess_root or "", "run_*"))):
+        if not os.path.isdir(project_dir):
+            continue
+        meta = _read_project_json(project_dir)
+        if meta is None:
+            continue
+        if is_training_project(meta):
+            continue
+        dir_name = os.path.basename(project_dir)
+        initials, opened_by = project_identity(meta)
+        out.append({
+            "project_id": meta.get("id") or dir_name,
+            "name": meta.get("name") or dir_name,
+            "run_dir": dir_name,
+            "project_dir": os.path.abspath(project_dir),
+            "initials": initials,
+            "opened_by": opened_by,
+            "created_at": meta.get("created_at") or "",
+            "target_species": _target_species(meta),
+            "has_model": _has_model(project_dir),
+            "meta": meta,
+        })
+    return out
+
+
+def _ledger_files(project_dir):
+    """Every label_provenance.csv under a project, sorted."""
+    return sorted(glob.glob(
+        os.path.join(project_dir, "**", "label_provenance.csv"), recursive=True))
+
+
+def _ledger_dirs(project_dir):
+    """Processing directories that carry their own label_provenance.csv.
+
+    A directory in this set is ledger driven: the legacy derivation skips
+    the segmentations.json files under it, because the ledger is the
+    authoritative record for the work that ran there. A sibling directory
+    with segmentations and no ledger of its own still derives.
+    """
+    return {os.path.dirname(p) for p in _ledger_files(project_dir)}
+
+
+def _processing_dir(seg_file):
+    """The step directory a segmentations.json belongs to.
+
+    Handles both shapes the pipeline writes:
+      <step>/segmentations/segmentations.json
+      <step>/segmentations/<batch>/segmentations.json
+    Returns '' when the path holds no 'segmentations' directory.
+    """
+    d = os.path.dirname(seg_file)
+    while d and os.path.basename(d) != "segmentations":
+        parent = os.path.dirname(d)
+        if parent == d:
+            return ""
+        d = parent
+    return os.path.dirname(d) if d else ""
+
+
 def _ledger_rows(project_dir):
     """Yield provenance rows from every label_provenance.csv under a project.
 
@@ -125,12 +261,11 @@ def _ledger_rows(project_dir):
     Returns None (not []) when NO ledger file exists anywhere, so callers
     can distinguish "no ledger" from "ledger with zero rows".
     """
-    pattern = os.path.join(project_dir, "**", "label_provenance.csv")
-    files = glob.glob(pattern, recursive=True)
+    files = _ledger_files(project_dir)
     if not files:
         return None
     rows = []
-    for fpath in sorted(files):
+    for fpath in files:
         try:
             with open(fpath, "r", encoding="utf-8", newline="") as fh:
                 reader = csv.DictReader(fh)
@@ -147,26 +282,33 @@ def _ledger_rows(project_dir):
                         "source": (raw.get("source") or "").strip(),
                         "reviewer": (raw.get("reviewer") or "").strip(),
                         "at": (raw.get("at") or "").strip(),
+                        "uid": "",
+                        "status": "",
+                        "source_type": "",
                     })
         except OSError:
             continue
     return rows
 
 
-def _legacy_rows(project_dir, target_species):
-    """Derive provenance rows from legacy step5 segmentations.json files.
+def _legacy_rows(project_dir, target_species, skip_dirs=None):
+    """Derive provenance rows from legacy segmentations.json files.
 
-    Only used for a project with NO ledger. For each reviewed-or-exported
-    image we emit one row per accepted (non-review) species (found_expert
-    when an accepted expert ID is stamped), one pending_expert row per
-    tentative code on each non-rejected review mask, plus a not_found row
-    for every target species with no accepted or pending presence.
+    Used for every processing directory that has no label_provenance.csv of
+    its own (`skip_dirs` names the ones that do). For each reviewed-or-
+    exported image we emit one row per accepted (non-review) species
+    (found_expert when an accepted expert ID is stamped), one pending_expert
+    row per tentative code on each non-rejected review mask, plus a not_found
+    row for every target species with no accepted or pending presence.
     """
     flat = glob.glob(os.path.join(project_dir, "**", "segmentations", "segmentations.json"), recursive=True)
     nested = glob.glob(os.path.join(project_dir, "**", "segmentations", "*", "segmentations.json"), recursive=True)
     files = sorted(set(flat) | set(nested))
+    skip_dirs = set(skip_dirs or ())
     rows = []
     for fpath in files:
+        if skip_dirs and _processing_dir(fpath) in skip_dirs:
+            continue
         try:
             with open(fpath, "r", encoding="utf-8") as fh:
                 seg_doc = json.load(fh)
@@ -199,11 +341,16 @@ def _legacy_rows(project_dir, target_species):
                 code = m.get("species")
                 if not code:
                     continue
-                rec = by_species.setdefault(code, {"manual": False, "expert": False})
+                rec = by_species.setdefault(
+                    code, {"manual": False, "expert": False, "reviewer": "", "source_type": ""})
                 if m.get("source_type") in _MANUAL_SOURCE_TYPES:
                     rec["manual"] = True
                 if _is_expert_mask(m):
                     rec["expert"] = True
+                if not rec["reviewer"]:
+                    rec["reviewer"] = str(m.get("reviewer") or "").strip().upper()
+                if not rec["source_type"]:
+                    rec["source_type"] = str(m.get("source_type") or "")
 
             pending_codes = set()
             for m in pending:
@@ -223,8 +370,11 @@ def _legacy_rows(project_dir, target_species):
                     "label": code,
                     "outcome": outcome,
                     "source": "derived",
-                    "reviewer": "",
+                    "reviewer": rec.get("reviewer", ""),
                     "at": at,
+                    "uid": "",
+                    "status": "accepted",
+                    "source_type": rec.get("source_type", ""),
                 })
 
             # Pending review codes with no accepted mask -> pending_expert.
@@ -236,6 +386,9 @@ def _legacy_rows(project_dir, target_species):
                     "source": "derived",
                     "reviewer": "",
                     "at": at,
+                    "uid": "",
+                    "status": "pending",
+                    "source_type": "",
                 })
 
             # Target species with no accepted or pending mask -> not_found.
@@ -249,6 +402,9 @@ def _legacy_rows(project_dir, target_species):
                     "source": "derived",
                     "reviewer": "",
                     "at": at,
+                    "uid": "",
+                    "status": "",
+                    "source_type": "",
                 })
     return rows
 
@@ -316,9 +472,14 @@ def _registry_rows(inprocess_root):
             "label": label,
             "outcome": outcome,
             "source": "registry",
-            "reviewer": "",
+            # The reviewer column arrives with the identity work; a manifest
+            # written before it simply has no such key.
+            "reviewer": (rec.get("reviewer") or "").strip().upper(),
             "at": (rec.get("updated_at") or rec.get("created_at") or "").strip(),
             "project_id": (rec.get("project_id") or "").strip(),
+            "uid": (rec.get("uid") or "").strip(),
+            "status": status,
+            "source_type": source_type,
         })
     return rows
 
@@ -338,42 +499,60 @@ def build_matrix(inprocess_root):
         for row in registry_rows:
             registry_by_project.setdefault(row["project_id"], []).append(row)
 
-    run_dirs = sorted(glob.glob(os.path.join(inprocess_root, "run_*")))
-    for project_dir in run_dirs:
-        if not os.path.isdir(project_dir):
-            continue
-        meta = _read_project_json(project_dir)
-        if meta is None:
-            # No project.json -> not a real project; ignore (e.g. junk dirs).
-            continue
+    # Dirs without a project.json are not projects and are ignored (junk).
+    for info in scan_projects(inprocess_root):
+        project_dir = info["project_dir"]
+        project_id = info["project_id"]
+        name = info["name"]
+        target_species = info["target_species"]
 
-        dir_name = os.path.basename(project_dir)
-        project_id = meta.get("id") or dir_name
-        name = meta.get("name") or dir_name
-        target_species = _target_species(meta)
-        has_model = _has_model(project_dir)
+        # Ledger and legacy are combined per processing directory: a step
+        # dir with its own label_provenance.csv is ledger driven, a sibling
+        # dir holding only segmentations.json still derives. Before this a
+        # single ledger anywhere in the project silenced every segmentations
+        # file in it, which hid whole step5 populations from the grid.
+        ledger = _ledger_rows(project_dir)
+        rows = list(ledger or [])
+        rows.extend(_legacy_rows(project_dir, target_species,
+                                 skip_dirs=_ledger_dirs(project_dir)))
 
+        # Per-cell merge, never a project-level replace. The registry is the
+        # source of truth for the (basename, label) cells it actually holds
+        # for THIS project; every other cell keeps its ledger/legacy row, so
+        # a project with five registered masks and a thousand annotated ones
+        # still reports all thousand. not_found keeps coming from the
+        # ledger/legacy chain only (target_species x reviewed image set).
+        reg_rows = registry_by_project.get(project_id) or []
+        reg_cells = {(r["basename"], r["label"]) for r in reg_rows}
+        base_cells = {(r["basename"], r["label"]) for r in rows
+                      if r["outcome"] != "not_found"}
+        if reg_rows:
+            rows = list(reg_rows) + [
+                r for r in rows
+                if r["outcome"] == "not_found"
+                or (r["basename"], r["label"]) not in reg_cells
+            ]
+
+        # partially_registered: the registry covers some but not all of the
+        # project's found/pending cells, so the grid mixes registry rows with
+        # derived ones. A project with no registry rows at all is not
+        # partially registered: its whole contribution is one consistent
+        # chain. Task 5 renders this as a badge in the project isolate list.
+        n_cells = len(base_cells | reg_cells)
         projects.append({
             "project_id": project_id,
             "name": name,
             "target_species": target_species,
-            "has_model": has_model,
+            "has_model": info["has_model"],
+            "initials": info["initials"],
+            "opened_by": info["opened_by"],
+            "run_dir": info["run_dir"],
+            "project_dir": project_dir,
+            "created_at": info["created_at"],
+            "partially_registered": bool(reg_cells) and len(reg_cells) < n_cells,
+            "n_registry_cells": len(reg_cells),
+            "n_cells": n_cells,
         })
-
-        rows = _ledger_rows(project_dir)
-        if rows is None:
-            rows = _legacy_rows(project_dir, target_species)
-
-        if project_id in registry_by_project:
-            # This project has registry rows: the registry is the source of
-            # truth for found-*/pending-* cells for THIS project only. A
-            # sibling project with no registry rows of its own keeps its
-            # ledger/legacy result untouched (registry preference is
-            # per-project, not a single global switch).
-            # not_found still comes from the existing ledger/legacy chain
-            # (target_species x reviewed image set), exactly as today.
-            not_found_rows = [r for r in rows if r["outcome"] == "not_found"]
-            rows = list(registry_by_project[project_id]) + not_found_rows
 
         for row in rows:
             basename = row["basename"]
@@ -386,9 +565,12 @@ def build_matrix(inprocess_root):
                 "project_id": project_id,
                 "name": name,
                 "source": row["source"],
-                "reviewer": row["reviewer"],
+                "reviewer": row.get("reviewer", ""),
                 "at": row["at"],
                 "outcome": outcome,
+                "uid": row.get("uid", ""),
+                "status": row.get("status", ""),
+                "source_type": row.get("source_type", ""),
             })
             cell["outcome"] = _stronger(cell["outcome"], outcome)
 

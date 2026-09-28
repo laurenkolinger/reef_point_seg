@@ -57,7 +57,7 @@ segs = {
             {
                 "id": 1, "status": "rejected", "species": "OFRA", "category": "Coral",
                 "source_type": "manual_click", "source_x": 40, "source_y": 20,
-                "review": False,
+                "review": False, "reviewer": "AB",
                 "rle": {"counts": "def456", "size": [48, 64]},
                 "polygon_norm": [[0.5, 0.5, 0.6, 0.5, 0.6, 0.6]],
                 "image_path_abs": img_path,
@@ -67,7 +67,9 @@ segs = {
 }
 
 class_map = {}
-stats = EY.export_batch(segs, export_dir, class_map, symlink=False)
+# reviewer= is the export-time session reviewer (D2): stamped onto accepted
+# masks that have none, carried into every registry row as the fallback.
+stats = EY.export_batch(segs, export_dir, class_map, symlink=False, reviewer='lo')
 
 check(isinstance(stats, dict), "export_batch still returns a stats dict")
 check(stats.get("exported_images") == 1, f"exported_images=1, got {stats.get('exported_images')}")
@@ -92,6 +94,20 @@ rejected_row = by_species_status.get(('OFRA', 'rejected'))
 check(rejected_row is not None, f"registry gained rejected OFRA row (rows={rows})")
 
 check(len(rows) == 2, f"exactly 2 registry rows (accepted + rejected), got {len(rows)}")
+
+# Reviewer identity (D2): the accepted mask had no reviewer, so export stamps
+# the session reviewer onto it and the registry row; the rejected mask keeps
+# its own recorded initials over the session fallback.
+check(segs[fn]["masks"][0].get("reviewer") == "LO",
+      f"export stamps the session reviewer (normalized) on the accepted mask lacking one (got {segs[fn]['masks'][0].get('reviewer')!r})")
+check(segs[fn]["masks"][1].get("reviewer") == "AB",
+      "export leaves a mask that already carries reviewer initials alone")
+if accepted_row:
+    check(accepted_row.get('reviewer') == 'LO',
+          f"accepted registry row carries reviewer LO (got {accepted_row.get('reviewer')!r})")
+if rejected_row:
+    check(rejected_row.get('reviewer') == 'AB',
+          f"rejected registry row keeps the mask's own reviewer AB (got {rejected_row.get('reviewer')!r})")
 
 # --- Rejected-only frame: no accepted masks at all on this frame. This mask
 # is also review-flagged, so it is a "review-only" frame in combinedAnnotate
@@ -151,6 +167,18 @@ if rejected_only_row:
     check(rejected_only_row.get('project_id') == '20260101_rejonly',
           "no-env fallback: run_20260101_rejonly -> 20260101_rejonly, un-prefixed "
           f"(got {rejected_only_row.get('project_id')!r})")
+
+# No reviewer known at export (standalone launch, no env): nothing is stamped
+# or inferred; the registry row's reviewer stays blank.
+check(not segs2[fn2]["masks"][0].get("reviewer"), "no reviewer at export -> mask left unstamped")
+if rejected_only_row:
+    check(rejected_only_row.get('reviewer') == '', "no reviewer at export -> registry row reviewer ''")
+
+# cleanup: every temp dir this test made
+import shutil
+for _p in (d, reg_dir, d2, reg_dir2):
+    shutil.rmtree(_p, ignore_errors=True)
+check(not any(os.path.exists(_p) for _p in (d, reg_dir, d2, reg_dir2)), "temp dirs removed")
 
 print("PASS" if _fail == 0 else f"{_fail} FAILED")
 sys.exit(1 if _fail else 0)

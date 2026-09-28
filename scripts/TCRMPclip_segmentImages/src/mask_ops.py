@@ -4,8 +4,355 @@ Mask operations — overlap resolution, merging, RLE encoding, polygon conversio
 All operations are CPU-only (numpy/OpenCV). No GPU needed.
 """
 
+import threading
+import unicodedata
+
 import numpy as np
 import cv2
+
+
+# ── Expert-review flagging policy ──────────────────────────────
+#
+# Lauren Olinger's decision of 2026-09-06: VICARIUS accepts no new expert-review
+# tags on any mask, in any annotator. Setting REVIEW_TAGGING_ENABLED back to
+# True is the whole reversal; no other line in this file, and no line in the
+# apps that import it, has to change with it.
+#
+# Masks flagged before that decision keep their tag. Nothing in this block
+# rewrites, strips or hides a tag already stored: the lock refuses new ones.
+#
+# The refusal here is deliberately BROADER than the platform's read predicate,
+# and the gap widened on 2026-09-06 when the category joined the spellings it
+# catches. The refusal recognises FOUR: the 'review' key, 'species',
+# 'species_code' and 'category', each tested on its own and each normalised for
+# case, surrounding whitespace, invisible characters and letters borrowed from
+# another script. The read predicate (_is_review in each app.py) recognises
+# TWO: a truthy mask['review'] or a species of exactly 'REVIEW'. That asymmetry is deliberate and permanent. The refusal decides what
+# may be WRITTEN, so it is as wide as the ways a tag can be spelled; the read
+# predicate decides what the masks already stored on disk MEAN, and it drives
+# the training export, the coverage matrix, the expert-review export and the
+# provenance ledger, so widening it would change the meaning of those masks.
+
+REVIEW_TAGGING_ENABLED = False
+
+REVIEW_LOCKED_MSG = (
+    "Flagging for expert review is temporarily unavailable. "
+    "VICARIUS is accepting no new review tags."
+)
+
+REVIEW_TAG = "REVIEW"
+
+# Payload keys that carry the tag as a species string. 'species_code' is the
+# spelling the Place Points tool writes into ids/sam_click_prompts.json, and it
+# is tested on its own so a payload holding an empty 'species' beside a
+# 'species_code' of REVIEW is still caught.
+REVIEW_SPECIES_KEYS = ('species', 'species_code')
+
+# Payload key that carries the tag as a category. 'Review' is not one of the
+# real categories (DEFAULT_CATEGORIES in each app's config.py holds only
+# 'Target species only'), and across the three segmentation files under
+# inprocess/ it pairs one for one with the flag: 130 masks carry both, none
+# carries either on its own. It is the tag's third spelling, so it is tested as
+# a key in its own right rather than as a decoration on a species.
+REVIEW_CATEGORY_KEY = 'category'
+
+# Every payload key whose STRING value can spell the tag out. One greppable
+# policy point: review_tag_requested and strip_review_tag both walk this tuple,
+# so a fourth string spelling is one line here and nothing else.
+REVIEW_TAG_STRING_KEYS = REVIEW_SPECIES_KEYS + (REVIEW_CATEGORY_KEY,)
+
+# Payload key that carries the tag as a boolean.
+REVIEW_FLAG_KEY = 'review'
+
+# The display name the annotators write beside the tag. No predicate reads a
+# mask's name and no registry column stores it, so it is display only, but a
+# mask whose tag the lock has dropped must not go on announcing itself as
+# flagged. The exemplar tray writes the tag itself into the name instead, so a
+# name carries the tag in one of two spellings.
+REVIEW_DISPLAY_NAME = 'Flagged for expert review'
+
+# Both of those spellings as normalise_review_value returns them. Both are plain
+# ASCII, so upper() is that normalisation.
+REVIEW_NAME_TAGS = (REVIEW_TAG, REVIEW_DISPLAY_NAME.upper())
+
+# Unicode general categories removed from a value before it is compared with the
+# tag. 'Cf' is the format class, which holds the zero-width space, the
+# zero-width joiner and non-joiner, the word joiner, the byte-order mark and the
+# soft hyphen; 'Cc' is the control class. Python's str.strip() removes none of
+# them, so 'REVIEW' followed by a zero-width space used to read as a species of
+# its own while rendering exactly like the tag. A real species code or category
+# name carries neither class of character, so removing them can only change a
+# value that was already carrying something invisible.
+INVISIBLE_CHARACTER_CATEGORIES = ('Cc', 'Cf')
+
+# How many review tags the lock has dropped since this process started, with the
+# lock that guards the count: an annotator serves requests on several threads,
+# so the counter is incremented under it rather than with a bare +=.
+_review_tags_dropped = 0
+_review_tags_dropped_lock = threading.Lock()
+
+
+def _spells_the_tag_in_another_script(text):
+    """Report whether a cleaned value is the tag with letters swapped out.
+
+    NFKC folds the width and compatibility variants of a Latin letter onto the
+    letter itself, so a fullwidth W is already handled by the time this runs. It
+    does not fold a letter from another script: Cyrillic Er, the Cyrillic R, is
+    a separate character that reads as the tag on screen, in the mask registry
+    and in the coverage matrix. Rather than keep a table of look-alikes, which
+    would have to grow with every script, this compares position by position: a
+    value is the tag in disguise when it is exactly as long as the tag, every
+    ASCII character sits where the tag has that same character, and every
+    remaining character is a letter.
+
+    A value made only of ASCII passes this test only when it already IS the tag,
+    so no ordinary code can be caught by it, and a longer or shorter value
+    (REVIEWED, PREREVIEW, REVIEW_PA, RE VIEW) never matches at all.
+
+    Args:
+        text: one value already upper-cased and stripped of its invisible
+            characters.
+
+    Returns:
+        bool: True when the value spells the tag with one or more of its letters
+        replaced by a letter from another script.
+
+    Example:
+        _spells_the_tag_in_another_script('\u0420EVIEW') returns True, and
+        _spells_the_tag_in_another_script('REVIEWED') returns False.
+    """
+    if len(text) != len(REVIEW_TAG):
+        return False
+    for char, tag_char in zip(text, REVIEW_TAG):
+        if char.isascii():
+            if char != tag_char:
+                return False
+        elif not char.isalpha():
+            return False
+    return True
+
+
+def normalise_review_value(value):
+    """Normalise one payload value for comparison against the review tag.
+
+    The value is NFKC-normalised (which folds a fullwidth or otherwise
+    compatibility-spelled Latin letter onto the plain letter), stripped of its
+    invisible characters (see INVISIBLE_CHARACTER_CATEGORIES), then trimmed and
+    upper-cased. A value that comes out of that as the tag written in another
+    script is returned as the tag itself, so one comparison settles every
+    spelling. Anything else is returned as its own cleaned text, so a species
+    that merely contains the word is unaffected.
+
+    Args:
+        value: any value read out of a request body, a prompt file or a mask
+            dict. None, numbers and other non-strings are all accepted.
+
+    Returns:
+        str: the cleaned upper-case text, REVIEW when that text is the tag or a
+        near-spelling of it, or '' when the value is None.
+
+    Example:
+        normalise_review_value('  review ') returns 'REVIEW', and so does
+        normalise_review_value('REVIEW\u200b'); normalise_review_value(
+        'REVIEWED') returns 'REVIEWED'.
+    """
+    if value is None:
+        return ''
+    folded = unicodedata.normalize('NFKC', str(value))
+    visible = ''.join(
+        char for char in folded
+        if unicodedata.category(char) not in INVISIBLE_CHARACTER_CATEGORIES
+    )
+    text = visible.strip().upper()
+    if _spells_the_tag_in_another_script(text):
+        return REVIEW_TAG
+    return text
+
+
+def review_tag_requested(payload):
+    """Report whether a payload asks for an expert-review tag.
+
+    Catches every spelling an annotator can produce: a truthy 'review' key (the
+    routes coerce that key with bool(), so the strings '0', 'no' and 'false' are
+    all truthy and all count as a request), and a 'species', 'species_code' or
+    'category' that normalises to REVIEW in any case or with surrounding
+    whitespace. The three string keys are tested independently, never as a
+    fallback chain, so a payload carrying an empty 'species' beside a
+    'species_code' of REVIEW is still caught, and so is one whose only review
+    spelling is the category.
+
+    Args:
+        payload: a request body, a point info dict, a mask dict, or anything
+            else. A value with no dict-like get() answers False rather than
+            raising, so a caller can pass an unparsed request body straight in.
+
+    Returns:
+        bool: True when the payload asks for a review tag.
+
+    Example:
+        review_tag_requested({'species': 'PA', 'category': 'Review'}) returns
+        True, and so does review_tag_requested({'species': '',
+        'species_code': ' review '}).
+    """
+    getter = getattr(payload, 'get', None)
+    if not callable(getter):
+        return False
+    if bool(getter(REVIEW_FLAG_KEY)):
+        return True
+    for key in REVIEW_TAG_STRING_KEYS:
+        if normalise_review_value(getter(key)) == REVIEW_TAG:
+            return True
+    return False
+
+
+def strip_review_tag(payload):
+    """Return a copy of a payload with any expert-review tag removed.
+
+    Use it where a caller wants to carry on without the tag rather than refuse
+    the whole request: the 'review' key is set to False, and a 'species',
+    'species_code' or 'category' that normalises to REVIEW is blanked. Each key
+    is judged on its own value, so a payload carrying a real species beside a
+    Review category keeps the species and loses only the category. Every other
+    key is copied across unchanged, and the argument itself is never modified.
+
+    Args:
+        payload: a dict-like request body, point info or mask dict.
+
+    Returns:
+        dict: a new dict carrying no review tag. review_tag_requested() of the
+        result is always False.
+
+    Raises:
+        TypeError: when payload cannot be copied into a dict, because a caller
+            that cannot name the keys it is stripping has passed the wrong
+            thing. Guard with review_tag_requested() first, which tolerates any
+            value at all.
+
+    Example:
+        strip_review_tag({'species': 'PA', 'category': 'Review'}) returns
+        {'species': 'PA', 'category': '', 'review': False}.
+    """
+    try:
+        stripped = dict(payload)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(
+            "strip_review_tag needs a dict-like payload (a request body, a "
+            "point info or a mask dict), got "
+            f"{type(payload).__name__}"
+        ) from exc
+    stripped[REVIEW_FLAG_KEY] = False
+    for key in REVIEW_TAG_STRING_KEYS:
+        if normalise_review_value(stripped.get(key)) == REVIEW_TAG:
+            stripped[key] = ''
+    return stripped
+
+
+def review_tags_dropped():
+    """Report how many review tags the lock has dropped in this process.
+
+    build_mask_dict cannot refuse a review tag by raising: the batch
+    segmentation pass calls it in a loop over every prompt in a frame, and an
+    exception there would abandon the whole frame. It counts the drop instead,
+    and a caller reads the count to report what it dropped, the way
+    merge_overlapping_same_id returns its merged_count.
+
+    Returns:
+        int: the running total since the process started, or since the last
+        reset_review_tags_dropped() call.
+
+    Example:
+        before = review_tags_dropped()
+        ... build one frame's masks ...
+        dropped = review_tags_dropped() - before
+    """
+    with _review_tags_dropped_lock:
+        return _review_tags_dropped
+
+
+def reset_review_tags_dropped():
+    """Set the dropped-review-tag counter back to zero.
+
+    Returns:
+        int: the count that was cleared, so one call both reports a batch total
+        and starts the next batch from zero.
+    """
+    global _review_tags_dropped
+    with _review_tags_dropped_lock:
+        cleared = _review_tags_dropped
+        _review_tags_dropped = 0
+    return cleared
+
+
+def _record_dropped_review_tag():
+    """Add one to the dropped-review-tag counter, safely across threads."""
+    global _review_tags_dropped
+    with _review_tags_dropped_lock:
+        _review_tags_dropped += 1
+
+
+def _blank_if_review(value):
+    """Return '' when a value spells out the review tag, else the value itself.
+
+    Args:
+        value: a species or category value out of a point info dict.
+
+    Returns:
+        The value unchanged, or '' when it normalises to REVIEW.
+    """
+    if normalise_review_value(value) == REVIEW_TAG:
+        return ''
+    return value
+
+
+def _blank_if_review_name(value):
+    """Return '' when a display name announces the review tag, else the name.
+
+    A species and a category carry the tag as the single word REVIEW, which
+    _blank_if_review settles. A name carries it as the sentence the annotators
+    write beside the tag ('Flagged for expert review') or as the tag itself, so
+    it needs both spellings. Every other name is returned unchanged, so a mask
+    that keeps a real species keeps that species' real name with it.
+
+    Args:
+        value: the name out of a point info dict.
+
+    Returns:
+        The name unchanged, or '' when it announces the review tag.
+
+    Example:
+        _blank_if_review_name('Flagged for expert review') returns '', and
+        _blank_if_review_name('Porites astreoides') returns it unchanged.
+    """
+    if normalise_review_value(value) in REVIEW_NAME_TAGS:
+        return ''
+    return value
+
+
+def _review_promotion_blocked(survivor_value, absorbed_value):
+    """Report whether a merge must leave one survivor field alone.
+
+    A merge promotes the absorbed mask's species, name and category onto the
+    survivor when the absorbed mask carries the accepted expert ID. Under the
+    lock that promotion may not hand the survivor a REVIEW value it did not
+    already carry, because that would tag a mask that was never flagged.
+
+    Args:
+        survivor_value: the survivor's current value for the field.
+        absorbed_value: the absorbed mask's value for the same field.
+
+    Returns:
+        bool: True when the field must keep the survivor's own value.
+
+    Example:
+        _review_promotion_blocked('PA', 'REVIEW') returns True while the lock
+        is on; _review_promotion_blocked('REVIEW', 'REVIEW') returns False,
+        because the survivor was flagged already.
+    """
+    if REVIEW_TAGGING_ENABLED:
+        return False
+    if normalise_review_value(absorbed_value) != REVIEW_TAG:
+        return False
+    return normalise_review_value(survivor_value) != REVIEW_TAG
 
 
 # ── Mask cleanup (single connected component, no shards) ────────────
@@ -316,6 +663,11 @@ def _merge_review_state(survivor, absorbed):
     - expert_id: prefer an existing expert_id over none (an accepted ID must not
       be silently downgraded to pending).
 
+    Under the expert-review lock (REVIEW_TAGGING_ENABLED False, Lauren Olinger,
+    2026-09-06) a merge preserves review state but never adds any: a survivor
+    that was not flagged gains neither the review boolean nor a REVIEW species,
+    while review_uid, reviews[] and expert_id still travel as before.
+
     Returns True on success, or False to signal the caller MUST REFUSE to merge
     this pair (two DIFFERENT accepted expert_ids conflict — merging would force
     a single organism to claim two different expert codes).
@@ -362,10 +714,15 @@ def _merge_review_state(survivor, absorbed):
         # the survivor stays coloured expert-green (mirrors reload semantics).
         for f in ('species', 'name', 'category'):
             if f in absorbed and absorbed.get(f) is not None:
+                if _review_promotion_blocked(survivor.get(f), absorbed.get(f)):
+                    continue
                 survivor[f] = absorbed[f]
 
-    # Carry the pending-review flag if either side was flagged.
-    if absorbed.get('review') and not survivor.get('review'):
+    # Carry the pending-review flag if either side was flagged. Under the lock
+    # the survivor keeps a flag it already had and gains none: writing one here
+    # would tag a mask that was never flagged, which is the addition Lauren
+    # blocked on 2026-09-06.
+    if REVIEW_TAGGING_ENABLED and absorbed.get('review') and not survivor.get('review'):
         survivor['review'] = True
 
     return True
@@ -531,7 +888,29 @@ def build_mask_dict(mask_id, binary_mask, score, point_info, source_type="auto",
 
     Returns:
         mask dict ready for storage, or None if mask is too small
+
+    Raises:
+        TypeError: when point_info has no dict-like get(), which is a caller
+            fault rather than a data condition.
+
+    Expert-review lock (Lauren Olinger, 2026-09-06): while
+    REVIEW_TAGGING_ENABLED is False, no mask is born carrying a review tag. A
+    point_info asking for one produces a mask with an empty species and no
+    review boolean (this function never writes that key), and the drop is
+    counted for review_tags_dropped() rather than raised, because the batch
+    segmentation pass calls this in a loop over one frame's prompts and an
+    exception would abandon the whole frame.
+
+    Example:
+        build_mask_dict(0, binary, 0.9, {'species': 'REVIEW'}) returns a mask
+        whose species is '' while the lock is on.
     """
+    if not callable(getattr(point_info, 'get', None)):
+        raise TypeError(
+            "build_mask_dict needs a dict-like point_info carrying the label, "
+            "species and click position, got "
+            f"{type(point_info).__name__}"
+        )
     # Clean: keep largest connected component, fill holes
     binary_mask = clean_mask(binary_mask, min_fragment=500).astype(bool)
 
@@ -546,12 +925,28 @@ def build_mask_dict(mask_id, binary_mask, score, point_info, source_type="auto",
     if not polygon_px:
         return None
 
+    species = point_info.get('species', 'UNK')
+    category = point_info.get('category', '')
+    name = point_info.get('name', '')
+    if not REVIEW_TAGGING_ENABLED and review_tag_requested(point_info):
+        # Born clean: one condition governs all three display fields. A species
+        # or a category that spells out the review tag is blanked, so is a name
+        # that announces it, and the drop is counted. An empty species routes
+        # the mask into the annotator's existing empty-species accept guard, so
+        # it reads as unlabelled rather than as a mask awaiting an expert, and a
+        # blanked name stops it reading 'Flagged for expert review' when it is
+        # no longer flagged. A real species keeps its own name.
+        species = _blank_if_review(species)
+        category = _blank_if_review(category)
+        name = _blank_if_review_name(name)
+        _record_dropped_review_tag()
+
     return {
         'id': mask_id,
         'label': point_info.get('label', '?'),
-        'species': point_info.get('species', 'UNK'),
-        'name': point_info.get('name', ''),
-        'category': point_info.get('category', ''),
+        'species': species,
+        'name': name,
+        'category': category,
         'source_x': point_info.get('x', 0),
         'source_y': point_info.get('y', 0),
         'polygon_px': polygon_px,

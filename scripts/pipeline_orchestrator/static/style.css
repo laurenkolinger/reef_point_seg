@@ -1,51 +1,51 @@
-/* VICARIUS-aligned theme for the Reef Point Seg Orchestrator.
- * Palette + typography mirrors /mnt/rip/vicarius_drive/vicarius_ui/static/theme.css:
- *   dark near-black layers, bubblegum-pink + T-Mobile-magenta accents,
- *   Inter body / Space Mono code / Syne headings / Silkscreen wordmark accent,
- *   subtle pixel grid + horizontal scanlines, crosshair cursor, border-radius 2px.
- * Class names preserved verbatim so orchestrator.js keeps working unchanged.
+/* Page-specific theme for the VEGA pipeline window.
+ *
+ * The palette, the shape tokens, the tooltip glyph and bubble, the focus ring
+ * and the button geometry come from the shared design block,
+ * static/vicarius_workflow.css, which templates/index.html links first. Only
+ * what this page adds on top of that block lives here: the sidebar rail, the
+ * step cards, the form primitives, the pixel-grid and scanline overlays, and
+ * the modals. Class names are preserved verbatim so orchestrator.js keeps
+ * working unchanged.
+ *
+ * Source of truth for both files:
+ * docs/superpowers/specs/2026-09-02-workflow-page-design.md.
  */
 
 :root {
-    /* Accents */
-    --magenta:       #E20074;   /* T-Mobile magenta (strong accent) */
-    --magenta-dark:  #B8005C;
-    --magenta-light: #FFB3D9;   /* bubblegum pink (primary accent) */
-    --pink:          #FFB3D9;
-    --pink-soft:     #FFE6F2;
+    /* Tells the browser to draw its own controls dark: without it a select's
+       drop-down list opens white on this near-black page. */
+    color-scheme: dark;
 
-    /* Layers */
-    --bg:            #0a0a0f;   /* page background (near-black) */
-    --bg-deep:       #050508;   /* deepest layer for code blocks, sidebar */
-    --surface:       #11111a;   /* cards, sidebar */
-    --surface-light: #191926;   /* hover / active */
-    --input-bg:      #15151f;
+    /* The one accent the shared block does not name: this page's lighter pink
+       ink, used for the wordmark and for accents on a dark surface. Kept as a
+       token because orchestrator.js and three card stylesheets read it. */
+    --magenta-light: #FFB3D9;
 
-    /* Text */
-    --text:          #F5EDF0;
-    --text-dim:      #b0a7ab;
+    /* Fonts (three roles; theme contract, 2026-09-02): this file is the
+       reference implementation named in that contract, so the three roles
+       are declared here as tokens. --font-body prose and labels (Inter),
+       --font-display page titles and section heads (Syne), --font-mono
+       buttons, inputs, ids and counts (Space Mono). */
+    --font-body:    'Inter', ui-sans-serif, -apple-system, sans-serif;
+    --font-display: 'Syne', sans-serif;
+    --font-mono:    'Space Mono', 'Consolas', monospace;
 
-    /* State */
-    --success:       #00FFB3;
-    --warning:       #FFB800;
-    --error:         #FF4D6D;
-
-    /* Lines */
-    --border:        #2a2a38;
-    --border-dim:    #1d1d26;
-
-    /* Shape */
-    --radius:        2px;
-    --radius-lg:     3px;
+    /* The definition row's label column. The shared block's 148 px is sized
+       for the two-word labels of the training-set page; this window's field
+       names run to "Confidence threshold" and "Inference run name", which
+       wrapped away from their own "?" glyph at that width. */
+    --label-w: 188px;
 }
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
+/* The shared block already sets box-sizing; this is the page's own reset. */
+* { margin: 0; padding: 0; }
 
 html, body { background: var(--bg); min-height: 100vh; }
 
 body {
-    font-family: 'Inter', ui-sans-serif, -apple-system, sans-serif;
-    font-size: 15px;
+    font-family: var(--font-body);
+    font-size: 14px;
     line-height: 1.6;
     letter-spacing: 0.01em;
     color: var(--text);
@@ -103,7 +103,7 @@ body::after {
 }
 
 .topbar h1 {
-    font-family: 'Syne', 'Space Grotesk', sans-serif;
+    font-family: var(--font-display);
     font-size: 20px;
     font-weight: 700;
     letter-spacing: 0.04em;
@@ -112,10 +112,19 @@ body::after {
 }
 
 .topbar .project-name {
-    font-family: 'Space Mono', 'Consolas', monospace;
+    font-family: var(--font-mono);
     font-size: 13px;
     color: var(--text-dim);
     margin-left: 16px;
+}
+
+/* The pipeline shorthand beside the wordmark. Rendered per family in
+   index.html, so a detector project is never told it segments. */
+.topbar-chain {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
 }
 
 .topbar-actions { display: flex; gap: 8px; }
@@ -129,9 +138,13 @@ body::after {
 
 /* ── Sidebar (Step Navigation) ────────────────────────────── */
 
+/* The rail is the width the design names (spec section 5.1): 232 px, and
+   212 px under 1000 px. It was 260 px, which took 28 px off the pane at every
+   width for no gain; the longest stage name, "Model Inference", measures well
+   inside 232 px. */
 .sidebar {
-    width: 260px;
-    min-width: 260px;
+    width: 232px;
+    min-width: 232px;
     background: var(--surface);
     border-right: 1px solid var(--border);
     padding: 24px 16px;
@@ -168,7 +181,7 @@ body::after {
     display: flex;
     align-items: center;
     justify-content: center;
-    font-family: 'Space Mono', monospace;
+    font-family: var(--font-mono);
     font-weight: 700;
     font-size: 13px;
     margin-right: 12px;
@@ -200,6 +213,20 @@ body::after {
     color: var(--error);
 }
 
+/* Tools group: full pages that open in their own tab, so the row is an <a>
+   rather than a switchStep() tile. Same geometry as a step tile. */
+.step-nav li.nav-tool { padding: 0; }
+.step-nav li.nav-tool > a {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 12px;
+    color: inherit;
+    text-decoration: none;
+}
+.step-nav li.nav-tool .step-circle { color: var(--pink); border-color: var(--border); }
+.step-nav li.nav-tool:hover .step-circle { border-color: var(--pink); }
+
 .step-nav li.locked .step-circle { opacity: 0.4; }
 
 @keyframes pulse {
@@ -209,27 +236,44 @@ body::after {
 
 .step-info { flex: 1; }
 
+/* Rail stage name and its one-line state (spec section 3, version 2). */
 .step-info .step-title {
-    font-size: 13px;
-    font-weight: 500;
+    font-family: var(--font-display);
+    font-size: 14px;
+    font-weight: 600;
     margin-bottom: 2px;
     color: var(--text);
 }
 
 .step-info .step-status {
-    font-family: 'Space Mono', monospace;
-    font-size: 10px;
+    font-family: var(--font-mono);
+    font-size: 12px;
     color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.02em;
+}
+
+/* A heading over a group of rail tiles (Review, Tools). It names a group and
+   is not a stage, so it is dimmer and a step smaller than a stage name, and
+   it stays at the 13 px floor rather than the 12 px the tiles once carried
+   inline. */
+.step-nav li.nav-section .step-title {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--text-dim);
+    margin-bottom: 0;
 }
 
 /* ── Main Panel ───────────────────────────────────────────── */
 
+/* The stage pane. Content is at most 1180 px wide with 24 px side padding
+   (spec section 2), and min-width: 0 lets a long select or a wide table
+   shrink inside its own scroller instead of pushing the page sideways. */
 .main-panel {
     flex: 1;
-    padding: 32px;
-    max-width: 980px;
+    min-width: 0;
+    padding: 24px;
+    max-width: 1180px;
 }
 
 /* ── Cards ────────────────────────────────────────────────── */
@@ -242,40 +286,270 @@ body::after {
     margin-bottom: 20px;
 }
 
+/* Stage heading: Syne 700, 17 px, sentence case (spec section 3, version 2).
+   Uppercase on this page is reserved for the window title, the tabs and the
+   buttons. */
 .card h2 {
-    font-family: 'Syne', 'Space Grotesk', sans-serif;
-    font-size: 18px;
-    font-weight: 600;
-    letter-spacing: 0.03em;
-    margin-bottom: 16px;
-    color: var(--pink);
-    text-transform: uppercase;
+    font-family: var(--font-display);
+    font-size: 17px;
+    font-weight: 700;
+    line-height: 1.25;
+    margin-bottom: 0;
+    color: var(--text);
 }
 
 .card h3 {
-    font-family: 'Syne', sans-serif;
-    font-size: 14px;
+    font-family: var(--font-display);
+    font-size: 15px;
     font-weight: 600;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
     color: var(--text);
-    letter-spacing: 0.02em;
+}
+
+/* Title row of a step panel: the stage number, the heading and its
+   information glyph, on one baseline above the first choice row. */
+.panel-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+/* The stage number inside a panel heading. Rendered per family, because a
+   project minted from a box dataset has three stages and not seven, and kept
+   in its own element because static/orchestrator.js renumbers it there when
+   the rail changes. It reads as part of the heading. */
+.stage-num {
+    font-variant-numeric: tabular-nums;
+    color: var(--pink);
 }
 
 /* ── Forms ────────────────────────────────────────────────── */
 
-.form-group { margin-bottom: 14px; }
-
-.form-group label {
-    display: block;
-    font-family: 'Space Mono', monospace;
-    font-size: 11px;
-    font-weight: 400;
-    color: var(--text-dim);
-    margin-bottom: 5px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
+/* Every choice is a definition row (spec section 5.2): a fixed label column
+   holding the label and its "?" glyph, the control beside it, a --border-dim
+   hairline between rows, and a row at least 46 px tall plus that hairline.
+   One left edge for every label and one for every control, at both widths. */
+.form-group,
+.checkbox-group {
+    display: grid;
+    grid-template-columns: var(--label-w) minmax(0, 1fr) auto;
+    column-gap: 16px;
+    align-items: center;
+    min-height: 47px;
+    padding: 6px 0;
+    margin-bottom: 0;
+    border-top: 1px solid var(--border-dim);
 }
 
+.form-group > .field-head,
+.checkbox-group > .field-head { grid-column: 1; align-self: center; }
+
+/* Everything that is not the label sits in the control column: the control
+   itself, and under it the one-line state that the scripts write. */
+.form-group > *:not(.field-head),
+.checkbox-group > *:not(.field-head) {
+    grid-column: 2;
+    min-width: 0;
+    max-width: 600px;
+}
+
+/* The time cost of a setting has the row's third column, at the right edge,
+   so the chips read down the panel as one list and never wrap under a label. */
+.form-group > .cost,
+.checkbox-group > .cost {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
+    align-self: center;
+    max-width: none;
+    padding-left: 12px;
+}
+
+/* A checkbox that qualifies the field it sits with stays inside that field's
+   row rather than opening one of its own. */
+.form-group .checkbox-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 28px;
+    padding: 0;
+    border-top: 0;
+    max-width: none;
+}
+
+/* Related settings share a row: a line of controls, each with its own visible
+   label, inside one definition row's control column. A control and its "?"
+   glyph are one wrapping unit, so the glyph never drops to a line of its own
+   away from the setting it explains. */
+.field-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+}
+
+.field-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    white-space: nowrap;
+}
+
+/* A row list opens flush against the surface it starts on; the hairline
+   belongs between rows, not above the first one. */
+.subcard > .form-group:first-child,
+.subcard > .checkbox-group:first-child,
+.subcard > .form-row:first-child > :first-child,
+details.advanced > .form-row:first-of-type > :first-child { border-top: 0; }
+
+/* Field label: Inter 500 14 px, sentence case (spec section 3, version 2).
+   One rule owns every label on the page, whether it sits alone or inside a
+   .field-head. */
+.form-group > label,
+.field-head label,
+.field-label,
+.field-row > label {
+    display: inline-block;
+    font-family: var(--font-body);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+    letter-spacing: 0;
+    text-transform: none;
+    margin-bottom: 0;
+}
+
+/* The label line: the label, its "?" glyph, and any time-cost chip. */
+.field-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 2px 6px;
+    min-height: 26px;
+}
+
+.field-head > label,
+.field-head > .field-label { margin-bottom: 0; }
+
+/* A heading over a group of settings, not a label beside one control
+   (spec section 5.3): the display font, one step above the field labels
+   under it. */
+.section-label {
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-weight: 700;
+}
+
+/* The heading row a section owns (spec section 5.3): its name, its "i" glyph,
+   any one-line note, and at the right the single action that belongs to the
+   whole section. Every action on a panel sits in a row with a name beside it,
+   so nothing floats against an edge on its own. */
+.section-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+}
+
+.section-head > .spacer { flex: 1; }
+
+/* A checkbox or radio inside a row (spec section 5.2): the native control
+   with the --magenta accent, a 7 px gap, and a 28 px hit target. */
+.opt {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 28px;
+    font-family: var(--font-body);
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--text);
+    cursor: crosshair;
+}
+
+.opt input {
+    accent-color: var(--magenta);
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    flex: none;
+}
+
+/* A one-line state or result line the scripts write into. Never a paragraph:
+   every explanation on this page is a tooltip. Explanatory text never drops
+   below 13 px and never carries a hardcoded grey: --text-dim holds 4.5:1 on
+   both --bg and --surface (spec section 3, legibility floor). */
+.hint {
+    font-family: var(--font-body);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-dim);
+    margin-top: 4px;
+    /* A state line often names a path, which has nowhere to break; without
+       this it runs out of its column and pushes the page sideways. */
+    overflow-wrap: anywhere;
+}
+
+.hint:empty { display: none; }
+
+/* Time cost of a setting. The scale is defined once, on the Train panel's
+   heading glyph, and each chip carries its own level on a focusable tooltip. */
+.cost {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+
+.cost-free  { color: var(--success); }
+.cost-minor { color: var(--warning); }
+.cost-major { color: var(--error); }
+
+/* A settings group inside a step panel: one surface, hairline-free, holding
+   related fields. Replaces the inline card styles the panels carried.
+
+   There is no horizontal padding, on purpose. A settings group is a band
+   across the panel, not a box floating inside it: with 12 px of side padding
+   its rows started 12 px right of every row outside it, so a panel showed two
+   label left edges (309 px and 321 px) and the eye had to find the column
+   twice. The band's tint is what groups the rows; the left edge stays one. */
+.subcard {
+    margin-top: 12px;
+    margin-bottom: 12px;
+    padding: 10px 0;
+    background: var(--surface-light);
+    border-radius: var(--radius-lg);
+}
+
+/* Anything inside a band that is not a definition row still aligns to the one
+   left edge, so a note, a button group or a table head reads down the same
+   column as the labels. */
+.subcard > .btn-group,
+.subcard > .hint,
+.subcard > .section-head { margin-left: 0; }
+
+/* The bordered default path on Step 1. */
+.subpanel {
+    border: 1px solid var(--magenta);
+    border-radius: var(--radius-lg);
+    padding: 12px 14px;
+    margin-bottom: 8px;
+}
+
+.divider-note { color: var(--pink); }
+
+/* Every control on the page reads the theme, including the three selects that
+   sit outside a .form-group (training source, and the two preset pickers).
+   Without this they rendered as raw browser controls: white on near-black. */
+.main-panel select,
+.main-panel input[type="text"],
+.main-panel input[type="number"],
+.main-panel textarea,
 .form-group input[type="text"],
 .form-group input[type="number"],
 .form-group select,
@@ -286,11 +560,22 @@ body::after {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     color: var(--text);
-    font-family: 'Space Mono', 'Consolas', monospace;
-    font-size: 13px;
+    font-family: var(--font-mono);
+    font-size: 14px;
     transition: border-color 0.15s, box-shadow 0.15s;
 }
 
+/* A number needs a box the width of its longest value, not the width of the
+   control column; a select must be allowed to shrink inside a flex row, or
+   its longest option sets a minimum width that pushes the page sideways. */
+.main-panel input[type="number"],
+.form-group input[type="number"] { width: 128px; }
+.main-panel select,
+.form-group select { min-width: 0; }
+
+.main-panel input:focus,
+.main-panel select:focus,
+.main-panel textarea:focus,
 .form-group input:focus,
 .form-group select:focus,
 .form-group textarea:focus {
@@ -299,15 +584,19 @@ body::after {
     box-shadow: 0 0 0 1px rgba(226,0,116,0.35);
 }
 
-.form-row { display: flex; gap: 12px; }
-.form-row .form-group { flex: 1; }
-
-.checkbox-group {
+/* A group of fields stacks as definition rows rather than sitting side by
+   side, so every label shares one left edge and every control another. It
+   stays display: flex because orchestrator.js reveals the inference sample
+   group by setting display to flex; the column direction is what makes the
+   rows. */
+.form-row {
     display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 14px;
+    flex-direction: column;
+    gap: 0;
+    align-items: stretch;
 }
+.form-row > .form-group,
+.form-row > .checkbox-group { flex: none; margin-bottom: 0; }
 
 .checkbox-group input[type="checkbox"] {
     accent-color: var(--magenta);
@@ -316,7 +605,9 @@ body::after {
 }
 
 .checkbox-group label {
-    font-size: 13px;
+    font-family: var(--font-body);
+    font-size: 14px;
+    font-weight: 400;
     color: var(--text);
     cursor: crosshair;
 }
@@ -330,7 +621,8 @@ body::after {
     padding: 10px 18px;
     border: 1px solid transparent;
     border-radius: var(--radius);
-    font-family: 'Space Mono', monospace;
+    color: var(--text);
+    font-family: var(--font-mono);
     font-size: 13px;
     font-weight: 400;
     letter-spacing: 0.04em;
@@ -339,10 +631,13 @@ body::after {
     transition: all 0.15s;
 }
 
+/* Primary fill is the --magenta-dark token under the --text token, which
+   measures 5.7:1; the brighter --magenta with white ink measured 4.4:1 and
+   missed the 4.5:1 floor. */
 .btn-magenta {
-    background: var(--magenta);
+    background: var(--magenta-dark);
     border-color: var(--magenta);
-    color: #fff;
+    color: var(--text);
 }
 .btn-magenta:hover {
     background: var(--pink);
@@ -374,21 +669,21 @@ body::after {
 
 .btn-sm {
     padding: 6px 14px;
-    font-size: 11px;
+    font-size: 12px;
 }
 
 /* Completed-action state: the step's primary button turns solid black once
  * its work has succeeded, signalling "done" while Next lights up pink. */
 .btn-done {
-    background: #000;
-    border-color: #000;
-    color: #fff;
+    background: var(--bg-deep);
+    border-color: var(--bg-deep);
+    color: var(--text);
     cursor: default;
 }
 .btn-done:hover {
-    background: #000;
-    border-color: #000;
-    color: #fff;
+    background: var(--bg-deep);
+    border-color: var(--bg-deep);
+    color: var(--text);
 }
 
 .btn-group {
@@ -405,9 +700,9 @@ body::after {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 12px;
-    font-family: 'Space Mono', 'Consolas', monospace;
-    font-size: 12px;
-    color: #b5adb0;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text-dim);
     max-height: 420px;
     overflow-y: auto;
     white-space: pre-wrap;
@@ -423,7 +718,7 @@ body::after {
     display: inline-block;
     width: 8px;
     height: 8px;
-    border-radius: 1px;
+    border-radius: var(--radius);
     background: var(--border);
     margin-right: 6px;
     vertical-align: middle;
@@ -443,7 +738,7 @@ body::after {
     border-collapse: collapse;
     font-size: 13px;
     margin-top: 8px;
-    font-family: 'Space Mono', monospace;
+    font-family: var(--font-mono);
 }
 
 .remap-table th {
@@ -451,39 +746,50 @@ body::after {
     padding: 8px;
     border-bottom: 1px solid var(--border);
     color: var(--text-dim);
-    font-family: 'Inter', sans-serif;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
+    font-family: var(--font-body);
+    font-size: 13px;
+    letter-spacing: 0;
     font-weight: 500;
 }
 
 .remap-table td {
-    padding: 6px 8px;
+    padding: 8px;
     border-bottom: 1px solid var(--border-dim);
 }
+
+/* A list longer than three rows stripes and washes on hover, so the eye can
+   track one row across its columns (spec section 3, version 2). */
+.remap-table tbody tr:nth-child(even) { background: rgba(25, 25, 38, 0.4); }
+.remap-table tbody tr:hover { background: var(--surface-light); }
 
 /* ── Step nav footer zones (3-zone bar rendered by orchestrator.js) ── */
 /* The footer is a flexbox (see .step-nav-footer in index.html). These three
  * spans split it into Prev (left), center actions (Save and Close), and Next
- * (right). The center group centers itself between the two edge zones. */
+ * (right). The center group centers itself between the two edge zones. Each
+ * zone wraps: at 946 px the three of them together are wider than the pane,
+ * and a zone that cannot wrap pushes the whole page sideways. */
 .nav-zone-left {
     display: flex;
     align-items: center;
-    flex: 1;
+    flex-wrap: wrap;
+    gap: 8px;
+    flex: 1 1 auto;
     justify-content: flex-start;
 }
 .nav-zone-center {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
-    flex: 0 0 auto;
+    flex: 0 1 auto;
     justify-content: center;
 }
 .nav-zone-right {
     display: flex;
     align-items: center;
-    flex: 1;
+    flex-wrap: wrap;
+    gap: 8px;
+    flex: 1 1 auto;
     justify-content: flex-end;
 }
 
@@ -499,10 +805,9 @@ body::after {
     padding: 2px 8px;
     border: 1px solid transparent;
     border-radius: var(--radius);
-    font-family: 'Space Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.02em;
 }
 
 .badge-success { background: rgba(0,255,179,0.08);  color: var(--success); border-color: rgba(0,255,179,0.3); }
@@ -521,7 +826,7 @@ body::after {
 .setup-container .logo { text-align: center; margin-bottom: 32px; }
 
 .setup-container .logo h1 {
-    font-family: 'Silkscreen', 'Space Mono', monospace;
+    font-family: 'Silkscreen', var(--font-mono);
     font-size: 28px;
     color: var(--pink);
     margin-bottom: 6px;
@@ -531,8 +836,8 @@ body::after {
 
 .setup-container .logo p {
     color: var(--text-dim);
-    font-size: 13px;
-    font-family: 'Space Mono', monospace;
+    font-size: 14px;
+    font-family: var(--font-mono);
 }
 
 .divider {
@@ -541,10 +846,9 @@ body::after {
     gap: 12px;
     margin: 24px 0;
     color: var(--text-dim);
-    font-size: 12px;
-    font-family: 'Space Mono', monospace;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
+    font-family: var(--font-display);
+    font-size: 13px;
+    font-weight: 600;
 }
 
 .divider::before,
@@ -555,53 +859,50 @@ body::after {
     background: var(--border);
 }
 
-/* ── Service Link ─────────────────────────────────────────── */
+/* ── Page footer ──────────────────────────────────────────── */
+/* Every VICARIUS window names its module and its author. */
 
-.service-link {
-    display: inline-flex;
-    align-items: center;
+.page-foot {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
     gap: 8px;
-    padding: 10px 16px;
-    background: var(--input-bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--pink);
-    text-decoration: none;
-    font-family: 'Space Mono', monospace;
-    font-size: 13px;
-    margin-top: 8px;
-    transition: border-color 0.15s, color 0.15s;
-}
-
-.service-link:hover {
-    border-color: var(--pink);
-    color: var(--text);
-}
-
-/* ── Step Descriptions ─────────────────────────────────────── */
-
-.step-description {
-    background: rgba(255,179,217,0.04);
-    border-left: 2px solid var(--pink);
-    padding: 12px 16px;
-    border-radius: 0 var(--radius) var(--radius) 0;
-    margin-bottom: 20px;
-    font-size: 13px;
-    line-height: 1.65;
-    color: var(--text);
-}
-
-.step-description p { margin-bottom: 6px; }
-.step-description p:last-child { margin-bottom: 0; }
-
-.step-description code {
-    background: var(--input-bg);
-    padding: 1px 5px;
-    border-radius: 1px;
-    font-family: 'Space Mono', monospace;
+    padding: 10px 24px 18px;
+    font-family: var(--font-body);
     font-size: 12px;
-    color: var(--pink);
+    color: var(--text-dim);
+    letter-spacing: 0.02em;
 }
+
+/* ── Collapsed reference lists inside a disclosure ─────────── */
+
+/* A disclosure holds the detail a panel will not put on screen: a recipe's own
+   settings, what DDP is, the advanced hyperparameters. Its summary is a
+   control, so it reads at the body size and keeps a 28 px hit target. */
+details.advanced > summary {
+    min-height: 28px;
+    padding: 4px 0;
+    font-family: var(--font-body);
+    font-size: 14px;
+    color: var(--pink);
+    cursor: pointer;
+}
+
+details.advanced > summary:hover { color: var(--text); }
+
+/* The Train panel's recipe disclosure sits under the line naming the loaded
+   preset, with a hairline between the two so the answer reads first. */
+.preset-why {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-dim);
+}
+
+details.advanced ul { margin: 4px 0 4px 18px; }
+details.advanced li { margin-bottom: 4px; font-size: 13px; color: var(--text-dim); }
+details.advanced li strong { color: var(--text); font-weight: 600; }
 
 /* ── Progress Bar ─────────────────────────────────────────── */
 
@@ -612,7 +913,7 @@ body::after {
     height: 6px;
     background: var(--input-bg);
     border: 1px solid var(--border-dim);
-    border-radius: 1px;
+    border-radius: var(--radius);
     overflow: hidden;
 }
 
@@ -634,8 +935,8 @@ body::after {
 }
 
 .progress-text {
-    font-family: 'Space Mono', monospace;
-    font-size: 11px;
+    font-family: var(--font-mono);
+    font-size: 12px;
     color: var(--text-dim);
     margin-top: 4px;
     display: flex;
@@ -652,9 +953,9 @@ body::after {
 }
 
 .elapsed-timer {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-dim);
-    font-family: 'Space Mono', monospace;
+    font-family: var(--font-mono);
     margin-left: auto;
 }
 
@@ -662,10 +963,24 @@ body::after {
 
 ::-webkit-scrollbar       { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: var(--bg-deep); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 1px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius); }
 ::-webkit-scrollbar-thumb:hover { background: var(--magenta); }
 
 /* ── Responsive ───────────────────────────────────────────── */
+
+/* At the desktop window's own width the label column narrows with the page,
+   and the sidebar keeps its tiles. */
+@media (max-width: 1000px) {
+    /* 192 px is what the longest label on these panels, "Recommended
+       settings", plus its "?" glyph measures at this width; below that the
+       glyph wraps to a line of its own, away from the label it explains. */
+    :root { --label-w: 192px; }
+    .main-panel { padding: 24px 16px; }
+    /* The rail narrows to the width the design names, which gives the pane
+       back the 48 px the step footer needs at the desktop window's width. */
+    .sidebar { width: 212px; min-width: 212px; padding: 20px 12px; }
+    .step-nav li { padding: 10px 8px; }
+}
 
 @media (max-width: 768px) {
     .sidebar { width: 60px; min-width: 60px; padding: 12px 8px; }
@@ -687,7 +1002,7 @@ body::after {
 .confirm-modal {
     background: var(--surface);
     border: 1px solid var(--magenta);
-    border-radius: 6px;
+    border-radius: var(--radius-lg);
     padding: 20px 24px;
     max-width: 460px;
     width: calc(100% - 48px);
@@ -701,8 +1016,8 @@ body::after {
 }
 .confirm-msg {
     color: var(--text-dim);
-    font-size: 13px;
-    line-height: 1.45;
+    font-size: 14px;
+    line-height: 1.5;
     margin-bottom: 16px;
 }
 .confirm-actions {
@@ -710,3 +1025,93 @@ body::after {
     justify-content: flex-end;
     gap: 10px;
 }
+
+
+/* ── Version 2 floor over the card partials ────────────────────────── */
+/* The evaluation report card and the inference gallery bring their own
+   stylesheets (static/orchestrator_report.css, static/orchestrator_gallery.css)
+   and both still carry version 1 sizes: ten sizes between 9 px and 11 px,
+   under the version 2 legibility floor of 12 px for anything visible and
+   13 px for anything explanatory. Those files load after this one, and their
+   rules are two classes deep, so the page raises the floor from its own
+   container class. Delete this block when those two files are bumped; it
+   changes nothing but type size. */
+
+.main-panel .vega-report .tip span,
+.main-panel .vega-gallery .vg-tip span { font-size: 12px; }
+
+.main-panel .vega-report-when,
+.main-panel .vega-report-nopdf,
+.main-panel .vega-report-chip,
+.main-panel .vega-report-sort[data-dir="asc"]::after,
+.main-panel .vega-report-sort[data-dir="desc"]::after,
+.main-panel .vega-gallery .vg-label,
+.main-panel .vega-gallery .vg-view,
+.main-panel .vega-gallery .vg-name,
+.main-panel .vega-gallery .vg-chip,
+.main-panel .vega-gallery .vg-code,
+.main-panel .vega-gallery .vg-conf,
+.main-panel .vega-gallery .vg-verdict { font-size: 12px; }
+
+/* Explanatory lines, which the floor sets one step higher: the caption under
+   a figure, the line that says a tile has no detections, and a tile's note. */
+.main-panel .vega-report figcaption,
+.main-panel .vega-gallery .vg-none,
+.main-panel .vega-gallery .vg-tile-note { font-size: 13px; }
+
+/* An image name is one long token with nowhere to break, so it wraps anywhere
+   rather than dropping a two-letter orphan onto a line of its own. */
+.main-panel .vega-gallery .vg-name {
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+}
+
+/* ── Version 2 floor over the shared block ─────────────────────────── */
+/* static/vicarius_workflow.css still carries the version 1 sizes, and it
+   loads first, so the page restates the ones that fall under the version 2
+   legibility floor: no user-visible text below 12 px, no explanatory text
+   below 13 px. Delete this block when the shared file is bumped. */
+
+.bubble { font: 400 13px/1.5 var(--font-body); max-width: 42ch; }
+.tip span { width: 18px; height: 18px; font: 700 12px/16px var(--font-mono); }
+.count, .row-meta, .foot, .stage-meta, .id.code, .btn-mini { font-size: 12px; }
+.row-meta .name { font-size: 13px; }
+.result { font-size: 13px; }
+
+/* ── Action row (spec section 5.4) ─────────────────────────────────── */
+/* One primary button per panel, alone under a hairline, with the folder and
+   stop buttons beside it as secondary actions. Only the panel's own action
+   row carries the hairline; a button group inside a settings card does not. */
+.panel-actions {
+    align-items: center;
+    margin-top: 4px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-dim);
+}
+
+/* ── Controls that share one definition row ────────────────────────── */
+/* A row of related settings is free to use the whole control column, and
+   each control inside it sizes to its own content rather than to the column,
+   so a select never sets a minimum width the page cannot hold at 946 px. */
+.form-group > .field-row { max-width: none; }
+.field-row select { width: auto; min-width: 150px; max-width: 100%; }
+.field-row input[type="text"] { width: 220px; }
+.field-row input[type="number"] { width: 96px; }
+
+/* ── Row striping on the lists longer than three rows ──────────────── */
+
+#s7-rounds-table tbody tr:nth-child(even) { background: rgba(25, 25, 38, 0.4); }
+#s7-rounds-table tbody tr:hover { background: var(--surface-light); }
+#s7-rounds-table th, #s7-rounds-table td { font-size: 13px; }
+
+/* The family chip in a Rounds cell is written by static/orchestrator.js with
+   an inline font-size of 10 px (its _roundsFamilyChip, about line 4716), which
+   is under the legibility floor and which only !important can reach. Delete
+   this rule when that inline size goes. */
+#s7-rounds-table .badge { font-size: 12px !important; }
+
+.label-picker-row:nth-of-type(even) { background: rgba(25, 25, 38, 0.4); }
+
+/* The class picker's own rows, built by orchestrator.js as plain labels. */
+#s6-classes-list > label:nth-of-type(even) { background: rgba(25, 25, 38, 0.4); }
+#s6-classes-list > label:hover { background: var(--surface-light); }

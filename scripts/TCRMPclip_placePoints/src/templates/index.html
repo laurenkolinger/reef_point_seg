@@ -1,3 +1,26 @@
+{#- Expert-review lock, 2026-09-06 (LO). Flagging a point for expert review is
+    suspended platform-wide, and a REVIEW point is what the annotator later turns
+    into a flagged mask, so this page refuses to arm the label. The REVIEW button
+    stays on the bar, disabled and explained, rather than being removed.
+
+    `review_tagging_enabled` is the ONE value this page reads. It decides the
+    button's disabled attribute, its click handler, its tooltip, the keyboard
+    help and the script constant below, so there is nothing else to edit when
+    the suspension is reversed. app.py does not pass it yet, and the default
+    here keeps the page rendering, and keeps it locked, until it does; the
+    matching switch for the exported prompt file is REVIEW_TAGGING_ENABLED in
+    src/export.py. -#}
+{%- set review_tagging_enabled = review_tagging_enabled | default(false) -%}
+{%- set review_locked_button_tooltip =
+      'VICARIUS has temporarily suspended expert-review flagging: the REVIEW'
+      ~ ' label cannot be armed, and the R key no longer arms it. Points placed'
+      ~ ' before 2026-09-06 keep their REVIEW code, and the annotator no longer'
+      ~ ' turns a REVIEW point into a flagged mask.' -%}
+{%- set review_button_tooltip =
+      'Tap R or click here to arm the REVIEW label, then click the image to'
+      ~ ' place a REVIEW point; tap again to clear. VICARIUS ships a REVIEW'
+      ~ ' point to an outside taxonomic expert for identification and never'
+      ~ ' uses it as a training label.' -%}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -441,6 +464,17 @@ body::after {
   box-shadow: 0 0 8px rgba(0, 200, 220, 0.5);
 }
 .quickadd-bar .qa-btn.review-btn .qa-key { color: #06222a; background: rgba(255,255,255,0.55); }
+/* A suspended quick-add label (the 2026-09-06 expert-review lock). The button
+   keeps its place in the bar so the label is visibly withheld, not deleted.
+   Same greyed-out idiom as .setup-card .btn-action:disabled above. */
+.quickadd-bar .qa-btn:disabled,
+.quickadd-bar .qa-btn:disabled:hover,
+.quickadd-bar .qa-btn.review-btn:disabled,
+.quickadd-bar .qa-btn.review-btn:disabled:hover {
+  background: transparent; border-color: var(--border);
+  color: var(--text-dim); opacity: 0.5; cursor: not-allowed; box-shadow: none;
+}
+.quickadd-bar .qa-btn:disabled .qa-key { color: var(--text-dim); background: rgba(0,0,0,0.35); }
 .point-list .pspecies.review { color: #00e0f0; font-weight: 700; }
 
 /* Hover loupe (magnifier) */
@@ -615,8 +649,14 @@ body::after {
       <span class="qa-code">{{ lbl.code }}</span>
     </button>
     {% endfor %}
-    <button class="qa-btn review-btn" id="qa-review" data-code="REVIEW" onclick="toggleQuickLabel(REVIEW_IDX)"
-            title="REVIEW (R): a normal quick-add label — tap R (or click) to arm it, then click the image to place a REVIEW point; tap again to clear. With a point selected, press R to relabel it REVIEW. REVIEW points are segmented and shipped to an outside taxonomic expert for ID; they are NEVER used as training labels.">
+    <button class="qa-btn review-btn" id="qa-review" data-code="REVIEW"
+            {%- if review_tagging_enabled %}
+            onclick="toggleQuickLabel(REVIEW_IDX)"
+            title="{{ review_button_tooltip }}"
+            {%- else %}
+            disabled aria-disabled="true"
+            title="{{ review_locked_button_tooltip }}"
+            {%- endif %}>
       <span class="qa-key">R</span>
       <span class="qa-code">REVIEW</span>
     </button>
@@ -673,7 +713,7 @@ body::after {
       <div class="kh-group primary">
         <h3>Drop points — the main mode</h3>
         <div class="kh-row"><span class="kh-keys"><kbd>1</kbd>…<kbd>9</kbd></span><span class="kh-desc">arm that species — click to drop a point (tap again to disarm)</span></div>
-        <div class="kh-row"><span class="kh-keys"><kbd>R</kbd></span><span class="kh-desc">arm REVIEW — a normal quick-add label; click to drop a REVIEW point (tap R again to disarm)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>R</kbd></span><span class="kh-desc">{% if review_tagging_enabled %}arm REVIEW, one more quick-add label; click to drop a REVIEW point (tap R again to disarm){% else %}suspended since 2026-09-06: VICARIUS accepts no new REVIEW points, so R no longer arms the REVIEW label{% endif %}</span></div>
         <div class="kh-row"><span class="kh-keys">click</span><span class="kh-desc">place the armed point</span></div>
         <div class="kh-row"><span class="kh-keys"><kbd>A</kbd> + click</span><span class="kh-desc">place a point, then pick species/category in the popup</span></div>
         <div class="kh-row"><span class="kh-keys">right-click</span><span class="kh-desc">non-target prompt point (SAM3 segments it later)</span></div>
@@ -703,7 +743,7 @@ body::after {
         <div class="kh-row"><span class="kh-keys">tap a point</span><span class="kh-desc">select it (turns pink, jumps to it in Labels)</span></div>
         <div class="kh-row"><span class="kh-keys">tap it again</span><span class="kh-desc">delete it</span></div>
         <div class="kh-row"><span class="kh-keys">drag a point</span><span class="kh-desc">move it</span></div>
-        <div class="kh-row"><span class="kh-keys"><kbd>1</kbd>…<kbd>9</kbd> / <kbd>R</kbd></span><span class="kh-desc">with a point selected, relabel it to that label (R = REVIEW)</span></div>
+        <div class="kh-row"><span class="kh-keys"><kbd>1</kbd>…<kbd>9</kbd> / <kbd>R</kbd></span><span class="kh-desc">with a point selected, relabel it to that label ({% if review_tagging_enabled %}R applies REVIEW{% else %}R is suspended and no longer applies REVIEW{% endif %})</span></div>
         <div class="kh-row"><span class="kh-keys"><kbd>Ctrl</kbd>+click</span><span class="kh-desc">move selected point here</span></div>
         <div class="kh-row"><span class="kh-keys">arrows</span><span class="kh-desc">nudge selected (<kbd>Shift</kbd> = 5px)</span></div>
         <div class="kh-row"><span class="kh-keys"><kbd>Del</kbd></span><span class="kh-desc">delete selected point (or the whole multi-selection)</span></div>
@@ -1317,6 +1357,8 @@ function highlightQuickBtn(idx) {
 }
 
 function setQuickLabel(idx) {
+  // Arming REVIEW is suspended (see reviewLabelLocked). Disarming stays open.
+  if (reviewLabelLocked(idx)) { setStatus(REVIEW_LOCKED_MSG); return; }
   if (idx === null || idx === undefined) {
     numKeyDown = null;
     highlightQuickBtn(-1);
@@ -1389,9 +1431,12 @@ function addPointAt(imgX, imgY) {
 }
 
 // Place a point and immediately assign the quick-add label at QUICK_LABELS[idx].
-// REVIEW (idx === REVIEW_IDX) is just one of these labels — the only difference
-// is the review:true flag that end-of-batch routing keys on.
+// REVIEW (idx === REVIEW_IDX) was one of these labels, carrying the review:true
+// flag that end-of-batch routing keys on. It is refused since 2026-09-06.
 function addPointWithLabel(imgX, imgY, idx) {
+  // Placing a new REVIEW point is suspended (see reviewLabelLocked). The label
+  // cannot be armed, so this only fires if the guard above were bypassed.
+  if (reviewLabelLocked(idx)) { setStatus(REVIEW_LOCKED_MSG); return; }
   if (!currentData) return;
   const lbl = QUICK_LABELS[idx];
   if (!lbl) return;
@@ -1421,9 +1466,14 @@ function addPointWithLabel(imgX, imgY, idx) {
 
 // Relabel an already-selected point to the quick-add label at QUICK_LABELS[idx]
 // (numbers AND REVIEW behave identically). The point keeps its letter ID and
-// position; only species_code/name/category change. REVIEW sets review:true;
-// any other label clears it so a point is "just a normal point" once relabeled.
+// position; only species_code/name/category change. Relabelling TO REVIEW is
+// refused since 2026-09-06; every other label still clears an existing flag, so
+// a point placed before the lock can still be turned into a normal point.
 function relabelSelectedPoint(idx) {
+  // Relabelling a point to REVIEW is suspended (see reviewLabelLocked). Every
+  // other label still applies, and relabelling an existing REVIEW point to a
+  // species still clears its flag.
+  if (reviewLabelLocked(idx)) { setStatus(REVIEW_LOCKED_MSG); return false; }
   if (!currentData || selectedPoint < 0) return false;
   const lbl = QUICK_LABELS[idx];
   if (!lbl) return false;
@@ -1487,14 +1537,15 @@ function addNonTargetPoint(imgX, imgY) {
   setStatus(`${label} -> non-target prompt (SAM3 will segment in step 5)`);
 }
 
-// ── REVIEW: a NORMAL quick-add label (not a mode) ────────────────────
-// REVIEW is just another quick-add label, identical to the number labels: it
-// can be the sticky active label and placed by click, and selecting a point +
-// pressing R relabels it to REVIEW. A REVIEW point carries species_code
-// 'REVIEW' + review:true so end-of-batch routing ships it to an outside
-// taxonomic expert; it is NEVER used as a training label. "Not special until
-// end-of-batch routing." The review:true flag is preserved on REVIEW points so
-// export (which keys on species_code==='REVIEW'/review:true) keeps working.
+// ── REVIEW: a quick-add label, suspended since 2026-09-06 ────────────
+// REVIEW was one more quick-add label, armed by the R key or its button and
+// carrying species_code 'REVIEW' plus review:true so end-of-batch routing
+// shipped the point to an outside taxonomic expert; it was NEVER used as a
+// training label. Arming it is now refused (see reviewLabelLocked), so no new
+// REVIEW point can be created here. Reading one is untouched: this predicate
+// still recognises every point placed before the lock, so those points keep
+// their cyan crosshair, their REVIEW row in the Labels pane, and their place in
+// the frame when TARGET_SPECIES_ONLY hides everything else.
 function isReviewPoint(pt) {
   return pt && (pt.review === true || pt.species_code === 'REVIEW');
 }
@@ -1523,6 +1574,30 @@ const TARGET_LABELS = [{% for lbl in target_labels %}{code:'{{ lbl.code }}', nam
 const REVIEW_LABEL = {code: 'REVIEW', name: 'Flagged for expert review', category: 'Review'};
 const QUICK_LABELS = TARGET_LABELS.concat([REVIEW_LABEL]);
 const REVIEW_IDX = TARGET_LABELS.length;
+
+// ── Expert-review flag lock, 2026-09-06 (LO) ────────────────────────
+// Lauren Olinger suspended expert-review flagging across every annotator on
+// 2026-09-06: no new review tag may reach a mask. A REVIEW point is what the
+// annotator later turns into a flagged mask, so this page refuses to ARM the
+// label at all. REVIEW_LABEL and REVIEW_IDX stay defined above so a point
+// placed before the lock still reads, draws and lists as REVIEW. This is the
+// switch the server hands this page (`review_tagging_enabled`, set once at the
+// top of this template): set it back to true and the button, its tooltip, the
+// keyboard help and this constant all arm again, with nothing else to change.
+// The matching switch for the exported prompt file is REVIEW_TAGGING_ENABLED in
+// src/export.py.
+const REVIEW_TAGGING_ENABLED = {{ 'true' if review_tagging_enabled else 'false' }};
+const REVIEW_LOCKED_MSG = 'Flagging for expert review is temporarily unavailable. VICARIUS is accepting no new review tags.';
+
+/**
+ * Report whether one quick-add index names the suspended REVIEW label.
+ *
+ * @param {number|null} idx Quick-add label index, or null when disarming.
+ * @returns {boolean} True when the lock is on and this index is REVIEW.
+ */
+function reviewLabelLocked(idx) {
+  return !REVIEW_TAGGING_ENABLED && idx === REVIEW_IDX;
+}
 
 function assignSpecies(code) {
   if (pendingAddIdx < 0 || !currentData) { hideCatPopup(); return; }
@@ -2221,8 +2296,9 @@ document.addEventListener('keydown', e => {
     // add drop mode) the tap switches/clears that sticky label for the NEXT click
     // — it does NOT relabel the just-dropped (auto-selected) point. Only when no
     // sticky label is armed does a tap with a point SELECTED relabel it; with
-    // nothing armed or selected it arms the sticky label. (numbers AND R behave
-    // the same — REVIEW is not special.) See applyQuickKey / PP.quickKeyAction.
+    // nothing armed or selected it arms the sticky label. Numbers and R take the
+    // same route; R alone is refused at the end of it by the 2026-09-06
+    // expert-review lock. See applyQuickKey / PP.quickKeyAction.
     // Auto-repeat fires keydown many times per second — ignore those so the
     // label doesn't flicker on/off.
     const num = parseInt(e.key);
@@ -2289,10 +2365,10 @@ document.addEventListener('keydown', e => {
       if (!e.ctrlKey && !e.metaKey) { toggleAuxMode(); e.preventDefault(); }
       break;
     case 'r': case 'R':
-      // R is the REVIEW quick-add label's key — identical to a number key, so it
-      // routes through the same applyQuickKey rule: while the REVIEW sticky label
-      // is armed, R switches/clears it (never relabels the just-dropped point);
-      // with nothing armed and a point selected, R relabels it REVIEW. Not a mode.
+      // R is the REVIEW quick-add label's key and still routes through the same
+      // applyQuickKey rule as a number key. Since 2026-09-06 the lock refuses it
+      // at the end of that route (setQuickLabel and relabelSelectedPoint), so R
+      // arms nothing, relabels nothing, and leaves any armed species alone.
       if (!e.ctrlKey && !e.metaKey) {
         if (!e.repeat) applyQuickKey(REVIEW_IDX);
         e.preventDefault();
