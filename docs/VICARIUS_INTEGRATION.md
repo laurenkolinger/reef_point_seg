@@ -5,8 +5,8 @@ VICARIUS platform (`/mnt/rip/vicarius_drive/vicarius`). It covers the event
 stream, the UI aesthetic, and the module contract. The module is already
 migrated and lives at `vicarius/modules/reef_point_seg/`.
 
-Read `/mnt/rip/vicarius_drive/vicarius/_DOCS/TEN_COMMANDMENTS.md` alongside
-this document — the commandments are the governing discipline.
+Read `/mnt/rip/vicarius_drive/vicarius/_DOCS/reference/TEN_COMMANDMENTS.md` alongside
+this document, the commandments are the governing discipline.
 
 ---
 
@@ -79,10 +79,10 @@ sqlite3 ... \
 
 ---
 
-## 2. UI aesthetic — mapping to VICARIUS style
+## 2. UI aesthetic, mapping to VICARIUS style
 
 The orchestrator UI was re-themed to match
-`/mnt/rip/vicarius_drive/vicarius_ui/static/theme.css`. The contract:
+`/mnt/rip/vicarius_drive/vicarius_ui_os/static/theme.css`. The contract:
 
 ### 2.1 Colors
 
@@ -98,7 +98,7 @@ The orchestrator UI was re-themed to match
 
 ### 2.2 Typography
 
-- **Body**: Inter 15px, line-height 1.6, letter-spacing 0.01em — never fall below 14px.
+- **Body**: Inter 15px, line-height 1.6, letter-spacing 0.01em, never fall below 14px.
 - **Code / logs**: Space Mono, same size as body.
 - **Headings**: Syne / Space Grotesk, 600-700 weight, no tracking games.
 - **Wordmark accent only**: Silkscreen (the pixel font) for decorative "VICARIUS"-style stamps. Never use it for content.
@@ -109,25 +109,25 @@ The orchestrator UI was re-themed to match
 - `cursor: crosshair` on the body.
 - 20px pixel grid overlay, opacity 0.04.
 - Horizontal scanline overlay, opacity 0.22.
-- No emoji — replace with plain text (`[done]`, `[running]`, `[ERR]`).
+- No emoji, replace with plain text (`[done]`, `[running]`, `[ERR]`).
 
 ### 2.4 File-level changes (relative to upstream orchestrator)
 
-- `scripts/pipeline_orchestrator/static/style.css` — full palette + type rewrite.
-- `scripts/pipeline_orchestrator/static/orchestrator.js` — any emoji literals replaced with plain text.
-- `scripts/pipeline_orchestrator/templates/index.html` — Google Fonts imports + `.grid-overlay` + `.scanlines` divs.
+- `scripts/pipeline_orchestrator/static/style.css`, full palette + type rewrite.
+- `scripts/pipeline_orchestrator/static/orchestrator.js`, any emoji literals replaced with plain text.
+- `scripts/pipeline_orchestrator/templates/index.html`, Google Fonts imports + `.grid-overlay` + `.scanlines` divs.
 
 CSS class names and HTML structure are identical to upstream so no
 JavaScript logic changes.
 
 ---
 
-## 3. Module contract — `config/module.yaml`
+## 3. Module contract, `module.yaml`
 
-See `config/module.yaml` in this repo for the full spec. Highlights:
+See `module.yaml` at this repo's root for the full spec. Highlights:
 
-- `type: pipeline` — multi-step; launches its own orchestrator UI.
-- `ui.style: launcher` — the VICARIUS UI renders a Launch button plus a list
+- `type: pipeline`, multi-step; launches its own orchestrator UI.
+- `ui.style: launcher`, the VICARIUS UI renders a Launch button plus a list
   of in-process runs (`inprocess/run_*`), not the generic input/output form.
 - Three external inputs declared: `tcrmp_cvr`, `tcrmp_clip`, `cpc_all`.
 - Thirteen outputs declared, each bound to a data-dictionary descriptor under
@@ -136,7 +136,7 @@ See `config/module.yaml` in this repo for the full spec. Highlights:
   model, eval report, eval metrics, inference manifest) plus the
   expert-review bundle and expert-ID library. `all_points` emits EML.
 - Five user-facing parameters (target species, target instances, epochs,
-  imgsz, base model) — the full hyperparameter surface still exists behind
+  imgsz, base model), the full hyperparameter surface still exists behind
   the UI but these five are the common customization points.
 
 ---
@@ -145,11 +145,11 @@ See `config/module.yaml` in this repo for the full spec. Highlights:
 
 The module is migrated. Its layout:
 
-- `github_repo/` — the code, config, and docs (git-tracked).
-- `inprocess/` — live runs (`run_*`) plus the cross-project
+- `github_repo/`, the code, config, and docs (git-tracked).
+- `inprocess/`, live runs (`run_*`) plus the cross-project
   `_expert_id_library/`. This is where projects live; it is the
   `projects_dir` in `config/pipeline.yaml`.
-- `misc/` — module-root scratch per platform convention.
+- `misc/`, module-root scratch per platform convention.
 
 `config/pipeline.yaml` points `projects_dir` at
 `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/inprocess` and the
@@ -191,24 +191,24 @@ Model cards go alongside with the same basename + `.md`.
 
 ## 6. Ten Commandments compliance checklist
 
-- [x] **I. Raw data sacred** — `supporting_data/TCRMP_CVR/` and the
+- [x] **I. Raw data sacred**, `supporting_data/TCRMP_CVR/` and the
       Dropbox clip dir are read-only. No step writes into them.
-- [x] **II. Naming conventions** — TCRMP pattern honored through every
+- [x] **II. Naming conventions**, TCRMP pattern honored through every
       stage; all intermediate outputs derive from source basenames.
-- [x] **III. Every file has metadata** — each step writes a
+- [x] **III. Every file has metadata**, each step writes a
       `config_log.json`; `project.json` captures the full run state.
-- [x] **IV. Modules atomic** — each sub-tool does one thing and has a
+- [x] **IV. Modules atomic**, each sub-tool does one thing and has a
       standalone `run.sh` / `setup_env.sh`.
-- [x] **V. Document as you build** — `docs/NOTES_pipeline_improvements.md`
+- [x] **V. Document as you build**, `docs/NOTES_pipeline_improvements.md`
       is the rolling changelog; this file updates alongside code changes.
-- [x] **VI. Prompt for purpose** — project creation UI asks for name +
+- [x] **VI. Prompt for purpose**, project creation UI asks for name +
       purpose; `process_start` events carry that purpose string.
-- [x] **VII. Test before production** — `inprocess/run_demo_*` and
+- [x] **VII. Test before production**, `inprocess/run_demo_*` and
       `inprocess/run_test_*` are retained for smoke tests.
-- [x] **VIII. Log everything** — VICARIUS event stream captures start,
+- [x] **VIII. Log everything**, VICARIUS event stream captures start,
       end, user notes; each step also writes a per-step log file.
-- [x] **IX. Version code, track data** — `.gitignore` excludes
+- [x] **IX. Version code, track data**, `.gitignore` excludes
       `supporting_data/` + `env/`; live runs live outside `github_repo/`
       under `inprocess/`; NAS handles data backup.
-- [x] **X. Keep it simple, then grow** — plain Flask, plain JS, single
+- [x] **X. Keep it simple, then grow**, plain Flask, plain JS, single
       YAML config, one env. No React, no build step, no SPA framework.

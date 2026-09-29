@@ -12,17 +12,17 @@
 
 ---
 
-## 0. Preflight — things to confirm before writing a single byte
+## 0. Preflight, things to confirm before writing a single byte
 
 Run these checks first. If any fails, stop and ask the operator.
 
 ```bash
 # 0.1 VICARIUS platform exists + is writable
 ls -ld /mnt/rip/vicarius_drive/vicarius
-test -w /mnt/rip/vicarius_drive/vicarius || echo "NOT WRITABLE — stop"
+test -w /mnt/rip/vicarius_drive/vicarius || echo "NOT WRITABLE, stop"
 
 # 0.2 Ten Commandments present
-test -f /mnt/rip/vicarius_drive/vicarius/_DOCS/TEN_COMMANDMENTS.md
+test -f /mnt/rip/vicarius_drive/vicarius/_DOCS/reference/TEN_COMMANDMENTS.md
 
 # 0.3 Module template present (we'll copy init_run.py / shelve_run.py from it)
 test -d /mnt/rip/vicarius_drive/vicarius/modules/_template
@@ -41,11 +41,11 @@ pgrep -fc 'seg_AI_img_full_april2026.*run_pipeline' || echo "  clean"
 df -BG /mnt/rip/vicarius_drive | tail -1
 ```
 
-Read `/mnt/rip/vicarius_drive/vicarius/README.md` and `/mnt/rip/vicarius_drive/vicarius/_DOCS/TEN_COMMANDMENTS.md` end to end before proceeding. Every action below is constrained by those documents.
+Read `/mnt/rip/vicarius_drive/vicarius/README.md` and `/mnt/rip/vicarius_drive/vicarius/_DOCS/reference/TEN_COMMANDMENTS.md` end to end before proceeding. Every action below is constrained by those documents.
 
 ---
 
-## 1. What goes where (the contract — with FULL absolute paths)
+## 1. What goes where (the contract, with FULL absolute paths)
 
 The source is partitioned four ways already. The destination splits them across FIVE VICARIUS locations. The user has been explicit: **outputs do NOT go into `github_repo/`**; they live under VICARIUS data roots or inside the module's `inprocess/` tree.
 
@@ -77,23 +77,23 @@ MODULE misc:
 
 | Source (full path) | Destination (full path) | Why |
 |---|---|---|
-| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/scripts/` (excluding `env/`, `__pycache__/`) | `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/scripts/` | Code — git-tracked, version-controlled. Commandment IX. |
-| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/config/pipeline.yaml` | `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/config/pipeline.yaml` | Canonical config — git-tracked. |
+| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/scripts/` (excluding `env/`, `__pycache__/`) | `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/scripts/` | Code, git-tracked, version-controlled. Commandment IX. |
+| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/config/pipeline.yaml` | `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/config/pipeline.yaml` | Canonical config, git-tracked. |
 | `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/config/module.yaml` | `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/module.yaml` | **Note**: moves UP one level to the repo root (VICARIUS `module_registry.py` discovers `module.yaml` in `github_repo/`, not inside a `config/` subdir). |
-| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/config/presets/` | `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/config/presets/` | Step-6 training preset YAMLs — git-tracked. |
-| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/config/eval_presets/` | `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/config/eval_presets/` | Step-7 evaluation preset YAMLs — git-tracked. |
-| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/docs/*.md` | `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/docs/` | Documentation — git-tracked. |
-| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/README.md` | `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/README.md` | Meta README / GitHub landing page. |
+| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/config/presets/` | `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/config/presets/` | Step-6 training preset YAMLs, git-tracked. |
+| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/config/eval_presets/` | `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/config/eval_presets/` | Step-7 evaluation preset YAMLs, git-tracked. |
+| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/docs/*.md` | `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/docs/` | Documentation, git-tracked. |
+| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/README.md` | `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/README.md` | Meta README, the page GitHub shows on the repository front page. |
 | `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/bootstrap.sh` | `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/bootstrap.sh` | One-shot env build + project path rewrite. |
-| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/.gitignore` | REWRITTEN — do NOT copy verbatim. See §6.3. | inprocess/ and data-root excludes no longer live inside github_repo/. |
+| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/.gitignore` | REWRITTEN, do NOT copy verbatim. See §6.3. | inprocess/ and data-root excludes no longer live inside github_repo/. |
 | `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/all_points.csv` (82 MB) | `/mnt/rip/vicarius_drive/vicarius/processed/derived_tabular/tcrmp_cvr_all_points.csv` | Derived tabular product (Commandment II naming). |
-| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/master_codes.csv` (4 KB) | `/mnt/rip/vicarius_drive/vicarius/_METADATA/library/definitions/tcrmp_species_codes.csv` | Controlled vocabulary — first-class VICARIUS metadata. |
-| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/cpc_all/` (67 GB) | `/mnt/rip/vicarius_drive/vicarius/processed/cpc_index/` *(see §4.2 — may need operator confirmation)* | Pre-computed per-year point index, derived from CPCe files. |
-| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/TCRMP_CVR/` (572 MB, 839 Excel files) | `/mnt/rip/vicarius_drive/vicarius/raw/tcrmp_tabular/cvr/` | Raw CVR survey workbooks. **IMMUTABLE** per Commandment I — `chmod -R a-w` after landing. |
-| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/TCRMP_clip/` (462 MB, 2018+2024 offline test subset) | *DO NOT COPY* — path-reference only | `/home/bizon/UVI Dropbox/SMITH LAB TEAM FOLDER/TCRMP/TCRMP_clip` is authoritative. Module config already points there via `paths.dropbox_clip_dir`. |
+| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/master_codes.csv` (4 KB) | `/mnt/rip/vicarius_drive/vicarius/_METADATA/library/definitions/tcrmp_species_codes.csv` | Controlled vocabulary, first-class VICARIUS metadata. |
+| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/cpc_all/` (67 GB) | `/mnt/rip/vicarius_drive/vicarius/processed/cpc_index/` *(see §4.2, may need operator confirmation)* | Pre-computed per-year point index, derived from CPCe files. |
+| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/TCRMP_CVR/` (572 MB, 839 Excel files) | `/mnt/rip/vicarius_drive/vicarius/raw/tcrmp_tabular/cvr/` | Raw CVR survey workbooks. **IMMUTABLE** per Commandment I. Run `chmod -R a-w` after the copy arrives. |
+| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/TCRMP_clip/` (462 MB, 2018+2024 offline test subset) | *DO NOT COPY*, path-reference only | `/home/bizon/UVI Dropbox/SMITH LAB TEAM FOLDER/TCRMP/TCRMP_clip` is authoritative. Module config already points there via `paths.dropbox_clip_dir`. |
 | `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/model_weights/*.pt` | `/mnt/rip/vicarius_drive/vicarius/models/yolo_pretrained/` | Pretrained YOLO bases (n/m/l + yolov8n + yolo26n), versioned per Commandment IX. |
 | `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/projects/<id>/project.json` + small state files | `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/inprocess/run_<id>/project.json` + `analysis_params.yaml` | One VICARIUS "run" per project. |
-| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/projects/<id>/step*_*/` (step-dir outputs — step-6 runs/, step-7 reports, step-8 inference overlays) | `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/inprocess/run_<id>/outputs/step*_*/` | Outputs stay scoped to the run that produced them until promoted to `/processed/` or `/annotations/ai_predictions/` via `shelve_run.py`. |
+| `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/projects/<id>/step*_*/` (step-dir outputs, step-6 runs/, step-7 reports, step-8 inference overlays) | `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/inprocess/run_<id>/outputs/step*_*/` | Outputs stay scoped to the run that produced them until promoted to `/processed/` or `/annotations/ai_predictions/` via `shelve_run.py`. |
 | `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/env/` | **skipped** | Rebuilt via `bootstrap.sh` on target host. |
 | `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/scripts/**/env/` | **skipped** | Rebuilt. |
 | `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/scripts/**/__pycache__/`, `*.pyc` | **skipped** | Rebuilt. |
@@ -122,17 +122,17 @@ cp /mnt/rip/vicarius_drive/vicarius/modules/_template/github_repo/src/init_run.p
 cp /mnt/rip/vicarius_drive/vicarius/modules/_template/github_repo/src/shelve_run.py \
    /mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/scripts/shelve_run.py
 
-# The _template dir may or may not have this file — skip gracefully if absent.
+# The _template dir may or may not have this file, skip gracefully if absent.
 cp /mnt/rip/vicarius_drive/vicarius/modules/_template/inprocess/_analysis_params_template.yaml \
    /mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/inprocess/_analysis_params_template.yaml \
-   2>/dev/null || echo "  (no template file found — will generate one in §6)"
+   2>/dev/null || echo "  (no template file found, will generate one in §6)"
 ```
 
 ---
 
 ## 3. Copy scripts, configs, docs (code only, no data)
 
-### 3.1 scripts/ — all sub-tools + orchestrator + helpers (~14 MB)
+### 3.1 scripts/, all sub-tools + orchestrator + helpers (~14 MB)
 
 ```bash
 rsync -a \
@@ -184,7 +184,7 @@ cp /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/boots
 chmod +x /mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/bootstrap.sh
 ```
 
-### 3.5 .gitignore — DO NOT copy verbatim, write the VICARIUS variant
+### 3.5 .gitignore, DO NOT copy verbatim, write the VICARIUS variant
 
 See §6.3 for the content; the write target is
 `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo/.gitignore`.
@@ -208,13 +208,13 @@ du -sh /mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/github_repo
 ### 4.1 Controlled vocabularies and tabular products
 
 ```bash
-# Species code lookup — first-class vocabulary
+# Species code lookup, first-class vocabulary
 mkdir -p /mnt/rip/vicarius_drive/vicarius/_METADATA/library/definitions
 
 cp /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/master_codes.csv \
    /mnt/rip/vicarius_drive/vicarius/_METADATA/library/definitions/tcrmp_species_codes.csv
 
-# Unified point-count dataset — derived tabular product
+# Unified point-count dataset, derived tabular product
 mkdir -p /mnt/rip/vicarius_drive/vicarius/processed/derived_tabular
 
 cp /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/all_points.csv \
@@ -232,15 +232,15 @@ provenance: |
 YAML
 ```
 
-### 4.2 The 67 GB cpc_index — **operator confirmation required**
+### 4.2 The 67 GB cpc_index, **operator confirmation required**
 
-`cpc_all/` is a per-year, per-frame pre-computed index of CPCe `.cpc` annotation files. It's an intermediate derived product — neither raw nor a finished analytical output. Recommended placement: `processed/cpc_index/`. **Before copying, ask the operator**:
+`cpc_all/` is a per-year, per-frame pre-computed index of CPCe `.cpc` annotation files. It's an intermediate derived product, neither raw nor a finished analytical output. Recommended placement: `processed/cpc_index/`. **Before copying, ask the operator**:
 
 > The 67 GB pre-2020 CPCe point index (`supporting_data/cpc_all/`) is a derived
-> static asset consumed by step 4 of the pipeline. Should it land at
+> static asset consumed by step 4 of the pipeline. Should it go to
 > `processed/cpc_index/` (my recommendation), or does VICARIUS have a different
 > canonical location for bulk derived indexes? If the operator prefers, it can
-> stay as a pointer — the pipeline config (`config/pipeline.yaml` →
+> stay as a pointer, the pipeline config (`config/pipeline.yaml` →
 > `paths.cpc_all_dir`) can reference `$ORIGINAL_REPO/supporting_data/cpc_all/`
 > instead, which avoids duplicating 67 GB.
 
@@ -256,10 +256,10 @@ rsync -aHAX --info=progress2 \
 # Verify byte-identical
 src_sz=$(du -sb /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/cpc_all | awk '{print $1}')
 dst_sz=$(du -sb /mnt/rip/vicarius_drive/vicarius/processed/cpc_index | awk '{print $1}')
-[ "$src_sz" = "$dst_sz" ] && echo "cpc_index sizes match ($src_sz bytes)" || echo "SIZE MISMATCH — stop"
+[ "$src_sz" = "$dst_sz" ] && echo "cpc_index sizes match ($src_sz bytes)" || echo "SIZE MISMATCH, stop"
 ```
 
-### 4.3 Raw CVR workbooks — **immutable per Commandment I**
+### 4.3 Raw CVR workbooks, **immutable per Commandment I**
 
 ```bash
 mkdir -p /mnt/rip/vicarius_drive/vicarius/raw/tcrmp_tabular/cvr
@@ -268,7 +268,7 @@ rsync -a --info=progress2 \
   /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/supporting_data/TCRMP_CVR/ \
   /mnt/rip/vicarius_drive/vicarius/raw/tcrmp_tabular/cvr/
 
-# After landing, mark read-only (Commandment I)
+# After the copy arrives, mark read-only (Commandment I)
 chmod -R a-w /mnt/rip/vicarius_drive/vicarius/raw/tcrmp_tabular/cvr
 ```
 
@@ -294,11 +294,11 @@ here for offline reproducibility.
 | yolo11m-seg.pt | YOLO11 medium seg | 44 MB | 22.4M |
 | yolo11l-seg.pt | YOLO11 large seg | 54 MB | 27.6M |
 | yolov8n.pt     | YOLOv8 nano det | 6 MB  | 3.2M  |
-| yolo26n.pt     | experimental    | 5 MB  | —     |
+| yolo26n.pt     | experimental    | 5 MB  | not recorded |
 MD
 ```
 
-### 4.5 TCRMP_clip local subset — **do not copy**
+### 4.5 TCRMP_clip local subset, **do not copy**
 
 The 462 MB local subset is for offline-testing only and is a subset of Dropbox.
 Dropbox remains the authoritative source. In `config/pipeline.yaml` the module
@@ -309,7 +309,7 @@ Record the location in `module.yaml` as a referenced input, not a stored input.
 
 ## 5. Migrate in-flight runs
 
-Each `projects/<id>/` in the source maps to one `inprocess/run_<id>/` on the VICARIUS side. Small state files travel verbatim; large step outputs land inside the run's `outputs/` tree.
+Each `projects/<id>/` in the source maps to one `inprocess/run_<id>/` on the VICARIUS side. Small state files travel verbatim; large step outputs go inside the run's `outputs/` tree.
 
 ```bash
 for pdir in /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/projects/*/; do
@@ -336,13 +336,13 @@ done
 
 ```
 /mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/projects/
-  18aprilpm_PA_20260418_431d1b/                (3.0 GB — production run; includes step 6 training + step 7 eval + step 8 inference)
-  test_april16pm_20260416_4eaf2f/              (241 MB — smoke test, retain)
-  demo2_20260415_279c6c/                       (85 MB — demo)
-  demo3_20260415_9f5664/                       (85 MB — demo)
-  demo4_20260415_c1247e/                       (123 MB — demo)
-  demo_labmeeting_16april_20260416_b0803c/     (85 MB — lab meeting demo)
-  demo_try1/                                   (85 MB — first-run demo)
+  18aprilpm_PA_20260418_431d1b/                (3.0 GB, production run; includes step 6 training + step 7 eval + step 8 inference)
+  test_april16pm_20260416_4eaf2f/              (241 MB, smoke test, retain)
+  demo2_20260415_279c6c/                       (85 MB, demo)
+  demo3_20260415_9f5664/                       (85 MB, demo)
+  demo4_20260415_c1247e/                       (123 MB, demo)
+  demo_labmeeting_16april_20260416_b0803c/     (85 MB, lab meeting demo)
+  demo_try1/                                   (85 MB, first-run demo)
 ```
 
 Each becomes a `run_<id>/` under:
@@ -360,7 +360,7 @@ For each resulting `run_<id>/analysis_params.yaml`, the agent must populate:
 run:
   name: run_<id>
   module_name: reef_point_seg
-  created_at: <ISO date — copy from project.json.created_at>
+  created_at: <ISO date, copy from project.json.created_at>
   created_by: <operator username from project.json if available>
   status: active | completed | archived    # infer from project.json step statuses
 
@@ -439,7 +439,7 @@ doc["paths"]["supporting_data_dir"] = "/mnt/rip/vicarius_drive/vicarius/processe
 
 # vicarius_root and vicarius_logging_lib remain correct
 # unified_env_python auto-resolves against repo_root (github_repo/env)
-# step_defaults stay untouched — they reference the path aliases via ${...}
+# step_defaults stay untouched, they reference the path aliases via ${...}
 
 p.write_text(yaml.safe_dump(doc, sort_keys=False))
 print("updated", p)
@@ -556,7 +556,7 @@ scripts/TCRMPtrain_oceankindCV/ultralytics_src/.git/
 .vscode/
 ```
 
-`inprocess/`, `supporting_data/`, `projects/` entries from the source `.gitignore` are obsolete — those directories no longer live inside `github_repo/`.
+`inprocess/`, `supporting_data/`, `projects/` entries from the source `.gitignore` are obsolete, those directories no longer live inside `github_repo/`.
 
 ---
 
@@ -618,11 +618,11 @@ If no events appear, check:
 
 ---
 
-## 9. UI integration — match VICARIUS aesthetic
+## 9. UI integration, match VICARIUS aesthetic
 
-The module already ships a re-themed orchestrator (VICARIUS palette: dark bg, bubblegum pink + T-Mobile magenta, Inter body, Space Mono code, Syne headings, Silkscreen wordmark accent, crosshair cursor, subtle pixel grid + scanlines). Rules for landing it in VICARIUS:
+The module already ships a re-themed orchestrator (VICARIUS palette: dark bg, bubblegum pink + T-Mobile magenta, Inter body, Space Mono code, Syne headings, Silkscreen wordmark accent, crosshair cursor, subtle pixel grid + scanlines). Rules for bringing it into VICARIUS:
 
-1. **Do not diverge from `vicarius_ui/static/theme.css`**. The module's own `style.css` is a deliberate mirror of the platform theme. If the platform palette changes, regenerate the module's `style.css` to match — do not drift.
+1. **Do not diverge from `vicarius_ui/static/theme.css`**. The module's own `style.css` is a deliberate mirror of the platform theme. If the platform palette changes, regenerate the module's `style.css` to match, do not drift.
 
 2. **Font choices are content, not decoration**. Keep Inter ≥ 14 px, Space Mono for any monospace surface (logs, code, path inputs), Silkscreen only for the top-bar wordmark and setup-screen logo. Never use Silkscreen for body text.
 
@@ -639,15 +639,15 @@ The module already ships a re-themed orchestrator (VICARIUS palette: dark bg, bu
    ```
    The only permitted exception is the `★` semantic-cost marker in the orchestrator's step-6 training panel (visual-weight indicator for hyperparameter tuning cost, not decoration).
 
-4. **Port allocation**: use the documented ports (orchestrator 5050, recode 5055, route 5065, segment 5070). When VICARIUS itself is running on 5077, there is no collision — but confirm with `lsof -ti:5050` before first launch.
+4. **Port allocation**: use the documented ports (orchestrator 5050, recode 5055, route 5065, segment 5070). When VICARIUS itself is running on 5077, there is no collision, but confirm with `lsof -ti:5050` before first launch.
 
-5. **Navigation integration**: the module's orchestrator opens in its own browser tab at `http://localhost:5050`. It does not embed inside the VICARIUS `vicarius_ui` shell at this time. `vicarius list` points operators at it; `vicarius run reef_point_seg` launches it. Do **not** try to iframe-embed the orchestrator into the main `vicarius_ui` — the sub-apps it launches (step 2, 4, 5) run on different ports and Flask sessions that do not survive iframing.
+5. **Navigation integration**: the module's orchestrator opens in its own browser tab at `http://localhost:5050`. It does not embed inside the VICARIUS `vicarius_ui` shell at this time. `vicarius list` points operators at it; `vicarius run reef_point_seg` launches it. Do **not** try to iframe-embed the orchestrator into the main `vicarius_ui`, the sub-apps it launches (step 2, 4, 5) run on different ports and Flask sessions that do not survive iframing.
 
 6. **Readability over personality**. If a styling choice makes a form field or log line harder to scan, bias toward the readable choice. Every token in the current theme passed this bar; hold that line.
 
 ---
 
-## 10. Testing protocol (in order — stop on first failure)
+## 10. Testing protocol (in order, stop on first failure)
 
 ### 10.1 Config loader
 ```bash
@@ -704,9 +704,9 @@ Expected:
 Create a tiny new project in the UI:
 - Project name: `vicarius_smoke_test`
 - Base dir: `/mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg/inprocess`
-- Step 1: run against `/mnt/rip/vicarius_drive/vicarius/raw/tcrmp_tabular/cvr/` (read-only — will not write)
+- Step 1: run against `/mnt/rip/vicarius_drive/vicarius/raw/tcrmp_tabular/cvr/` (read-only, will not write)
 - Step 2: launch the recode UI on 5055, confirm it loads `/mnt/rip/vicarius_drive/vicarius/processed/derived_tabular/tcrmp_cvr_all_points.csv` and closes cleanly
-- Step 3: run with `target_species="PA"`, `target_instances=10`, `min_year=2018`, `max_year=2018` — tiny selection for speed
+- Step 3: run with `target_species="PA"`, `target_instances=10`, `min_year=2018`, `max_year=2018`, tiny selection for speed
 - Step 4: launch on 5065, override `clip_dir` to `/home/bizon/UVI Dropbox/SMITH LAB TEAM FOLDER/TCRMP/TCRMP_clip` (or whatever mount is available on the host)
 - Skip steps 5-8 (GPU-heavy; require SAM3 + full training setup)
 
@@ -735,16 +735,16 @@ Both the source (port 5052 in this test) and the VICARIUS-hosted copy (port 5050
 
 Fill this in as a sanity check before declaring the migration complete.
 
-- [ ] **I. Raw data sacred** — `raw/tcrmp_tabular/cvr/` was `chmod -R a-w` after landing. No step writes there.
-- [ ] **II. Naming conventions** — `tcrmp_cvr_all_points.csv`, `tcrmp_species_codes.csv`, `coral_seg_v1.0.0_<YYYYMMDD>.pt` pattern documented for future model promotions.
-- [ ] **III. Every file has metadata** — every migrated run has `analysis_params.yaml`; every derived product has a sidecar `.meta.yaml`.
-- [ ] **IV. Modules atomic** — `reef_point_seg` is one module with one `module.yaml`, one inputs contract, one outputs contract.
-- [ ] **V. Document as you build** — `docs/PIPELINE_OVERVIEW.md`, `docs/NOTES_pipeline_improvements.md`, `docs/VICARIUS_INTEGRATION.md`, this file: present.
-- [ ] **VI. Prompt for purpose** — project-creation UI asks for name + purpose; `process_start` events carry that purpose string.
-- [ ] **VII. Test before production** — §10 must pass end to end before the module is marked production-ready.
-- [ ] **VIII. Log everything** — VICARIUS event stream captures orchestrator start, every step start/end, every error, every run open/close.
-- [ ] **IX. Version code, track data** — `.gitignore` excludes `env/` + editable-install artifacts; data lives on `/mnt/rip` + NAS, not in git.
-- [ ] **X. Keep it simple, then grow** — no new frameworks introduced; the module remains plain Flask + vanilla JS + a single YAML.
+- [ ] **I. Raw data sacred**, `raw/tcrmp_tabular/cvr/` was `chmod -R a-w` after the copy arrived. No step writes there.
+- [ ] **II. Naming conventions**, `tcrmp_cvr_all_points.csv`, `tcrmp_species_codes.csv`, `coral_seg_v1.0.0_<YYYYMMDD>.pt` pattern documented for future model promotions.
+- [ ] **III. Every file has metadata**, every migrated run has `analysis_params.yaml`; every derived product has a sidecar `.meta.yaml`.
+- [ ] **IV. Modules atomic**, `reef_point_seg` is one module with one `module.yaml`, one inputs contract, one outputs contract.
+- [ ] **V. Document as you build**, `docs/PIPELINE_OVERVIEW.md`, `docs/NOTES_pipeline_improvements.md`, `docs/VICARIUS_INTEGRATION.md`, this file: present.
+- [ ] **VI. Prompt for purpose**, project-creation UI asks for name + purpose; `process_start` events carry that purpose string.
+- [ ] **VII. Test before production**, §10 must pass end to end before the module is marked production-ready.
+- [ ] **VIII. Log everything**, VICARIUS event stream captures orchestrator start, every step start/end, every error, every run open/close.
+- [ ] **IX. Version code, track data**, `.gitignore` excludes `env/` + editable-install artifacts; data lives on `/mnt/rip` + NAS, not in git.
+- [ ] **X. Keep it simple, then grow**, no new frameworks introduced; the module remains plain Flask + vanilla JS + a single YAML.
 
 ---
 
@@ -756,20 +756,20 @@ If something breaks after migration:
 2. **The source repo is unchanged**. Operators can continue working from `/mnt/rip/vicarius_drive/hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/` exactly as before.
 3. **Revert by deleting the module directory** (after confirming nothing under `inprocess/` has been touched that doesn't also exist in the source `projects/`):
    ```bash
-   # DANGER — this removes the migrated module. Run only after confirming rollback.
+   # DANGER, this removes the migrated module. Run only after confirming rollback.
    rm -rf /mnt/rip/vicarius_drive/vicarius/modules/reef_point_seg
    ```
 4. **Leave the data-root copies in place** unless they turned out to be duplicates. `processed/derived_tabular/tcrmp_cvr_all_points.csv` etc. are cheap to keep and may be read by other modules.
 
 ---
 
-## 13. Known unknowns — ask the operator before acting
+## 13. Known unknowns, ask the operator before acting
 
 The following decisions materially change the plan. Do not guess; surface them.
 
 1. **Does VICARIUS have a canonical root for bulk derived indexes like `cpc_all/` (67 GB)?** My recommendation is `processed/cpc_index/`. If the operator has a different convention, use theirs.
 
-2. **Should the pretrained YOLO weights land under `models/yolo_pretrained/` or a more structured `models/tcrmp_coral_seg/v0_pretrained/` tree?** My default is the former; the latter is cleaner if VICARIUS uses `{model_family}/{version}/` throughout.
+2. **Should the pretrained YOLO weights go under `models/yolo_pretrained/` or a more structured `models/tcrmp_coral_seg/v0_pretrained/` tree?** My default is the former; the latter is cleaner if VICARIUS uses `{model_family}/{version}/` throughout.
 
 3. **Which study tag do migrated runs inherit?** I default to `S1_historical` everywhere. If a migrated run belongs to a different study (S2_3D_structure, S3_colony_tracking, S4_non_coral, S5_interactions), the operator must tell you which.
 
@@ -785,8 +785,8 @@ The following decisions materially change the plan. Do not guess; surface them.
 
 Post to the operator:
 
-> `reef_point_seg` landed in VICARIUS. Module lives at
-> `modules/reef_point_seg/`. Source code unchanged — the old repo at
+> `reef_point_seg` was migrated into VICARIUS. The module lives at
+> `modules/reef_point_seg/`. Source code unchanged, the old repo at
 > `hopper/CVR_CLIP_forAI/seg_AI_img_full_april2026/` still works independently.
 > Run `./bootstrap.sh` inside `github_repo/` once to build the unified env, then
 > `vicarius run reef_point_seg` launches the orchestrator at

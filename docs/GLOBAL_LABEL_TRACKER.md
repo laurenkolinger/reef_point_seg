@@ -4,14 +4,14 @@ Design for a new **reef_point_seg** subsection that turns the existing point
 census + the expert-ID mask catalog into a *training-set planner*: choose which
 codes you want, how many instances of each, and instantly see coverage, what is
 already segmented vs only point-census-known, and the **minimum** extra images to
-review to hit your targets — exploiting species co-occurrence so one review pass
+review to hit your targets, exploiting species co-occurrence so one review pass
 yields several classes. Built to scale from "a few coral species" to "many
 species, in arbitrary combinations" without re-labeling thousands of images.
 
 Status: **design + validated prototype** (`scripts/_reefreview/coverage.py`,
 tested in `scripts/_reefreview/tests/test_coverage.py`, 6/6 green incl. a smoke
 test over the real 1.6M-row census: 113,058 images parsed in ~3.3s). UI + the
-"build a project from a plan" wiring are **not built yet** — this doc is the map.
+"build a project from a plan" wiring are **not built yet**, this doc is the map.
 
 ---
 
@@ -19,8 +19,7 @@ test over the real 1.6M-row census: 113,058 images parsed in ~3.3s). UI + the
 
 `supporting_data/all_points.csv` (~1.6M rows) is a **point-level census of every
 CPCe/OCR point on every frame**, each row `(date, site, transect, frame,
-point_label, species_code, ...)`. Crucially it records *every* point's species —
-including species that were never segmented for any given project. So for any
+point_label, species_code, ...)`. Crucially it records *every* point's species, including species that were never segmented for any given project. So for any
 image we already know, with zero new review:
 
 - which species are present, and
@@ -40,7 +39,7 @@ Measured on the real data (per `coverage.build_census`):
 
 Co-occurrence is real and exploitable: **314** images contain *both* PA and OFAV
 (8,263 PA-only, 1,530 OFAV-only). That 314 is the "labeled for X but also
-contains Y" set — we can find it from the census instead of re-reviewing
+contains Y" set, we can find it from the census instead of re-reviewing
 everything.
 
 **Key distinction the planner keeps explicit:**
@@ -54,7 +53,7 @@ everything.
 
 Two stores, both already defined:
 
-1. **Census** — derived, in-memory/cached, from `all_points.csv`.
+1. **Census**, derived, in-memory/cached, from `all_points.csv`.
    `coverage.build_census(all_points_csv, year_min, year_max, sites)` →
    `{image_key: Counter(code -> n_points)}` where `image_key =
    (date, site, transect, frame)`. ~3s cold; cache to a pickle/JSON keyed by
@@ -64,14 +63,14 @@ Two stores, both already defined:
    (`inprocess/_expert_id_library/manifest.csv` + `polygons/` + `images/` +
    `masks/`), one row per mask UID with `code`, `mode` (USER/EXPERT),
    `source_image`, geometry. This is *the* cross-project label store. The tracker
-   adds **no new store** — it reads these two and writes plans.
+   adds **no new store**, it reads these two and writes plans.
 
 The census↔catalog join is by **image basename** (`coverage.catalog_index`,
 `census_by_basename`). The library stores the clip filename; the census key is a
 tuple, so a catalog-aware report must re-key the census to basenames first
 (`census_by_basename(census, basename_for_key)`). Caveat documented in code: the
 library currently stores `year`, not the full census `date`, so the bridge is
-basename-based, not key-based — see §7 open items.
+basename-based, not key-based, see §7 open items.
 
 ---
 
@@ -84,7 +83,7 @@ basename-based, not key-based — see §7 open items.
 - pairwise `cooccurrence[a][b]` = images containing both;
 - `shortfall[code]` vs an instance target.
 
-`coverage.select_images(census, target_per_code, prefer_codes)` — greedy
+`coverage.select_images(census, target_per_code, prefer_codes)`, greedy
 set-cover: repeatedly pick the image that contributes the most still-needed
 instances across **all** target codes at once (so multi-class frames win first),
 until targets are met or candidates run dry. Returns the selected image list,
@@ -92,13 +91,13 @@ until targets are met or candidates run dry. Returns the selected image list,
 the number of images so we're not labeling thousands" engine: minimize images
 while covering the requested class mix.
 
-`coverage.gap_images(census, code, library)` — frames that contain `code` per the
+`coverage.gap_images(census, code, library)`, frames that contain `code` per the
 census but have no mask for it yet. These are the "review a few extra images"
 set: an image labeled for X (has an X mask) that the census says also has Y →
 surfaces as a Y gap, so we know to push it through route+SAM to add the Y mask.
 
 Greedy set-cover is the right call here (NP-hard exact; greedy is the standard
-≈(1+ln n) approximation) and is O(images × codes) per pick — fine at this scale.
+≈(1+ln n) approximation) and is O(images × codes) per pick, fine at this scale.
 
 ---
 
@@ -126,11 +125,11 @@ Greedy set-cover is the right call here (NP-hard exact; greedy is the standard
 
 So a plan does two things: **reuse** existing masks (free) and **queue** only the
 gap images for new segmentation, which then flow through the *existing* REVIEW →
-expert round-trip and land back in the catalog for every future project.
+expert round-trip and arrive back in the catalog for every future project.
 
 ---
 
-## 5. UI subsection (proposed) — "Coverage Planner"
+## 5. UI subsection (proposed), "Coverage Planner"
 
 A new tile in the orchestrator (sibling to "Add Expert IDs": optional,
 re-runnable, not a numbered chain step) opening a lightweight Flask sub-app
@@ -138,7 +137,7 @@ re-runnable, not a numbered chain step) opening a lightweight Flask sub-app
 
 - **Filters:** year range, sites (defaults: all). Drives `build_census`.
 - **Code picker:** the full master_codes list grouped (reuse `codes.load_codes`
-  groups — Coral / Algae / Sponge / Gorgonian / Non-living / …), each with a
+  groups, Coral / Algae / Sponge / Gorgonian / Non-living / …), each with a
   "target instances" number box. Toggle codes in/out; multiselect.
 - **Live coverage table** (one row per chosen code): census images, census
   instances, **segmented** (in catalog), **gap** images, shortfall vs target,
@@ -158,13 +157,13 @@ Every field gets a tooltip (platform rule). Timestamps AST.
 
 ## 6. Integration points (where it plugs into what exists)
 
-- **Reads:** `all_points.csv` (census) + the expert-ID library (catalog) — both
+- **Reads:** `all_points.csv` (census) + the expert-ID library (catalog), both
   already wired via `pipeline.yaml` paths `all_points_csv` and
   `expert_library_dir`.
 - **Writes:** a plan JSON + a `selected_frames.csv` into a new project dir; no new
   permanent store.
 - **Feeds:** the gap images go through the **existing** step 4 (route) → step 5
-  (SAM) → REVIEW round-trip; new masks land in the catalog via the existing
+  (SAM) → REVIEW round-trip; new masks arrive in the catalog via the existing
   `review_export` / importer path. The planner does not duplicate any of that.
 - **Reuse:** already-segmented frames are referenced from the catalog so a new
   project inherits their masks (the >50%-overlap auto-relabel already handles a
@@ -177,7 +176,7 @@ Every field gets a tooltip (platform rule). Timestamps AST.
 1. **Census↔catalog join fidelity.** The library stores `year` not full `date`,
    so the join is by image basename. If two surveys of the same site/transect/
    frame in different years share a basename pattern, confirm basenames are
-   globally unique (they encode the full `YYYYMMDD`, so they should be — verify).
+   globally unique (they encode the full `YYYYMMDD`, so they should be, verify).
 2. **Recoded vs raw codes.** The census uses raw `species_code`; a project may
    remap (step 2, e.g. MFAV→OFAV). The planner should apply the active
    `remap_log.json` to the census before counting, or operate on recoded codes,
@@ -186,7 +185,7 @@ Every field gets a tooltip (platform rule). Timestamps AST.
    upper bound; SAM may merge/split/■reject. Show both numbers; never promise
    census counts as final.
 4. **Gap-image cost.** `gap_images` can be large (e.g. 8,263 PA-only frames). The
-   planner must cap + let the user dial "how many gap images to add" — that's the
+   planner must cap + let the user dial "how many gap images to add", that's the
    whole point of `select_images` (target-driven, not "all gaps").
 5. **Caching.** Cache the census parse (keyed by csv mtime + filters) so toggling
    codes doesn't re-read 1.6M rows each time.
@@ -197,9 +196,9 @@ Every field gets a tooltip (platform rule). Timestamps AST.
 
 ## 8. Files
 
-- `scripts/_reefreview/coverage.py` — census, report, select_images, gap_images
+- `scripts/_reefreview/coverage.py`, census, report, select_images, gap_images
   (built, pure-stdlib + library).
-- `scripts/_reefreview/tests/test_coverage.py` — 6 tests incl. real-data smoke
+- `scripts/_reefreview/tests/test_coverage.py`, 6 tests incl. real-data smoke
   (built, green).
 - **TODO (next):** `scripts/TCRMPclip_coveragePlanner/` sub-app + an orchestrator
   tile, mirroring the Add-Expert-IDs tile; a census cache; remap application; and

@@ -129,7 +129,7 @@ The evaluation report as one HTML file with its stylesheet inlined, written by `
 _Avoid_: the web report (the Step 6 report card is built from `metrics.json` and `GET /api/step/7/report`, not from this file), the PDF source (say report.html).
 
 **Ignored flag**:
-A command-line flag that `scripts/TCRMPtrain_oceankindCV/src/run_inference.py` accepts for compatibility and does not act on, recorded by name under `ignored_flags` in `manifest.json` so a reader can see it was passed; today the only one is `--save_crops`, which writes no crop images.
+A command-line flag that `scripts/TCRMPtrain_oceankindCV/src/run_inference.py` accepts for compatibility and does not act on, recorded by name under `ignored_flags` in `manifest.json` so a reader can see it was passed; the only one currently defined is `--save_crops`, which writes no crop images.
 _Avoid_: deprecated flag, no-op (say what the flag does not do), crops (nothing is cropped).
 
 **Training project**:
