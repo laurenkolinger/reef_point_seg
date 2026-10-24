@@ -16,6 +16,18 @@ Outputs: a pass or fail count on stdout, exit code 1 on any failure.
 Run:     github_repo/env/bin/python scripts/_ablation/tests/test_coral_intel_vega_driver.py
 """
 
+# Keep this suite off the live mask registry, expert library and clip index
+# when it is run alone: scripts/tests/_isolation.py sets the isolating
+# variables to temp dirs and blocks any write to the live stores.
+import os as _iso_os
+import sys as _iso_sys
+_iso_dir = _iso_os.path.dirname(_iso_os.path.abspath(__file__))
+while _iso_os.path.basename(_iso_dir) != 'scripts' and _iso_dir != _iso_os.path.dirname(_iso_dir):
+    _iso_dir = _iso_os.path.dirname(_iso_dir)
+_iso_sys.path.insert(0, _iso_os.path.join(_iso_dir, 'tests'))
+import _isolation
+_isolation.install()
+
 import io
 import json
 import shutil
@@ -199,12 +211,20 @@ PROTOCOL = cd.load_eval_protocol()
 
 
 def make_driver(fake: FakeVega, project: Path, blocker=lambda: "",
-                finished=lambda run_dir: False, annotators=lambda: "") -> cd.Driver:
-    """Build a Driver over the fake with instant sleeps and no real ss or pgrep."""
+                finished=lambda run_dir: False, annotators=lambda: "",
+                complete=None) -> cd.Driver:
+    """Build a Driver over the fake with instant sleeps and no real ss or pgrep.
+
+    By default recording a recovered finish unlocks Evaluate in the fake, as
+    VEGA's complete_step does in project.json."""
     client = cd.VegaClient(cd.VEGA_URL, opener=fake)
     progress = cd.Progress(project / cd.STUDY_DIRNAME / "progress.jsonl")
+    if complete is None:
+        def complete(project_dir):
+            fake.step7_unlocked[str(project_dir)] = True
     return cd.Driver(client, project, progress, PROTOCOL, sleep=lambda s: None,
-                     blocker=blocker, finished=finished, annotators=annotators)
+                     blocker=blocker, finished=finished, annotators=annotators,
+                     complete=complete)
 
 
 def write_preset(folder: Path, name: str, meta: dict, params: dict) -> Path:
@@ -424,10 +444,9 @@ try:
     fake_k = FakeVega(tmp)
     driver_k = make_driver(fake_k, project_k, finished=lambda run_dir: run_dir.name == "TRAIN_done")
     driver_k.remember("A0_replicate", "TRAIN_done", trained=False)
-    check(raises(lambda: driver_k.run_arm(arms[0]), cd.VegaError),
-          "in a project whose Evaluate VEGA never unlocked, the kept run fails loudly")
-    fake_k.step7_unlocked[str(project_k)] = True   # an earlier finish was recorded
     row_k = driver_k.run_arm(arms[0])
+    check(fake_k.step7_unlocked.get(str(project_k)),
+          "the kept run is recorded as finished, which unlocks Evaluate in a new project")
     check(fake_k.starts[6] == 0 and row_k["run_name"] == "TRAIN_done" and row_k["status"] == "ok",
           "no retraining; the finished run is evaluated")
     check(driver_k.state()["A0_replicate"]["trained"] is True, "and recorded as trained")
@@ -534,7 +553,6 @@ try:
             fake_v.lose_process = False
         return out
     fake_v.poll = poll
-    fake_v.step7_unlocked[str(project_v)] = True   # a later arm: an earlier finish was recorded
     row_v = driver_v.run_arm(arms[0])
     check(row_v["status"] == "ok" and "train_recovered" in events(project_v),
           "a run that finished while VEGA restarted is recovered and scored")
@@ -576,6 +594,38 @@ try:
     check(raises(lambda: cd.find_or_create_project(client, str(tmp / "nothing")), cd.VegaError),
           "resuming a folder with no project.json is refused")
 
+    section("calls carry the backend key that passes a module lock")
+    seen = []
+    def capture(request, timeout=None):
+        seen.append(dict(request.header_items()))
+        return FakeResponse(200, {"running": False})
+    cd.VegaClient(cd.VEGA_URL, opener=capture,
+                  headers={"X-VEGA-Backend-Token": "k" * 64}).status(6)
+    check(any(v == "k" * 64 for v in seen[0].values()),
+          "the key header is sent on every request")
+    import os as _os
+    _os.environ["VEGA_BACKEND_TOKEN_PATH"] = str(tmp / "cfg" / "vega_backend_token")
+    hdr = cd.backend_headers()
+    check(list(hdr) == ["X-VEGA-Backend-Token"] and len(next(iter(hdr.values()))) == 64,
+          "backend_headers creates and returns the key")
+    _os.environ.pop("VEGA_BACKEND_TOKEN_PATH")
+
+    section("a recovered finish is recorded with VEGA's own project code")
+    real = tmp / "run_real"
+    (real / "step6_trainModel").mkdir(parents=True)
+    (real / "project.json").write_text(json.dumps({
+        "id": "x", "name": "TRAIN_x", "project_dir": str(real), "current_step": 6,
+        "project_type": "bbox_training",
+        "steps": {"6": {"status": "running", "name": "Train Model",
+                        "dir": str(real / "step6_trainModel"), "config": {}, "outputs": {}},
+                  "7": {"status": "locked", "name": "Evaluate Model",
+                        "dir": str(real / "step7_evaluateModel"), "config": {}, "outputs": {}}},
+        "access_log": []}))
+    cd.mark_training_complete(real)
+    after = json.loads((real / "project.json").read_text())
+    check(after["steps"]["6"]["status"] == "completed", "step 6 is recorded completed")
+    check(after["steps"]["7"]["status"] != "locked", "and Evaluate is unlocked")
+
     section("the GPU ladder check")
 
     class R:
@@ -583,8 +633,31 @@ try:
     check(cd.ladder_blocker(lambda *a, **k: R("")) == "", "nothing running, no blocker")
     check(cd.ladder_blocker(lambda *a, **k: R("99 pgrep -af metashape\n")) == "",
           "pgrep's own line is ignored")
+    noise = ("5 /bin/bash -c pgrep -af metashape|run_phase1\n"
+             "6 env/bin/python scripts/_ablation/coral_intel_vega_driver.py --allow_metashape_pid 7\n"
+             "9 tail -f /mnt/logs/metashape_run.log\n")
+    check(cd.ladder_blocker(lambda *a, **k: R(noise)) == "",
+          "shells, log viewers and this driver's own flags never count as Metashape (2026-09-29)")
+    check(cd.ladder_blocker(lambda *a, **k: R("11 /usr/bin/python3 /opt/3D/src/run_phase1.py --site MRS\n"))
+          .startswith("11"), "a run_phase1.py reconstruction blocks")
+    check(cd.ladder_blocker(lambda *a, **k: R("12 /home/b/metashape-pro/metashape.sh -r x.py\n"))
+          .startswith("12"), "the metashape.sh launcher blocks")
+    edit = "13 /opt/metashape-pro/metashape /mnt/rip/driver_staging/editbench/FLC_T6_3D/FLC_T6.psx\n"
+    scripted = "14 /opt/metashape-pro/metashape -r /x/align.py /mnt/rip/driver_staging/editbench/a.psx\n"
+    check(cd.ladder_blocker(lambda *a, **k: R(edit)).startswith("13"),
+          "a manual-edit window blocks by default")
+    check(cd.ladder_blocker(lambda *a, **k: R(edit), allow_manual_edit=True) == "",
+          "with the allowance, an interactive manual-edit window does not block")
+    check(cd.ladder_blocker(lambda *a, **k: R(scripted), allow_manual_edit=True).startswith("14"),
+          "a scripted Metashape run blocks even with the allowance")
     check(cd.ladder_blocker(lambda *a, **k: R("7 /opt/metashape/metashape -r x\n")).startswith("7"),
           "a Metashape process blocks")
+    two = "7 /opt/metashape/metashape edit.psx\n8 /opt/metashape/metashape -r run.py\n"
+    check(cd.ladder_blocker(lambda *a, **k: R(two), allowed_pids=frozenset({7})).startswith("8"),
+          "an allowed Metashape window is ignored, any other Metashape still blocks")
+    check(cd.ladder_blocker(lambda *a, **k: R("7 /opt/metashape/metashape edit.psx\n"),
+                            allowed_pids=frozenset({7})) == "",
+          "with only the allowed window open, nothing blocks")
     def no_pgrep(*a, **k):
         raise FileNotFoundError("pgrep")
     check(raises(lambda: cd.ladder_blocker(no_pgrep), cd.VegaError),

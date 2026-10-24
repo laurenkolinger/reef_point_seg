@@ -62,6 +62,18 @@ Run with:
   env/bin/python scripts/TCRMPtrain_oceankindCV/tests/test_detect_dataset.py
 """
 
+# Keep this suite off the live mask registry, expert library and clip index
+# when it is run alone: scripts/tests/_isolation.py sets the isolating
+# variables to temp dirs and blocks any write to the live stores.
+import os as _iso_os
+import sys as _iso_sys
+_iso_dir = _iso_os.path.dirname(_iso_os.path.abspath(__file__))
+while _iso_os.path.basename(_iso_dir) != 'scripts' and _iso_dir != _iso_os.path.dirname(_iso_dir):
+    _iso_dir = _iso_os.path.dirname(_iso_dir)
+_iso_sys.path.insert(0, _iso_os.path.join(_iso_dir, 'tests'))
+import _isolation
+_isolation.install()
+
 import json
 import os
 import shutil
@@ -597,33 +609,27 @@ def test_adversarial_read_only_destination(root):
         check(not os.path.exists(out), "and nothing is written")
     finally:
         os.chmod(parent, 0o700)
-    # A previous dataset whose folders cannot be deleted is moved aside whole,
-    # the new dataset takes its place, and the failure to remove the old copy
-    # is reported with both paths. Nothing is ever half-deleted.
+    # A previous dataset holding images is never deleted (2026-10-15): even with
+    # read-only image folders it is moved whole to <parent>/_superseded/<stamp>/
+    # and the new dataset takes its place.
     out2 = os.path.join(root, "ro_existing", "dataset")
     DD.build_detect_dataset(ds, out2, "ro")
     for split in DD.SPLIT_DIRS:
         os.chmod(os.path.join(out2, split, "images"), 0o500)
-    try:
-        DD.build_detect_dataset(ds, out2, "ro-again")
-        check(False, "a previous dataset that cannot be removed is reported")
-    except OSError as e:
-        check(out2 in str(e) and ".dataset_old_" in str(e),
-              f"a previous dataset that cannot be removed raises OSError naming the new dataset "
-              f"and the leftover ({e})")
+    DD.build_detect_dataset(ds, out2, "ro-again")
     check(os.path.isfile(os.path.join(out2, "split_manifest.json"))
           and load_manifest(out2)["seed"] == "ro-again"
           and all(os.access(os.path.join(out2, s, "images"), os.W_OK) for s in DD.SPLIT_DIRS),
-          "and the new dataset is whole and in place")
+          "a previous dataset with read-only image folders is replaced: the new dataset is whole and in place")
     parent2 = os.path.dirname(out2)
-    leftovers = [d for d in os.listdir(parent2) if d.startswith(".dataset_old_")]
-    check(len(leftovers) == 1, f"the old copy is left aside under one .dataset_old_ folder (got {leftovers})")
-    for d in leftovers:
-        for dirpath, _dirs, _files in os.walk(os.path.join(parent2, d)):
-            os.chmod(dirpath, 0o700)
-        shutil.rmtree(os.path.join(parent2, d))
+    held_root = os.path.join(parent2, "_superseded")
+    held_imgs = [f for dp, _d, fs in os.walk(held_root) for f in fs if f.lower().endswith(DD.IMAGE_EXTS)]
+    check(len(held_imgs) > 0, f"and its images sit under _superseded/<stamp>/ (got {len(held_imgs)})")
+    check([d for d in os.listdir(parent2) if d.startswith(".dataset_old_")] == [],
+          "and no .dataset_old_ folder is left behind")
+    for dirpath, _dirs, _files in os.walk(held_root):
+        os.chmod(dirpath, 0o700)
     check(_leftover_build_dirs(out2) == [], "and no staged build folder is left behind")
-    # With the leftover gone, the next rebuild replays the pins and succeeds.
     m_after = DD.build_detect_dataset(ds, out2, "ro")
     check(m_after["n_replayed"] == 4 and m_after["n_fresh"] == 0,
           f"the next rebuild replays every pin (got replayed={m_after['n_replayed']})")

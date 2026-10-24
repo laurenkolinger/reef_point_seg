@@ -76,3 +76,63 @@ def is_locked():
     except Exception as exc:
         _warn_once(f"{path}: {exc}")
         return False
+
+
+# ── Backend runs pass the lock (Lauren, 2026-09-28) ─────────────────────────
+# A lock keeps people out of the module's pages (students off the annotation
+# tools); it must not stop a training study Lauren started headlessly. A
+# request passes the gate while locked only when it comes from this machine
+# and carries the backend key, a random secret kept outside the synced drive
+# and readable only by this account. Browsers never send it, so every page
+# still answers with the lock page and every other call with 423.
+BACKEND_HEADER = "X-VEGA-Backend-Token"
+BACKEND_TOKEN_PATH = os.path.join(os.path.expanduser("~"), ".config", "vicarius",
+                                  "vega_backend_token")
+BACKEND_TOKEN_BYTES = 32
+LOOPBACK_ADDRS = ("127.0.0.1", "::1")
+
+
+def backend_token_path():
+    """Where the backend key lives; VEGA_BACKEND_TOKEN_PATH overrides it (tests)."""
+    return Path(os.environ.get("VEGA_BACKEND_TOKEN_PATH") or BACKEND_TOKEN_PATH)
+
+
+def backend_token(create=False):
+    """The backend key, '' when there is none.
+
+    With create=True a missing key is generated (32 random bytes, hex) and
+    written with owner-only permissions. A key that cannot be read is '' and
+    therefore never matches, so a broken key file keeps the lock closed.
+    """
+    import secrets  # noqa: PLC0415
+    path = backend_token_path()
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+        if token:
+            return token
+    except OSError:
+        pass
+    if not create:
+        return ""
+    token = secrets.token_hex(BACKEND_TOKEN_BYTES)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(token + "\n")
+    return token
+
+
+def is_backend_request(headers, remote_addr):
+    """True when a request may pass the lock: from this machine, with the key.
+
+    headers: the request headers (any mapping with .get); remote_addr: the
+    peer address. The comparison is constant-time, and an empty key on either
+    side never matches.
+    """
+    import hmac  # noqa: PLC0415
+    if remote_addr not in LOOPBACK_ADDRS:
+        return False
+    sent = (headers.get(BACKEND_HEADER) or "").strip()
+    expected = backend_token()
+    return bool(sent) and bool(expected) and hmac.compare_digest(sent, expected)
+

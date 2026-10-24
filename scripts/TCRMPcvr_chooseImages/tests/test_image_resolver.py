@@ -6,6 +6,18 @@ TCRMP2020_clip/Annual). Basenames are globally unique, so resolution must be a
 whole-tree recursive scan keyed on basename, not a TCRMP{date_year}_clip guess.
 No-pytest harness: run with env/bin/python <this file>.
 """
+# Keep this suite off the live mask registry, expert library and clip index
+# when it is run alone: scripts/tests/_isolation.py sets the isolating
+# variables to temp dirs and blocks any write to the live stores.
+import os as _iso_os
+import sys as _iso_sys
+_iso_dir = _iso_os.path.dirname(_iso_os.path.abspath(__file__))
+while _iso_os.path.basename(_iso_dir) != 'scripts' and _iso_dir != _iso_os.path.dirname(_iso_dir):
+    _iso_dir = _iso_os.path.dirname(_iso_dir)
+_iso_sys.path.insert(0, _iso_os.path.join(_iso_dir, 'tests'))
+import _isolation
+_isolation.install()
+
 import os, sys, tempfile, shutil
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(_HERE), 'src'))

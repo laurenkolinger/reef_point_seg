@@ -17,6 +17,18 @@ Covers:
            the JS getNavOrder()/renderStepNavFooters() pick the right neighbours.
 """
 
+# Keep this suite off the live mask registry, expert library and clip index
+# when it is run alone: scripts/tests/_isolation.py sets the isolating
+# variables to temp dirs and blocks any write to the live stores.
+import os as _iso_os
+import sys as _iso_sys
+_iso_dir = _iso_os.path.dirname(_iso_os.path.abspath(__file__))
+while _iso_os.path.basename(_iso_dir) != 'scripts' and _iso_dir != _iso_os.path.dirname(_iso_dir):
+    _iso_dir = _iso_os.path.dirname(_iso_dir)
+_iso_sys.path.insert(0, _iso_os.path.join(_iso_dir, 'tests'))
+import _isolation
+_isolation.install()
+
 import os
 import re
 import sys
@@ -976,7 +988,7 @@ def test_cache_bust_is_single_bump_point():
     check("orchestrator.js?v={{ asset_version }}" in tpl, "JS tag must read asset_version")
     check("style.css?v={{ asset_version }}" in tpl, "CSS tag must read asset_version")
     import app as appmod
-    check(appmod.ASSET_VERSION == "20260921-start",
+    check(appmod.ASSET_VERSION == "20261017-cardrows",
           f"ASSET_VERSION is {appmod.ASSET_VERSION}")
 
 
@@ -1124,11 +1136,11 @@ def test_matrix_registration_passes_open_folder_fn():
 
 def test_restart_script_markers():
     sh = open(os.path.join(os.path.dirname(_ORCH), "restart_reef_point_seg.sh")).read()
-    check("orchestrator.js?v=20260921-start" in sh, "restart script must fetch the fresh JS")
+    check("orchestrator.js?v=20261017-cardrows" in sh, "restart script must fetch the fresh JS")
     check("20260826-auto-project-name" not in sh and "20260826-annotator-notes" not in sh
           and "20260902-uniform-training" not in sh and "20260902-final-polish" not in sh,
           "stale cache-bust markers left in the restart script")
-    check("assert_html_present '20260921-start'" in sh, "restart self-test must pin the new cache-bust")
+    check("assert_html_present '20261017-cardrows'" in sh, "restart self-test must pin the new cache-bust")
     check("assert_html_present 'Refine (model loop)'" in sh, "restart self-test must pin the renamed Refine tile label")
     check("id=\"s6-source\"" in sh, "restart self-test must check the Step 6 source select")
     check("function refreshStep6Sources" in sh, "restart self-test must check the JS refresher")

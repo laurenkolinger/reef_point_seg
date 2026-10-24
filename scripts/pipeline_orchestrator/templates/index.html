@@ -1103,6 +1103,37 @@
                     <div id="s6-data-pictures" class="hint"></div>
                 </div>
 
+                <!-- Model card tags: the two finding tags VEGA writes on the
+                     trained model's card. Filled from the training source by
+                     /api/step/6/tags, editable, sent with the Step 6 config as
+                     card_subject and card_data_source. -->
+                <div class="form-group">
+                    {%- set t = "Pick what this model learns to find. VEGA writes it on the model's card so VISION can list the model under it; leave it Not set when neither fits." -%}
+                    <div class="field-head">
+                        <label for="s6-card-subject">Model subject</label>
+                        {{ q(t, "the model subject") }}
+                    </div>
+                    <span class="cost cost-free" tabindex="0" title="Time impact: free. This setting changes bounds or naming only, with no compute cost.">&#9733; free</span>
+                                        <select id="s6-card-subject" title="{{ t }}">
+                        <option value="" selected>Not set</option>
+                        <option value="fish">Fish</option>
+                        <option value="benthic">Benthic</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    {%- set t = "Pick TCRMP (Territorial Coral Reef Monitoring Program) when the training images come from its surveys, or Other for imagery from elsewhere. VEGA fills this from the training set's file names when it can." -%}
+                    <div class="field-head">
+                        <label for="s6-card-data-source">Imagery source</label>
+                        {{ q(t, "the training data source") }}
+                    </div>
+                    <span class="cost cost-free" tabindex="0" title="Time impact: free. This setting changes bounds or naming only, with no compute cost.">&#9733; free</span>
+                                        <select id="s6-card-data-source" title="{{ t }}">
+                        <option value="" selected>Not set</option>
+                        <option value="tcrmp">TCRMP</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+
                 <!-- Class-inclusion picker: which classes from the Step 4
                      (Place + Segment) export should actually be trained on.
                      Defaults to "all". -->

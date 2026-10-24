@@ -79,8 +79,10 @@ _NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _AST = timezone(timedelta(hours=-4))
 
 # Mask source_type values the composite's source_types filter accepts (spec
-# Task 6). The route validates a request's list against this same set.
-SOURCE_TYPES = {"manual_box", "manual_click", "auto", "exemplar", "model", "edit"}
+# Task 6). The route validates a request's list against this same set. The
+# manual ones come from the shared list (`merged` included), so the filter
+# can select exactly the masks the grid counts as manual.
+SOURCE_TYPES = set(_MANUAL_SOURCE_TYPES) | {"auto", "exemplar", "model", "edit"}
 # A mask predating source_type tracking, or one written by a path that never
 # set it, carries '' / missing. It is a hand-placed click in every such case
 # on record, so the filter treats it as manual_click (composite.json records

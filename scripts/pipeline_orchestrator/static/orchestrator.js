@@ -1277,6 +1277,10 @@ function populateConfigs() {
     s6set('s6-cls', s6.cls, 0.5);
     s6set('s6-dfl', s6.dfl, 1.5);
     s6set('s6-label-smoothing', s6.label_smoothing, 0);
+    // Model card tags: a saved pick wins; a project with none gets the tags
+    // inferred from the training source (refreshStep6CardTags, below).
+    restoreStep6CardTag('s6-card-subject', s6.card_subject, s6.card_subject_picked);
+    restoreStep6CardTag('s6-card-data-source', s6.card_data_source, s6.card_data_source_picked);
     // Device / DDP
     applyStepDevice(6, s6.device, TRAIN_DEVICE_DEFAULT);
 
@@ -1331,6 +1335,7 @@ function populateConfigs() {
     // Populate step-6 class picker. Backend falls back to step 3
     // target_species if step 5 hasn't produced data.yaml yet.
     refreshStep6Classes();
+    refreshStep6CardTags();
     // Populate "Continue from a VEGA model" (champion, this project's runs,
     // other projects' runs, and runs trained outside any project).
     refreshStep6ContinueOptions();
@@ -1462,6 +1467,14 @@ function collectConfig(step) {
         // task above it is what chooses a training recipe, and it is saved so
         // the panel opens on the same pair next time.
         cfg.subject = step6SubjectValue();
+        // The two finding tags VEGA writes on the model's card (subject and
+        // training data source); blank when nobody picked and none was inferred.
+        cfg.card_subject = ($('s6-card-subject') ? $('s6-card-subject').value : '') || '';
+        cfg.card_data_source = ($('s6-card-data-source') ? $('s6-card-data-source').value : '') || '';
+        // Whether a person chose each tag (Not set included), so a reload keeps
+        // a saved Not set and a prefilled value keeps following the recipe.
+        cfg.card_subject_picked = !!($('s6-card-subject') && $('s6-card-subject').dataset.picked);
+        cfg.card_data_source_picked = !!($('s6-card-data-source') && $('s6-card-data-source').dataset.picked);
         // The starting model is always a base checkpoint now (2026-09-21):
         // #s6-model holds only catalog names. A pick under "Continue from a
         // VEGA model" (#s6-continue-from) carries the run's absolute best.pt
@@ -3476,8 +3489,14 @@ const RESET_DESCRIPTIONS = {
 
 // The actual reset network/DOM work. Called only after the confirm modal is
 // accepted (openResetConfirm wires this to #confirm-ok-btn).
-async function doResetStep(step) {
-    const data = await post(`/api/step/${step}/reset`, {});
+async function doResetStep(step, confirmExported) {
+    const body = confirmExported === undefined ? {} : { confirm_exported: confirmExported };
+    const data = await post(`/api/step/${step}/reset`, body);
+    // Exported frames: the server names the count and waits for the same count
+    // back, so the same confirm modal opens once more with the count in it.
+    if (data.confirm_token !== undefined && confirmExported === undefined) {
+        return openResetConfirm(step, data);
+    }
     if (data.error) return alert('Error: ' + data.error);
     if (data.state) state = data.state;
     renderProjectName();
@@ -3540,7 +3559,7 @@ async function doResetStep(step) {
 
 // Open the styled reset-confirm modal for a step, describing what will be
 // cleared and wiring the Confirm button to run the reset.
-function openResetConfirm(step) {
+function openResetConfirm(step, exportedInfo) {
     const titleEl = document.getElementById('confirm-title');
     if (titleEl) titleEl.textContent = 'Reset this step?';
     const msgEl = document.getElementById('confirm-msg');
@@ -3550,9 +3569,15 @@ function openResetConfirm(step) {
         const destructive = step !== 'editmasks';
         msgEl.textContent = (RESET_DESCRIPTIONS[step] || 'This clears this step\'s outputs.') +
             (destructive ? ' This cannot be undone.' : '');
+        if (exportedInfo) {
+            msgEl.textContent += exportedInfo.annotated_count === null
+                ? ' The annotation record could not be read, so reviewed or exported frames cannot be counted.'
+                : ` ${exportedInfo.annotated_count} frames are already reviewed or exported and will be deleted.`;
+        }
     }
+    const confirmToken = exportedInfo ? exportedInfo.confirm_token : undefined;
     const okBtn = document.getElementById('confirm-ok-btn');
-    if (okBtn) { okBtn.textContent = 'Confirm Reset'; okBtn.onclick = () => { closeConfirmModal(); doResetStep(step); }; }
+    if (okBtn) { okBtn.textContent = 'Confirm Reset'; okBtn.onclick = () => { closeConfirmModal(); doResetStep(step, confirmToken); }; }
     const ov = document.getElementById('confirm-overlay');
     if (ov) ov.classList.add('visible');
 }
@@ -4017,6 +4042,7 @@ function onStep6SubjectChange() {
     const el = document.getElementById('s6-subject');
     if (el) el.dataset.subjectSource = 'operator';
     renderStep6RecipeOptions();
+    refreshStep6CardTags();
 }
 
 async function refreshStep6Presets(opts) {
@@ -5262,6 +5288,72 @@ function step6DataSummaryQuery() {
 }
 
 /**
+ * Put a saved model card tag into its select and mark it as a person's pick,
+ * so a later inference from the training source never overwrites it.
+ * @param {string} id  the select's element id
+ * @param {*} saved    the saved value, '' (Not set) or undefined when none was saved
+ * @param {*} picked    the saved pick flag; undefined for a project saved before
+ *                      the flag existed, where a non-blank value counts as a pick
+ * @returns {void}
+ */
+function restoreStep6CardTag(id, saved, picked) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const value = String(saved || '').trim().toLowerCase();
+    const known = value === '' || Array.from(el.options).some(o => o.value === value);
+    const wasPicked = (picked === undefined || picked === null) ? value !== '' : !!picked;
+    el.value = known ? value : '';
+    if (known && wasPicked) el.dataset.picked = '1'; else delete el.dataset.picked;
+}
+
+// The model card subject each recipe subject suggests; Other suggests nothing.
+const STEP6_CARD_SUBJECT_FROM_RECIPE = { coral: 'benthic', algae: 'benthic', fish: 'fish', other: '' };
+
+/**
+ * The model card subject to prefill: what the training source says when it
+ * says anything, else what the recipe subject suggests, else '' (Not set).
+ * @param {string|null} inferred  the tags route's subject, or null
+ * @param {string} recipe         the recipe subject (coral, fish, algae, other)
+ * @returns {string} 'fish', 'benthic' or ''
+ */
+function step6CardSubjectFor(inferred, recipe) {
+    if (inferred === 'fish' || inferred === 'benthic') return inferred;
+    return STEP6_CARD_SUBJECT_FROM_RECIPE[String(recipe || '').trim().toLowerCase()] || '';
+}
+
+/**
+ * Fill the two model card rows (subject, training data) from what the
+ * training source says about itself, for each row nobody has picked yet.
+ * A row the server could not infer stays blank. Guarded by a request token
+ * so a slow answer for a source that is no longer selected is dropped.
+ * @returns {Promise<void>}
+ */
+async function refreshStep6CardTags() {
+    const subjectEl = document.getElementById('s6-card-subject');
+    const sourceEl = document.getElementById('s6-card-data-source');
+    if (!subjectEl && !sourceEl) return;
+    const srcSel = document.getElementById('s6-source');
+    const src = srcSel ? (srcSel.value || '') : '';
+    const token = ++_s6CardTagsReq;
+    try {
+        const data = await api('/api/step/6/tags' + (src ? `?source=${encodeURIComponent(src)}` : ''));
+        if (token !== _s6CardTagsReq || !data) return;
+        // A refused answer (no export yet, a source outside the roots) infers
+        // nothing, but the recipe subject still prefills an unpicked row.
+        const answered = !data.error;
+        if (subjectEl && !subjectEl.dataset.picked) {
+            subjectEl.value = step6CardSubjectFor(answered ? data.subject : null, step6SubjectValue());
+        }
+        if (answered && sourceEl && data.data_source && !sourceEl.dataset.picked) sourceEl.value = data.data_source;
+    } catch (e) {
+        // The rows stay as they are; the person can still pick both.
+        const el = document.getElementById('s6-card-subject');
+        if (el && !el.dataset.picked) el.value = step6CardSubjectFor(null, step6SubjectValue());
+    }
+}
+let _s6CardTagsReq = 0;
+
+/**
  * Re-read the training data sentences: how many pictures and labels the
  * source, classes and split controls describe now, and how the split divides
  * them. Both sentences come whole from the server and are written exactly as
@@ -6317,6 +6409,11 @@ document.addEventListener('change', (e) => {
     // Step 6 box-dataset mode and class picker follow the training source
     // (H2, 2026-08-26; box-dataset sources 2026-09-05).
     if (e.target && e.target.id === 's6-source') { applyStep6BoxDatasetMode(); refreshStep6Classes(); }
+    if (e.target && e.target.id === 's6-source') refreshStep6CardTags();
+    // A person's pick on a model card row is kept when the source changes.
+    if (e.target && (e.target.id === 's6-card-subject' || e.target.id === 's6-card-data-source')) {
+        e.target.dataset.picked = '1';
+    }
     // Training data summary (2026-09-21): a ticked class updates the picker's
     // heading count and re-reads the summary; every other control the
     // summary depends on re-reads it on its own 'change'.

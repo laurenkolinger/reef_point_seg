@@ -24,6 +24,15 @@
 </div>
 <script>
 const $ = id => document.getElementById(id);
+// The initials VICARIUS passed as ?initials=XX (two to four letters), handed
+// on to the annotator; anything else is dropped.
+function passedInitials() {
+  try {
+    const raw = new URLSearchParams(window.location.search).getAll('initials');
+    const v = String(raw.length === 1 ? raw[0] : '').trim().toUpperCase();
+    return /^[A-Z]{2,4}$/.test(v) ? v : '';
+  } catch (e) { return ''; }
+}
 async function start() {
   $('err').style.display = 'none'; $('retry').style.display = 'none'; $('fill').style.width = '5%';
   let r;
@@ -35,7 +44,7 @@ async function start() {
     n++; $('fill').style.width = Math.min(95, 5 + n * 1.5) + '%';
     try {
       const s = await (await fetch('/api/annotate/status')).json();
-      if (s.healthy) { $('fill').style.width = '100%'; window.location.href = 'http://' + location.hostname + ':' + port + '/?orchestrated=1'; return; }
+      if (s.healthy) { $('fill').style.width = '100%'; const who = passedInitials(); window.location.href = 'http://' + location.hostname + ':' + port + '/?orchestrated=1' + (who ? '&initials=' + who : ''); return; }
       if (s.running === false && n > 4) return fail('The annotator exited before it became ready. Check the service log.');
     } catch (e) {}
     if (n > 240) return fail('The annotator did not become ready in time.');

@@ -46,6 +46,9 @@ def _index_dir():
     return os.path.join(repo, "supporting_data", "clip_index")
 
 
+_SUPERSEDED_DIR = "_superseded"  # holds replaced images; never part of the live tree
+
+
 def _index_path(clip_dir):
     key = hashlib.sha1(os.path.abspath(clip_dir).encode()).hexdigest()[:12]
     return os.path.join(_index_dir(), f"clip_index_{key}.json")
@@ -55,11 +58,13 @@ def _scan(clip_dir):
     """One full walk. Returns (files, dirs): files is a sorted list of
     relpaths of every non-hidden file; dirs maps every visited directory
     relpath ('' for the root) to its mtime_ns. Hidden dirs (.AppleDouble,
-    .git) and dot-files are skipped, mirroring the historical walkers."""
+    .git) and dot-files are skipped, mirroring the historical walkers. A folder named _superseded (images set
+    aside instead of deleted) is skipped as well."""
     files = []
     dirs = {}
     for root, dnames, fnames in os.walk(clip_dir):
-        dnames[:] = [d for d in dnames if not d.startswith(".")]
+        dnames[:] = [d for d in dnames
+                     if not d.startswith(".") and d != _SUPERSEDED_DIR]
         rel = os.path.relpath(root, clip_dir)
         rel = "" if rel == "." else rel
         try:

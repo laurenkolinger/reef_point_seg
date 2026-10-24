@@ -52,6 +52,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -68,6 +69,41 @@ AST = timezone(timedelta(hours=-4))
 REPO_DIR = Path(__file__).resolve().parents[2]
 INPROCESS_DIR = REPO_DIR.parent / "inprocess"
 EVALUATE_SRC = REPO_DIR / "scripts" / "TCRMPtrain_oceankindCV" / "src"
+ORCHESTRATOR_DIR = REPO_DIR / "scripts" / "pipeline_orchestrator"
+
+
+def _orchestrator_module(name: str) -> Any:
+    """Import one of VEGA's own orchestrator modules (lock_status, project_manager)."""
+    if str(ORCHESTRATOR_DIR) not in sys.path:
+        sys.path.insert(0, str(ORCHESTRATOR_DIR))
+    import importlib  # noqa: PLC0415
+    return importlib.import_module(name)
+
+
+def backend_headers() -> dict[str, str]:
+    """The header that lets this driver's calls through a module lock.
+
+    Lauren locks VEGA to keep students off the annotation tools while a
+    study runs (2026-09-28); the lock gate lets a local call carrying the
+    backend key through. The key is created on first use, owner-only.
+    """
+    lock_status = _orchestrator_module("lock_status")
+    return {lock_status.BACKEND_HEADER: lock_status.backend_token(create=True)}
+
+
+def mark_training_complete(project_dir: Path) -> None:
+    """Record a finished training in project.json with VEGA's own code.
+
+    Used only when VEGA was restarted during a training that then finished:
+    VEGA no longer holds the process, so no status poll can record it, and a
+    new project's Evaluate step would stay locked. project_manager.complete_step
+    is what VEGA itself calls on a finish (marks step 6 completed, unlocks the
+    next step, links outputs).
+    """
+    pm = _orchestrator_module("project_manager")
+    state = pm.load_project(str(project_dir))
+    if state["steps"]["6"].get("status") != "completed":
+        pm.complete_step(state, 6)
 
 VEGA_URL = "http://127.0.0.1:5050"
 DATASET_NAME = "coral_intel_t2aug"
@@ -89,6 +125,10 @@ BUSY_RETRY_SECONDS = 600
 # checks for one before each launch and waits while it runs.
 LADDER_PATTERN = "metashape|run_phase1"
 LADDER_RETRY_SECONDS = 900
+# Lauren's manual-edit workspace. An interactive Metashape window open on a
+# project there (no -r script) may stay open beside a VEGA run when she allows
+# it (--allow_manual_edit_windows, 2026-09-29); scripted runs still hold VEGA.
+MANUAL_EDIT_ROOT = "/mnt/rip/driver_staging/editbench/"
 # A person's annotator (the SAM annotators on 5080 to 5089) holding a card is
 # swept by VICARIUS's GPU right of way the moment a VEGA step claims the cards.
 # Lauren ruled on 2026-09-26 that the study waits for it to close instead.
@@ -237,10 +277,13 @@ class VegaClient:
     """A thin JSON client for the VEGA orchestrator's web API."""
 
     def __init__(self, base_url: str = VEGA_URL,
-                 opener: Callable[..., Any] = urllib.request.urlopen) -> None:
-        """Remember the base URL and the opener (swapped for a fake in tests)."""
+                 opener: Callable[..., Any] = urllib.request.urlopen,
+                 headers: Mapping[str, str] | None = None) -> None:
+        """Remember the base URL, the opener (a fake in tests) and extra headers
+        (the backend key that passes a module lock)."""
         self.base_url = base_url.rstrip("/")
         self._open = opener
+        self.headers = dict(headers or {})
 
     def call(self, method: str, path: str, body: Mapping[str, Any] | None = None
              ) -> tuple[int, dict[str, Any]]:
@@ -252,7 +295,7 @@ class VegaClient:
         data = None if body is None else json.dumps(body).encode()
         request = urllib.request.Request(
             self.base_url + path, data=data, method=method,
-            headers={"Content-Type": "application/json"})
+            headers={"Content-Type": "application/json", **self.headers})
         try:
             with self._open(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
                 return response.status, _decode(response.read())
@@ -329,20 +372,47 @@ class Progress:
         print(f"[{stamp()}] {event} {json.dumps(fields, default=str)}", flush=True)
 
 
-def ladder_blocker(runner: Callable[..., Any] = subprocess.run) -> str:
+def ladder_blocker(runner: Callable[..., Any] = subprocess.run,
+                   allowed_pids: frozenset[int] = frozenset(),
+                   allow_manual_edit: bool = False) -> str:
     """Return the command line of a running Metashape job, or '' when none runs.
 
     A Metashape reconstruction outranks every VEGA run on the GPU ladder, so no
-    arm is launched while one is alive.
+    arm is launched while one is alive. ``allowed_pids`` are Metashape
+    processes Lauren has explicitly allowed to stay open beside a run (an idle
+    manual-edit window, 2026-09-29); every other one still holds the run.
     """
     try:
         result = runner(["pgrep", "-af", LADDER_PATTERN], capture_output=True, text=True)
     except FileNotFoundError as exc:
         raise VegaError("pgrep is missing, so the GPU ladder cannot be checked; "
                         "no arm is launched without that check") from exc
-    lines = [ln for ln in (result.stdout or "").splitlines()
-             if ln.strip() and "pgrep" not in ln]
-    return lines[0] if lines else ""
+    for line in (result.stdout or "").splitlines():
+        if is_ladder_process(line, allowed_pids, allow_manual_edit):
+            return line
+    return ""
+
+
+def is_ladder_process(line: str, allowed_pids: frozenset[int] = frozenset(),
+                      allow_manual_edit: bool = False) -> bool:
+    """Whether one ``pgrep -af`` line is a real Metashape or VOYAGER run.
+
+    Only the program itself counts: a Metashape executable, or a
+    run_phase1.py script. A shell, a log viewer or this driver whose command
+    line merely contains the word (such as --allow_metashape_pid) does not;
+    on 2026-09-29 the driver held itself for half an hour that way.
+    """
+    parts = line.split()
+    if len(parts) < 2 or not parts[0].isdigit():
+        return False
+    if int(parts[0]) in allowed_pids:
+        return False
+    program = os.path.basename(parts[1]).lower()
+    if program.startswith("metashape"):
+        interactive_edit = ("-r" not in parts[2:]
+                            and any(tok.startswith(MANUAL_EDIT_ROOT) for tok in parts[2:]))
+        return not (allow_manual_edit and interactive_edit)
+    return any(os.path.basename(tok) == "run_phase1.py" for tok in parts[2:])
 
 
 def annotator_blocker(runner: Callable[..., Any] = subprocess.run) -> str:
@@ -466,13 +536,15 @@ class Driver:
                  blocker: Callable[[], str] = ladder_blocker,
                  annotators: Callable[[], str] = annotator_blocker,
                  finished: Callable[[Path], bool] = training_finished,
-                 on_change: Callable[[], None] = lambda: None) -> None:
+                 on_change: Callable[[], None] = lambda: None,
+                 complete: Callable[[Path], None] = mark_training_complete) -> None:
         """Bind the client, the project, the log, the Evaluate preset's
         settings, and the waiting functions."""
         self.client = client
         self.protocol = dict(protocol)
         self.finished = finished
         self.on_change = on_change
+        self.complete = complete
         self.previous = ""
         self.project_dir = Path(project_dir)
         self.progress = progress
@@ -611,8 +683,9 @@ class Driver:
         one of three ways: VEGA still runs it (wait on it), it ran to its end
         while the driver was down (keep it), or it died (train it afresh
         under a new run name). A run kept from disk was never marked complete
-        by VEGA; in a brand new project that leaves Evaluate locked, and the
-        arm then fails loudly at evaluation rather than being scored wrongly.
+        by VEGA, so it is recorded with VEGA's own project code
+        (mark_training_complete) before it is scored; otherwise a new
+        project's Evaluate step would stay locked.
         """
         record = self.state().get(arm["id"]) or {}
         run_name = record.get("run_name")
@@ -631,6 +704,7 @@ class Driver:
                 self.progress.write("train_resumed_wait", arm=arm["id"], run_name=run_name)
             elif self.finished(self.runs_dir / run_name):
                 trained = True
+                self.complete(self.project_dir)
                 self.remember(arm["id"], run_name, trained=True)
                 self.progress.write("train_recovered", arm=arm["id"], run_name=run_name)
         if not trained:
@@ -648,6 +722,7 @@ class Driver:
                 if not self.finished(self.runs_dir / run_name):
                     raise
                 # VEGA was restarted under a trainer that then ran to its end.
+                self.complete(self.project_dir)
                 self.progress.write("train_recovered", arm=arm["id"], run_name=run_name)
                 status = {"exit_code": 0}
             weights = self.runs_dir / run_name / "weights" / "best.pt"
@@ -943,8 +1018,9 @@ def methods_html(arms: list[Mapping[str, Any]], protocol: Mapping[str, Any],
         lt = ((lm.get("sibling_leak") or {}).get("test") or {})
         leaky_paragraph = f"""<h2>Test of the published split order</h2>
 <p>To measure how much a split made after augmentation raises the scores, we trained a fifth
-model (L0) with exactly the A0 settings on a second dataset built from the same photographs in
-the other order. We wrote {aug['variants']} Table 2 copies of every photograph, including those
+model (L0) with the A0 settings on a second dataset built from the same photographs in the other
+order. L0 trained on a single RTX 5090 with the whole batch of {base['batch']} on it, as the paper
+trained on one GPU; A0 split the batch across two cards. We wrote {aug['variants']} Table 2 copies of every photograph, including those
 that would be held out, and then split the {n(sum(v for v in lc.values() if isinstance(v, int)) or None)}
 resulting images one by one into training, validation and test (70/15/15, stratified on each
 image's rarest species, seed {aug['seed']}), giving {n(lc.get('train'))}, {n(lc.get('valid'))}
@@ -1160,6 +1236,12 @@ def main(argv: list[str] | None = None) -> int:
                              "(default: this project, for the main study)")
     parser.add_argument("--after_pid", type=int, default=0,
                         help="wait until this process has exited before starting")
+    parser.add_argument("--allow_metashape_pid", type=int, action="append", default=[],
+                        help="a Metashape process Lauren has allowed to stay open beside "
+                             "this run; may be given more than once")
+    parser.add_argument("--allow_manual_edit_windows", action="store_true",
+                        help="let interactive Metashape windows on the manual-edit workspace "
+                             "stay open beside this run (scripted runs still hold it)")
     parser.add_argument("--vega_url", default=VEGA_URL)
     parser.add_argument("--arms", default="",
                         help="comma-separated arm ids to run (default: all, in order)")
@@ -1182,7 +1264,7 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
 
-    client = VegaClient(args.vega_url)
+    client = VegaClient(args.vega_url, headers=backend_headers())
     if args.after_pid:
         wait_for_pid(args.after_pid, Progress(Path(args.share_project or args.project_dir or ".")
                                               / STUDY_DIRNAME / f"{args.study}_queue.jsonl"))
@@ -1202,7 +1284,13 @@ def main(argv: list[str] | None = None) -> int:
                 "arms": arms, "written": ast_now().isoformat()})
     print("Step 1 complete: design resolved and project ready", flush=True)
 
+    allowed = frozenset(args.allow_metashape_pid)
+    if allowed or args.allow_manual_edit_windows:
+        progress.write("ladder_override", allowed_metashape_pids=sorted(allowed),
+                       manual_edit_windows=args.allow_manual_edit_windows, by="LO")
     driver = Driver(client, project_dir, progress, protocol,
+                    blocker=lambda: ladder_blocker(allowed_pids=allowed,
+                                                   allow_manual_edit=args.allow_manual_edit_windows),
                     on_change=lambda: refresh_share(share_project, progress))
     refresh_share(share_project, progress)
     results = run_all(driver, arms, wanted, progress, project_dir)

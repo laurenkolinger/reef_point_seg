@@ -25,6 +25,7 @@ from flask import (
 import lock_status
 import project_manager as pm
 import host_open
+import model_card_hook
 import remap_loader
 import vicarius_bridge as vic
 from stage_runner import StageRunner, busy_result, find_free_port
@@ -82,6 +83,7 @@ from _reefreview.training_projects import (
 # flag (screened_by_stem) and prior_screening.json for the combined
 # annotator, refreshed before every launch (write_prior_screening).
 from _reefreview import screening as _screening
+import _superseded as _sup
 
 # ---------------------------------------------------------------------------
 # Asset cache-bust + user-facing step numbering
@@ -89,7 +91,7 @@ from _reefreview import screening as _screening
 # One bump point for both /static assets. The template renders it into the
 # style.css AND orchestrator.js query strings, so a release only has to change
 # this string once.
-ASSET_VERSION = "20260921-start"
+ASSET_VERSION = "20261017-cardrows"
 
 # Internal step key -> the number the sidebar shows. The chain slots 4 and 5
 # were archived when the combined annotator (route key step4test) took over
@@ -1254,21 +1256,303 @@ def _resolve_routing_clip_dir(step4test_cfg, s4cfg):
     return LOCAL_CLIP_DIR
 
 
+# The flat folder under routed_input/ that holds the images themselves. Every
+# all_images link and every segmentations entry's image_path_abs points into
+# it, so nothing that clears a route may remove it (incident 2026-10-05: 556
+# annotated frames lost their images to a re-route that did).
+ROUTED_RAW_DIR_NAME = "raw"
+
+# Where a project's annotation record lives, relative to its 4.test export dir.
+SEGMENTATIONS_REL_PATH = ("segmentations", "segmentations.json")
+
+# The token a reset request must carry when the annotation record cannot be
+# read, so the count it would otherwise name is unknown.
+UNKNOWN_COUNT_TOKEN = "unknown"
+
+
+def annotation_record_paths(export_dir, include_step5=True):
+    """The segmentations.json files that hold a project's annotation work.
+
+    The 4.test export (shared with the Refine loop) is one record. Step 5
+    (Segment Images) keeps one per year under step5_segmentImages/segmentations,
+    a sibling of the export directory, and counts too unless include_step5 is
+    false.
+
+    Parameters:
+        export_dir: the project's step4test_combinedAnnotate directory.
+        include_step5: also list Step 5's per-year records.
+    Returns:
+        list of paths that exist (a dangling link counts as existing so that it
+        reads as unknown, not as absent).
+    """
+    paths = [os.path.join(export_dir, *SEGMENTATIONS_REL_PATH)]
+    if include_step5:
+        step5 = os.path.join(os.path.dirname(export_dir.rstrip(os.sep)),
+                             pm.STEP_DIRS["5"], SEGMENTATIONS_REL_PATH[0])
+        paths.append(os.path.join(step5, SEGMENTATIONS_REL_PATH[1]))
+        paths += sorted(glob.glob(os.path.join(step5, "*", SEGMENTATIONS_REL_PATH[1])))
+    return [p for p in paths
+            if os.path.lexists(p)
+            and not _sup.is_superseded_path(p, root=os.path.dirname(export_dir.rstrip(os.sep)))]
+
+
+def _read_annotation_record(path):
+    """The entries of one segmentations.json, or None when unreadable or misshapen."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        vic.note(f"[orch] annotation record unreadable, count unknown: {path}: {exc}")
+        return None
+    if not isinstance(data, dict) or not all(isinstance(v, dict) for v in data.values()):
+        vic.note(f"[orch] annotation record has an unexpected shape, count unknown: {path}")
+        return None
+    return data
+
+
+def count_annotated_frames(export_dir, include_step5=True):
+    """Count the frames a project's reviewers have already worked on.
+
+    Reads the records named by annotation_record_paths, read only. A frame is
+    annotated when its entry is marked reviewed or exported, and exported when
+    marked exported; only a literal true counts. A frame name present in more
+    than one record is counted once.
+
+    A missing file means no frame was ever saved, so both counts are zero. A
+    file that exists but cannot be read, parsed, or does not hold an object of
+    objects is UNKNOWN and returns None: a guard must treat unknown as
+    blocked, never as zero, because zero would let a re-run delete the images
+    of annotations it could not see.
+
+    Parameters:
+        export_dir: the project's step4test_combinedAnnotate directory; ""
+            (no project) counts as zero.
+        include_step5: count Step 5's per-year records as well (the default).
+    Returns:
+        {"annotated": int, "exported": int}, or None when unknown.
+    Example: count_annotated_frames(d) -> {"annotated": 691, "exported": 556}
+    """
+    if not export_dir:
+        return {"annotated": 0, "exported": 0}
+    annotated, exported = set(), set()
+    for path in annotation_record_paths(export_dir, include_step5):
+        data = _read_annotation_record(path)
+        if data is None:
+            return None
+        for name, entry in data.items():
+            if entry.get("exported") is True:
+                exported.add(name)
+            if entry.get("reviewed") is True or entry.get("exported") is True:
+                annotated.add(name)
+    return {"annotated": len(annotated), "exported": len(exported)}
+
+
+def prune_unreferenced_raw(routed_dir, export_dir):
+    """Move aside every routed_input/raw image no annotation record names.
+
+    A re-route must write its images fresh: Place Points and the flatten step
+    skip a name that already exists, so an old image would stay paired with
+    click points rescaled for another resolution (Low res only toggled). An
+    image is kept when any record entry names it, by key or by image_path.
+    Call only when count_annotated_frames is zero; an unreadable record
+    moves nothing. Images are never deleted: each goes to
+    <export_dir>/_superseded/<stamp>/routed_input/raw/.
+
+    Parameters:
+        routed_dir: the project's routed_input directory.
+        export_dir: the project's step4test_combinedAnnotate directory.
+    Returns:
+        int: files moved aside.
+    """
+    raw = os.path.join(routed_dir, ROUTED_RAW_DIR_NAME)
+    if not os.path.isdir(raw):
+        return 0
+    named = set()
+    for path in annotation_record_paths(export_dir):
+        data = _read_annotation_record(path)
+        if data is None:
+            return 0
+        for name, entry in data.items():
+            named.add(os.path.basename(str(name)))
+            for key in ("image_path", "image_path_abs"):
+                if entry.get(key):
+                    named.add(os.path.basename(str(entry[key])))
+    moved = 0
+    stamp = _sup.stamp_now()
+    base = os.path.dirname(os.path.abspath(routed_dir))
+    for fname in sorted(os.listdir(raw)):
+        fpath = os.path.join(raw, fname)
+        if fname in named or not (os.path.isfile(fpath) or os.path.islink(fpath)):
+            continue
+        _sup.supersede(fpath, base_dir=base, stamp=stamp, log=lambda m: None)
+        moved += 1
+    if moved:
+        vic.note(f"[orch] moved {moved} unused routed image(s) to {base}/{_sup.SUPERSEDED_DIR_NAME}/{stamp}")
+    return moved
+
+
+_START_NEW_PROJECT = "Start a new project instead."
+RUN_CONSEQUENCE_IMAGES = "Re-running it would change which images the annotations point to."
+RUN_CONSEQUENCE_POINTS = ("Re-running it would change the point and label files "
+                          "the annotations were made from.")
+
+
+def step3_block_message(export_dir, step_label, consequence=RUN_CONSEQUENCE_IMAGES):
+    """The sentence that refuses a Step 1, 2 or 3 run, or None when it may go.
+
+    Parameters:
+        export_dir: the project's 4.test export directory.
+        step_label: the user-facing name of the step.
+        consequence: the sentence saying what the re-run would change.
+    Returns:
+        A plain sentence naming the annotated count (or saying the record
+        could not be read), or None when no frame is annotated.
+    """
+    counts = count_annotated_frames(export_dir)
+    if counts is None:
+        return (f"{step_label} is locked: this project's annotation record could not be "
+                f"read, so VEGA cannot tell whether frames are annotated. "
+                f"{consequence} {_START_NEW_PROJECT}")
+    n = counts["annotated"]
+    if n == 0:
+        return None
+    return (f"{step_label} is locked: {n} frames in this project are already annotated. "
+            f"{consequence} {_START_NEW_PROJECT}")
+
+
+def reroute_block_reason(export_dir):
+    """Why Open must not re-route this project, or None when it may.
+
+    A re-route rebuilds the click prompts from Step 3's selection. On a
+    project with annotated frames, or one whose annotation record cannot be
+    read, the annotator opens on the existing routing instead.
+
+    Parameters:
+        export_dir: the project's 4.test export directory.
+    Returns:
+        A plain sentence for the run log, or None.
+    """
+    counts = count_annotated_frames(export_dir)
+    if counts is None:
+        return ("Kept the existing routing: the annotation record could not be read, "
+                "so VEGA cannot tell whether frames are annotated.")
+    if counts["annotated"] == 0:
+        return None
+    return (f"Kept the existing routing: {counts['annotated']} frames in this project are "
+            f"already annotated, so the selection that changed after the last route was not applied.")
+
+
+# The chain steps whose reset removes files that annotation records point at:
+# Make All Points, Recode Species and Choose Images (and everything after).
+ANNOTATION_ANCHOR_STEPS = (1, 2, 3)
+
+
+def reset_anchor_block_message(step, export_dir, step_label):
+    """The sentence that refuses a reset of step 1, 2 or 3, or None when it may go.
+
+    Those resets delete the selection and point files the annotations were made
+    from, and Choose Images then refuses to run again on an annotated project,
+    so the project would be stranded. Steps 4 to 8 are not covered.
+
+    Parameters:
+        step: the internal step number being reset.
+        export_dir: the project's 4.test export directory.
+        step_label: the user-facing name of that step.
+    Returns:
+        A plain sentence naming the annotated count (or saying the record
+        could not be read), or None.
+    """
+    if step not in ANNOTATION_ANCHOR_STEPS:
+        return None
+    counts = count_annotated_frames(export_dir)
+    if counts is None:
+        return (f"{step_label} cannot be reset: this project's annotation record could not "
+                f"be read, so VEGA cannot tell whether frames are annotated. Annotation "
+                f"records point at this step's files. Start a new project instead.")
+    if counts["annotated"] == 0:
+        return None
+    return (f"{step_label} cannot be reset: {counts['annotated']} frames in this project are "
+            f"already annotated, and their records point at this step's files. "
+            f"Start a new project instead.")
+
+
+def route_refusal_message(export_dir):
+    """Why Open cannot build a new routing for this project, or None when it may.
+
+    Used when no saved click points exist to open on: a project with annotated
+    frames, or an unreadable record, is never routed again from scratch.
+    """
+    counts = count_annotated_frames(export_dir)
+    if counts is None:
+        return ("Open cannot route this project again: its annotation record could not be "
+                "read, and there are no saved click points to open on. Start a new project instead.")
+    if counts["annotated"] == 0:
+        return None
+    return (f"Open cannot route this project again: {counts['annotated']} frames are already "
+            f"annotated and there are no saved click points to open on. Start a new project instead.")
+
+
+def reset_export_refusal(counts, confirm):
+    """The 409 body that stops a 4.test reset from deleting annotated frames, or None.
+
+    A reset deletes the whole export, so while any frame is reviewed or
+    exported the request must carry confirm_exported equal to that count (the
+    string "unknown" when the record could not be read). Booleans never match.
+
+    Parameters:
+        counts: the result of count_annotated_frames for the 4.test record.
+        confirm: the request's confirm_exported value, any type.
+    Returns:
+        A dict with error, annotated_count and confirm_token, or None when the
+        reset may proceed.
+    """
+    if counts is None:
+        token, count = UNKNOWN_COUNT_TOKEN, None
+    elif counts["annotated"] == 0:
+        return None
+    else:
+        count = counts["annotated"]
+        token = str(count)
+    given = None
+    if isinstance(confirm, (int, str)) and not isinstance(confirm, bool):
+        given = str(confirm).strip()
+    if given == token:
+        return None
+    if counts is None:
+        error = ("Reset refused: this project's annotation record could not be read, so "
+                 "VEGA cannot tell how many frames are reviewed or exported. Resetting "
+                 "deletes them and every image they point to.")
+    else:
+        error = (f"Reset refused: {count} frames in this project are already reviewed or "
+                 f"exported. Resetting deletes them and every image they point to. "
+                 f"Confirm again to delete them.")
+    return {"error": error, "annotated_count": count, "confirm_token": token}
+
+
 def _clear_routed_input(routed_dir):
-    """Remove every routed_input/<year>/ subtree so a fresh route starts clean.
+    """Remove the routing subfolders of routed_input/ so a fresh route starts clean.
     A prior route leaves sam_click_prompts.json on disk; reusing it after the
     Step 3 selection changed leaks the old run's frames into the annotator
-    regardless of the current species filter. Returns the number of year-dirs
-    removed; no-op (0) if routed_dir is absent/empty.
+    regardless of the current species filter. The images folder
+    (ROUTED_RAW_DIR_NAME) is never touched under any caller: annotations point
+    into it, and a re-route adds its new images beside the old. A subfolder
+    that holds an image is moved to <export>/_superseded/<stamp>/routed_input
+    instead of being removed; one with none (prompts, caches) is removed.
+    Returns the number of subfolders cleared; no-op (0) if routed_dir is
+    absent/empty.
     """
     import shutil as _shutil
     if not routed_dir or not os.path.isdir(routed_dir):
         return 0
     n = 0
+    stamp = _sup.stamp_now()
+    base = os.path.dirname(os.path.abspath(routed_dir))
     for entry in sorted(os.listdir(routed_dir)):
+        if entry == ROUTED_RAW_DIR_NAME:
+            continue
         p = os.path.join(routed_dir, entry)
         if os.path.isdir(p):
-            _shutil.rmtree(p, ignore_errors=True)
+            _sup.supersede_if_images(p, base_dir=base, stamp=stamp, log=lambda m: None)
             n += 1
     return n
 
@@ -1337,6 +1621,9 @@ def _flatten_routed_input(routed_dir):
         json.dump(merged, f, indent=1)
 
     collisions = 0
+    pts_moved = 0
+    stamp = _sup.stamp_now()
+    export_base = os.path.dirname(os.path.abspath(routed_dir))
     for year_dir in year_dirs:
         raw_dir = os.path.join(year_dir, "raw")
         if os.path.isdir(raw_dir):
@@ -1346,12 +1633,29 @@ def _flatten_routed_input(routed_dir):
                     collisions += 1
                     continue
                 _shutil.move(os.path.join(raw_dir, name), dst)
-        _shutil.rmtree(year_dir, ignore_errors=True)  # drops test_pts + emptied ids/raw
+        # test_pts/ holds the overlays the router drew, one per frame. They are
+        # images, so they are moved, all of a pass into one folder named
+        # _superseded/<stamp>/routed_test_pts/ that is easy to clear by hand.
+        pts_dir = os.path.join(year_dir, "test_pts")
+        if os.path.isdir(pts_dir):
+            for name in sorted(os.listdir(pts_dir)):
+                src = os.path.join(pts_dir, name)
+                if os.path.isfile(src):
+                    _sup.supersede(src, base_dir=export_base, stamp=stamp, log=lambda m: None,
+                                   rel_name=f"routed_test_pts/{os.path.basename(year_dir)}/{name}")
+                    pts_moved += 1
+        # A colliding image stays in year_dir/raw, so a year folder with any
+        # image or unknown file left is moved aside whole; one with none (ids/
+        # and emptied folders) is removed.
+        _sup.supersede_if_images(year_dir, base_dir=export_base, stamp=stamp, log=lambda m: None)
 
     if collisions:
-        print(f"[flatten] WARNING: {collisions} raw filename collision(s) skipped")
+        print(f"[flatten] WARNING: {collisions} raw filename collision(s) set aside")
+    if pts_moved:
+        print(f"[flatten] {pts_moved} test-point overlay(s) moved to "
+              f"{export_base}/{_sup.SUPERSEDED_DIR_NAME}/{stamp}/routed_test_pts")
     return {"merged": len(merged), "collisions": collisions,
-            "year_dirs_removed": len(year_dirs)}
+            "year_dirs_removed": len(year_dirs), "test_pts_moved": pts_moved}
 
 
 def _sam3_set(**kw):
@@ -4046,6 +4350,7 @@ def _record_step_for_owner(step, launch, succeeded, exit_code):
             _vic_end_step(step, "success", state=owner)
             pm.complete_step(owner, step)
             _stamp_finished_training_run(owner, step, st)
+            _write_finished_train_card(owner, step, st)
         else:
             _vic_end_step(step, "failed", notes=f"exit_code={exit_code}", state=owner)
             st["status"] = "error"
@@ -4084,6 +4389,55 @@ def _stamp_finished_training_run(owner, step, step_state):
         _labruns.record_split_fingerprint(run_dir, source=_labruns.SPLIT_RECORD_SOURCE_TRAINING)
     except (OSError, ValueError) as exc:
         vic.note(f"[orch] could not stamp the split of {run_dir}: {exc}")
+
+
+def _log_train_card_line(step, line):
+    """Put one model card line in the step's log and the VICARIUS notes.
+
+    Parameters:
+        step: the step key whose log shows the line.
+        line: the sentence to record.
+    Returns:
+        None. The runner's capped log deque takes the line, so the Train
+        panel's log shows it beside the trainer's own output.
+    """
+    vic.note(line)
+    key = int(step)
+    log = runner.logs.get(key)
+    if log is not None:
+        log.append(line)
+        runner.log_totals[key] = runner.log_totals.get(key, 0) + 1
+
+
+def _write_finished_train_card(owner, step, step_state):
+    """Write the model card beside a just-finished Train run's best.pt.
+
+    Parameters:
+        owner: the project record that owns the run.
+        step: the step that finished.
+        step_state: that step's record (dir and config).
+    Returns:
+        None. Only a finished Train step (internal step 6) gets a card. A card
+        problem is recorded as one line in the step log and never fails the
+        completion, which is already on disk.
+    """
+    if str(step) != "6":
+        return
+    config = (step_state or {}).get("config") or {}
+    run_name = str(config.get("run_name") or "").strip()
+    step_dir = str((step_state or {}).get("dir") or "")
+    if not run_name or not step_dir:
+        return
+    run_dir = os.path.join(step_dir, "runs", run_name)
+    initials = pm.initials_for_state(owner)
+    try:
+        model_card_hook.write_train_card(
+            run_dir, config, initials, log=lambda line: _log_train_card_line(step, line))
+    except Exception as exc:  # the hook reports its own failures; this guards anything it missed
+        try:
+            _log_train_card_line(step, f"[model_card] card for {run_dir} failed: {exc}")
+        except Exception as log_exc:  # nothing from the card path may escape the step status
+            print(f"[model_card] card for {run_dir} failed ({exc}) and the log line failed: {log_exc}")
 
 
 def _undo_refused_launch(step, refusal, prior):
@@ -4347,7 +4701,8 @@ def _expertids_paths():
         # Prefer 4.test only when it actually HOLDS segmentation data (an empty /
         # aborted-routing step4test/segmentations/ dir must not shadow a real
         # Step-5 export). Matches importer._iter_segmentation_files' access pattern.
-        if d4 and glob.glob(os.path.join(d4, "segmentations", "*", "segmentations.json")):
+        if d4 and [g for g in glob.glob(os.path.join(d4, "segmentations", "*", "segmentations.json"))
+                   if not _sup.is_superseded_path(g, root=d4)]:
             export_dir = d4
         else:
             export_dir = current_project["steps"].get("5", {}).get("dir", "") or ""
@@ -4486,6 +4841,10 @@ def create_app():
         if not lock_status.is_locked():
             return None
         if request.path.startswith("/static/"):
+            return None
+        # A headless training study Lauren started keeps running while the
+        # module is locked to people (lock_status.is_backend_request).
+        if lock_status.is_backend_request(request.headers, request.remote_addr):
             return None
         # A person navigating to any page of this module gets the page the
         # platform contract names, whether that page is the main window or
@@ -4773,6 +5132,16 @@ def create_app():
         if st["status"] == "locked":
             return jsonify({"error": f"Step {step} is locked"}), 400
 
+        # Choosing images again on a project with annotated frames would change
+        # which images those annotations point to, so it is refused before
+        # anything is stamped or started.
+        if step in ANNOTATION_ANCHOR_STEPS:
+            blocked = step3_block_message(
+                _step4test_export_dir(), step_ref(step),
+                RUN_CONSEQUENCE_IMAGES if step == 3 else RUN_CONSEQUENCE_POINTS)
+            if blocked:
+                return jsonify({"error": blocked}), HTTP_CONFLICT
+
         cfg = st["config"]
         step_dir = st["dir"]
         os.makedirs(step_dir, exist_ok=True)
@@ -4984,6 +5353,14 @@ def create_app():
         prior_screening_path = _write_prior_screening_input(step_dir)
         if prior_screening_path:
             cmd += ["--prior-screening", prior_screening_path]
+
+        # The project's own species recode (step 2 remap_log.json), so the
+        # pre-2020 points are remapped the way the rest of the project is. When
+        # the project has none, no flag is passed and Step 3 logs that no
+        # remap was applied.
+        remap_log = _get_remap_log_path()
+        if remap_log:
+            cmd += ["--remap-log", remap_log]
 
         env_extra = {"TCRMP_OUTPUT_DIR": step_dir}
         return runner.run_cli_stage(step, cmd, cwd=WORKING_DIRS[3], env_extra=env_extra)
@@ -5417,10 +5794,19 @@ def create_app():
         # run's frames into segmentation. Clear them and re-route. Otherwise
         # open instantly.
         want_lores = bool((step4test_cfg or {}).get("lores_mode", True))
+        # An annotated project (or one whose record cannot be read) is never
+        # re-routed: the annotator opens on the existing routing and a stale
+        # selection is reported, not acted on.
+        keep_reason = reroute_block_reason(_step4test_export_dir())
         if not force_reroute and _routed_prompts_exist(routed_dir):
             cached_lores = _routed_lores_mode(routed_dir)
             lores_changed = cached_lores is not None and cached_lores != want_lores
-            if _routed_prompts_stale(routed_dir, selected_frames) or lores_changed:
+            needs_reroute = _routed_prompts_stale(routed_dir, selected_frames) or lores_changed
+            if needs_reroute and keep_reason:
+                vic.note(f"[orch] WARNING Open did not re-route: {keep_reason}")
+                _route_set(warnings=[keep_reason])
+                needs_reroute = False
+            if needs_reroute:
                 cleared = _clear_routed_input(routed_dir)
                 _reason = ("Low-res setting changed since last route; "
                            if lores_changed
@@ -5448,6 +5834,14 @@ def create_app():
                 _route_set(phase="route_ready", processed=0, total=0, error=None,
                            message="Reusing routed images. Launching combined annotator...")
                 return _launch_step4test_ui()
+
+        # A route is about to run (no saved prompts, a forced re-route, or a
+        # stale cache cleared above). It never runs on an annotated project or
+        # one whose record cannot be read, and on any other project the old
+        # images are removed first so the new ones are written fresh.
+        if keep_reason:
+            return {"error": route_refusal_message(_step4test_export_dir())}
+        prune_unreferenced_raw(routed_dir, _step4test_export_dir())
 
         # Build the Step-3 routing env exactly like _run_step4, but exporting
         # into routed_dir (placePoints writes prompts under {routed_dir}/{year}/ids/).
@@ -6754,6 +7148,11 @@ def create_app():
         if refused is not None:
             return refused
 
+        blocked = step3_block_message(_step4test_export_dir(), step_ref(1),
+                                      RUN_CONSEQUENCE_POINTS)
+        if blocked:
+            return jsonify({"error": blocked}), HTTP_CONFLICT
+
         data = request.get_json(force=True)
         ap_path = data.get("all_points", "").strip()
         mc_path = data.get("master_codes", "").strip()
@@ -6907,6 +7306,7 @@ def create_app():
                         return jsonify(status)
                     _vic_end_step(step, "success")
                     pm.complete_step(current_project, step)
+                    _write_finished_train_card(current_project, step, st)
                     status["completed"] = True
                     if step == 3:
                         # select_images.py writes output/selection_summary.json
@@ -7018,6 +7418,9 @@ def create_app():
             refused = _refuse_for_composite()
             if refused is not None:
                 return refused
+        blocked = reset_anchor_block_message(step, _step4test_export_dir(), step_ref(step))
+        if blocked:
+            return jsonify({"error": blocked}), HTTP_CONFLICT
         last = int(pm.STEP_KEYS[-1])
         # COMPOSITE_TRAIN_STEP is the Train step's internal key: the one step
         # whose folder a long-running process writes into for hours.
@@ -7077,6 +7480,11 @@ def create_app():
         """Auto-apply remaps without launching interactive UI."""
         if current_project is None:
             return jsonify({"error": "No project loaded"}), 400
+
+        blocked = step3_block_message(_step4test_export_dir(), step_ref(2),
+                                      RUN_CONSEQUENCE_POINTS)
+        if blocked:
+            return jsonify({"error": blocked}), HTTP_CONFLICT
 
         data = request.get_json(force=True)
         remap_log_path, err, status = _read_path_inside_module(data.get("remap_log_path"), "a remap log")
@@ -7730,6 +8138,30 @@ def create_app():
             },
             "warnings": warnings,
         })
+
+    @app.route("/api/step/6/tags")
+    def step6_tags():
+        """The finding tags the Train form pre-fills for a training source.
+
+        Query:
+          source   blank for the open project's own export, else a path
+                   _step6_summary_resolve_source accepts (the rules the
+                   source picker and Start Training apply).
+
+        Returns 200 {ok, source, subject, data_source}: subject is fish,
+        benthic or null; data_source is tcrmp, other or null. Null means no
+        rule applied and the form leaves the row for a person.
+
+        Returns 400 {error} for no project, a missing folder, or a source
+        outside the allowed roots. Never writes.
+        """
+        if current_project is None:
+            return jsonify({"error": "No project loaded"}), HTTP_BAD_REQUEST
+        path, _kind, _name, err = _step6_summary_resolve_source(request.args.get("source"))
+        if err:
+            return jsonify({"error": err}), HTTP_BAD_REQUEST
+        tags = model_card_hook.infer_tags({}, path)
+        return jsonify({"ok": True, "source": path, **tags})
 
     @app.route("/api/step/6/list_runs")
     def step6_list_runs():
@@ -8423,6 +8855,14 @@ def create_app():
             ok, reason = _flush_annotator(port)
             if not ok:
                 vic.note(f"[orch] annotator flush failed on port {port} before reset: {reason}")
+        # Exported frames are the project's finished work: the reset deletes the
+        # whole export, so it names the count and waits for the same count back.
+        body = request.get_json(silent=True)
+        confirm = body.get("confirm_exported") if isinstance(body, dict) else None
+        refusal = reset_export_refusal(
+            count_annotated_frames(_step4test_export_dir(), include_step5=False), confirm)
+        if refusal is not None:
+            return jsonify(refusal), HTTP_CONFLICT
         runner.kill("step4test")
         runner.kill("step4test_route")
         # Both sides resolved: an export dir that is a symlink OUT of the
@@ -8434,9 +8874,12 @@ def create_app():
         # Guardrail: the target must live strictly under the project dir.
         if not out_dir.startswith(project_dir + os.sep):
             return jsonify({"error": "path outside project"}), 403
+        # Nothing is deleted: the whole annotation folder (images, labels,
+        # segmentations) is moved to <project>/_superseded/<stamp>/.
         try:
             if os.path.isdir(out_dir):
-                shutil.rmtree(out_dir)
+                kept = _sup.supersede(out_dir, base_dir=project_dir)
+                vic.note(f"[orch] step4test reset moved the annotation folder to {kept}")
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
         # Reset transient state so the panel reflects a clean slate.

@@ -237,18 +237,54 @@ body::after {
 /* ── REVIEW SCREEN ── */
 #review { flex-direction: column; }
 
+/* Two stacked rows, the layout combinedAnnotate has used since 2026-09-27:
+   row 1 (.topbar-row1) holds every control; row 2 is #status-text alone. The
+   status message used to share the controls' wrapping row, so a long one
+   pushed that row onto a second line and moved the canvas down, then back up
+   when it cleared. flex-direction: column stacks the two rows so neither can
+   reflow the other. */
 .review-topbar {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; flex-direction: column; gap: 4px;
   padding: 6px 14px; background: var(--bg-deep); border-bottom: 1px solid var(--border);
-  /* Was a hard 40px no-wrap row: at 1280 and below the batch counter,
-     "Unlabeled only" and the frame timer overlapped and Pause clipped off the
-     right edge. Same rule the Edit toolbar uses: wrap to a second row. */
-  min-height: 40px; flex-wrap: wrap; row-gap: 6px;
   user-select: none; flex-shrink: 0;
 }
-.review-topbar > * { flex-shrink: 0; white-space: nowrap; }
-.review-topbar #image-filename { flex-shrink: 1; min-width: 0; }
-#frame-timer { margin-left: auto; }
+/* Wraps to a second line when the window is narrow (the Edit toolbar's
+   rule). Every item whose text changes during a session holds a fixed slot,
+   so how many lines the row takes depends on the window width alone. */
+.topbar-row1 {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; row-gap: 6px;
+  min-height: 28px;
+}
+.topbar-row1 > * { flex-shrink: 0; white-space: nowrap; }
+/* The frame name takes the room left on its line. Its basis is its floor
+   width, never its text, so a long name cannot wrap the row, and the floor
+   holds a real TCRMP frame name (32 characters), so the name wraps with the
+   timer instead of being cut; its title carries it whole (selectImage). */
+.review-topbar #image-filename {
+  flex: 1 1 33ch; min-width: 33ch; max-width: 44ch;
+  overflow: hidden; text-overflow: ellipsis;
+}
+/* Sized for a typical "Batch 2/5 (51-100 of 230)"; a longer reading
+   ellipses and its title carries it whole (loadReviewBatch). */
+.review-topbar #batch-info { width: 26ch; overflow: hidden; text-overflow: ellipsis; }
+/* Wide enough for "Next unlabeled (999)", so the button keeps one width as
+   the count comes and goes, with its label centred either way. */
+#btn-next-unlabeled { min-width: 26ch; }
+/* The timer and Pause travel together at the line's end, and the timer
+   holds one width whatever it reads; the session average is on its title. */
+.timer-pause-group { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+#frame-timer {
+  width: 22ch; text-align: right; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums;
+}
+/* One fixed height whether the message is empty or full, so the row never
+   appears or disappears as setStatus fires and clears. A message too long
+   for the row ellipses; setStatus and setConflictStatus put the full text on
+   its title. */
+.review-topbar #status-text {
+  height: 1.5em; line-height: 1.5em; max-height: 20px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .review-topbar h1 {
   font-size: 14px; font-family: 'Syne', sans-serif;
   color: var(--pink); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;
@@ -281,7 +317,9 @@ body::after {
 .btn.primary { background: var(--magenta); border-color: var(--magenta); color: #fff; }
 .btn.primary:hover { background: var(--pink); border-color: var(--pink); color: var(--bg); }
 .btn.active { background: var(--surface-light); border-color: var(--success); color: var(--success); }
-.spacer { flex: 1; }
+/* A control that cannot be used shows no pointer and no hover. */
+.btn:disabled { cursor: default; opacity: 0.45; }
+.btn:disabled:hover { border-color: var(--border); color: var(--text); }
 .img-counter {
   font-size: 14px; font-weight: 700; color: var(--pink);
   min-width: 80px; text-align: center;
@@ -831,6 +869,7 @@ body::after {
 <!-- ════════════ REVIEW ════════════ -->
 <div class="screen" id="review">
   <div class="review-topbar">
+    <div class="topbar-row1">
     <h1>Edit Masks</h1>
     <label class="reviewer-field"
            title="Your initials, 1 to 4 letters, so every mask you accept is credited to you. They are stamped on the mask, the label ledger and the cross-project registry. Accepting a mask is refused while this is empty.">
@@ -852,19 +891,22 @@ body::after {
            title="Filter frame navigation (Prev/Next/counter) to only frames that still have an unlabeled mask (species not yet assigned, accepted or pending). Untick to navigate every frame again.">
       <input type="checkbox" id="chk-unlabeled-only" onchange="toggleUnlabeledOnly(this.checked)"> Unlabeled only
     </label>
-    <button class="btn" onclick="jumpNextUnlabeled()"
+    <button class="btn" id="btn-next-unlabeled" onclick="jumpNextUnlabeled()"
             title="Jump to the next frame in this batch that has an unlabeled mask (species not yet assigned). Useful for finding masks accepted before the species guard, or a hand-added mask still missing a label.">
       Next unlabeled <span id="unlabeled-count" style="color:var(--text-dim)"></span>
     </button>
-    <span id="image-filename" style="color:var(--success); font-family:'Space Mono',monospace; font-size:13px; margin-left:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:500px;"></span>
-    <span id="bg-processing-badge" style="font-size:10px; color:var(--bg); background:var(--success); padding:3px 8px; border-radius:var(--radius); display:none; font-family:'Space Mono',monospace; letter-spacing:0.08em; text-transform:uppercase; font-weight:700;">Processing...</span>
-    <span class="spacer"></span>
-    <span id="frame-timer"
-          style="font-family:'Space Mono',monospace; font-size:12px; color:var(--text-dim); margin-right:8px"
-          title="This frame: target 15.0s. Average is the rolling mean for this session.">:</span>
-    <button class="btn" id="frame-timer-pause"
-            onclick="_timerTogglePause()" title="Pause / resume the timer (P)"
-            style="padding:4px 10px;font-size:11px;margin-right:8px">Pause</button>
+    <span id="image-filename" style="color:var(--success); font-family:'Space Mono',monospace; font-size:13px; margin-left:4px;"></span>
+    <span class="timer-pause-group">
+      <!-- Empty until a frame has a reading (_timerRender): a placeholder
+           glyph with nothing to show reads as a rendering defect. -->
+      <span id="frame-timer"
+            style="font-family:'Space Mono',monospace; font-size:12px; color:var(--text-dim);"
+            title="This frame: target 15.0s. Average is the rolling mean for this session."></span>
+      <button class="btn" id="frame-timer-pause" disabled
+              onclick="_timerTogglePause()" title="Pause / resume the timer (P)"
+              style="padding:4px 10px;font-size:11px">Pause</button>
+    </span>
+    </div>
     <span class="status" id="status-text"></span>
   </div>
   <div class="toolbar-bar">
@@ -921,6 +963,9 @@ body::after {
   <div class="review-body">
     <div class="canvas-wrap" id="canvas-wrap">
       <canvas id="canvas"></canvas>
+      <!-- On the canvas corner, not in the top bar: shown or hidden it never
+           moves anything (visibility, not display, as in combinedAnnotate). -->
+      <span id="bg-processing-badge" style="position:absolute; top:8px; right:8px; z-index:5; pointer-events:none; font-size:10px; color:var(--bg); background:var(--success); padding:3px 8px; border-radius:var(--radius); visibility:hidden; white-space:nowrap; font-family:'Space Mono',monospace; letter-spacing:0.08em; text-transform:uppercase; font-weight:700;">Processing...</span>
       <div id="box-overlay"></div>
       <div id="loupe"><canvas id="loupe-canvas" width="180" height="180"></canvas></div>
       <div id="lockin-hint" class="lockin-hint" style="display:none"
@@ -1215,12 +1260,20 @@ function isReviewMask(m) { return !!(m && (m.review === true || m.species === 'R
 // source of truth and refuses the actual mutation regardless of this.
 function isExpertLocked(m) {
   if (!m) return false;
-  if (m.review === true) return true;
+  if (pyTruthy(m.review)) return true;
   if (m.species === 'REVIEW') return true;
-  if (m.expert_id && typeof m.expert_id === 'object') return true;
-  if (m.review_uid) return true;
-  if (Array.isArray(m.reviews) && m.reviews.length > 0) return true;
+  if (m.expert_id !== null && typeof m.expert_id === 'object' && !Array.isArray(m.expert_id)) return true;
+  if (pyTruthy(m.review_uid)) return true;
+  if (pyTruthy(m.reviews)) return true;
   return false;
+}
+
+// True where Python's bool() is: an empty list, object or string, zero and
+// null are false, as they are in the server's _is_expert_locked.
+function pyTruthy(v) {
+  if (Array.isArray(v)) return v.length > 0;
+  if (v !== null && typeof v === 'object') return Object.keys(v).length > 0;
+  return !!v;
 }
 function isTargetMask(m) {
   if (!m) return false;
@@ -1485,10 +1538,10 @@ async function startReviewWhileProcessing() {
       const data = await res.json();
       const badge = document.getElementById('bg-processing-badge');
       if (data.running) {
-        badge.style.display = 'inline';
+        badge.style.visibility = 'visible';
         badge.textContent = `Processing ${data.processed}/${data.total}...`;
       } else {
-        badge.style.display = 'none';
+        badge.style.visibility = 'hidden';
         clearInterval(bgPollTimer);
       }
     } catch (e) {}
@@ -1512,6 +1565,7 @@ async function loadReviewBatch() {
   } else {
     infoEl.textContent = 'No images to review';
   }
+  infoEl.title = infoEl.textContent;
   updateCounter();
   _updateLoopBanner(data.total_images || 0);
   refreshUnlabeledSet();
@@ -1601,6 +1655,31 @@ function _updateLoopBanner(n) {
 // ══════════════════════════════════════════════
 // REVIEW — IMAGE SELECTION
 // ══════════════════════════════════════════════
+// Numbers the frame switches in the order they start (selectImage), so a
+// load that finishes after a later switch began is dropped.
+let _frameLoadSeq = 0;
+
+// GET one frame's masks, giving up after MASK_WRITE_TIMEOUT_MS, so a server
+// that stops answering never leaves every edit refused while the frame loads
+// (editBlockedByLoad). Rejects on no answer, a non-2xx status or a body that
+// is not JSON; the rejection for the time limit has timedOut set.
+async function fetchFrameMasks(filename) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MASK_WRITE_TIMEOUT_MS);
+  try {
+    const r = await fetch(`/api/image/${encodeURIComponent(filename)}`, {signal: controller.signal});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } catch (e) {
+    if (!controller.signal.aborted) throw e;
+    const late = new Error(`no answer within ${MASK_WRITE_TIMEOUT_MS / 1000} seconds`);
+    late.timedOut = true;
+    throw late;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function selectImage(idx) {
   if (idx < 0 || idx >= images.length) return;
 
@@ -1611,24 +1690,30 @@ async function selectImage(idx) {
   // A frame switch used to cost three serialized round trips: save the old
   // frame, GET the new frame's JSON, then GET its JPEG. The save and the JSON
   // GET touch different frames, so they go out together. saveCurrentMasks
-  // reads currentIdx/currentData synchronously before its first await, so it
-  // is safe to start it and then move currentIdx on.
+  // reads the loaded frame synchronously before its first await, so it is
+  // safe to start it and then move currentIdx on.
   // The save is caught here on purpose: currentIdx and img move on below, so a
   // rejected status PUT must not abort the switch half-done and leave the
   // canvas on the new frame with the old frame's state. Report it and carry
   // on; the next save (or the trailing flush) catches up.
-  const savePrev = (currentData && currentIdx >= 0)
+  // The loaded frame saves to its own file (saveCurrentMasks reads
+  // loadedFrameName), however many switches have started since it loaded.
+  const savePrev = loadedFrameName()
     ? saveCurrentMasks().catch(e => {
         console.warn('saveCurrentMasks failed during frame switch', e);
         setStatus('Warning: the previous frame did not save. It retries on the next save.');
       })
     : Promise.resolve();
 
+  // Numbered before the index moves: a load that finishes after a later
+  // switch started never replaces the frame asked for last (below).
+  const loadSeq = ++_frameLoadSeq;
   currentIdx = idx;
+  _frameLoading = true;
   const filename = images[idx].filename;
 
-  const fetchData = fetch(`/api/image/${encodeURIComponent(filename)}`)
-    .then(r => r.json());
+  // Writes still out on this frame answer first, so its snapshot holds them.
+  const fetchData = writesSettledFor(filename).then(() => fetchFrameMasks(filename));
 
   // The JPEG starts downloading now too, and usually comes straight from the
   // browser cache: the previous switch prefetched it (see below) and
@@ -1642,8 +1727,27 @@ async function selectImage(idx) {
   };
   img.src = `/images/${encodeURIComponent(filename)}`;
 
-  const [, data] = await Promise.all([savePrev, fetchData]);
+  let data;
+  try {
+    [, data] = await Promise.all([savePrev, fetchData]);
+    if (!data || !Array.isArray(data.masks)) throw new Error('no masks in the answer');
+  } catch (e) {
+    console.warn('frame did not load', filename, e);
+    if (loadSeq === _frameLoadSeq) restoreLoadedFrame(filename, !!(e && e.timedOut));
+    return;
+  }
+  if (loadSeq !== _frameLoadSeq) return;
+  _frameLoading = false;
+  // The data carries its own frame: every save and edit reads it from here.
+  data.filename = filename;
+  _timedOutMaskIds.delete(filename);
   currentData = data;
+  // Scan candidates and an open label popup belong to the frame they came from.
+  scanCandidates = [];
+  scanReviewIdx = -1;
+  hideCatPopup();
+  renderScanCandidates();
+  setScanStatus('');
 
   // A cached or prefetched JPEG can finish BEFORE the JSON resolves, so onload
   // may already have run while currentData still held the previous frame (or
@@ -1693,7 +1797,9 @@ async function selectImage(idx) {
   // button track the persisted state.
   _updateStickyAddIndicator();
   highlightQuickBtn(numKeyDown ?? -1);
-  document.getElementById('image-filename').textContent = filename;
+  const nameEl = document.getElementById('image-filename');
+  nameEl.textContent = filename;
+  nameEl.title = filename;
 
   // Kick the per-frame timer for the new frame.
   _timerStart();
@@ -1766,36 +1872,92 @@ window.addEventListener('pagehide', () => {
 // "save this frame now" is literally true.
 async function saveFrameNow() {
   setStatus('Saving...');
-  await saveCurrentMasks();
+  const statusesSaved = await saveCurrentMasks();
   const result = await flushNow();
-  // A conflict or a merge already left its own message on screen (inside
-  // flushNow); overwriting it here with the generic "Saved to disk" line
-  // would hide the detail the operator needs.
-  if (!result.conflict && !result.merged) {
+  // A refused frame save, a conflict or a merge already left its own message
+  // on screen; overwriting it here with the generic "Saved to disk" line
+  // would hide the detail the operator needs, or claim a save that failed.
+  if (statusesSaved && !result.conflict && !result.merged) {
     setStatus(result.ok ? 'Saved to disk' : 'Save failed: not written to disk');
   }
 }
 
+// Restate every status on the loaded frame to its own file (a frame switch,
+// Ctrl+S, Done, Export, the end of a batch). The frame is read before the
+// first await, so selectImage can start this and move on at once. It then
+// waits for every write still out on that frame (single-mask writes and
+// frame requests such as a merge) and reads the masks after the wait, so it
+// carries what the server confirmed (or put back) rather than a status about
+// to be refused or undone, and leaves out masks whose write got no answer in
+// time (_timedOutMaskIds). When a request is still out at the end of the
+// wait it sends nothing and returns false, as on a refused save.
+// A mask out with an expert (isExpertLocked) is read-only here and the
+// server refuses any status for it, so it is left out; the route is still
+// called with whatever is left, even nothing, so the server marks the frame
+// reviewed.
+// Returns true when the server took every status; otherwise the reason is
+// already showing in the status row and it returns false. Never throws.
 async function saveCurrentMasks() {
-  if (!currentData || currentIdx < 0) return;
-  const filename = images[currentIdx].filename;
+  const frame = currentData;
+  const filename = loadedFrameName();
+  if (!filename) return true;
+  if (!(await writesSettledFor(filename))) {
+    // A request still out (a merge, an add, a refine slower than the wait)
+    // is answered later with the frame it leaves; restating the frame now
+    // would undo that answer, so nothing is sent.
+    const where = images[currentIdx] && images[currentIdx].filename === filename
+      ? 'this frame' : 'frame ' + filename;
+    setConflictStatus(`Still saving the last change to ${where}. Try again in a moment.`);
+    return false;
+  }
+  // The masks are read after the wait: a merge or an add still out on this
+  // frame changes which masks it holds and their statuses.
+  const skip = _timedOutMaskIds.get(filename) || new Set();
+  const masks = frame.masks.filter(m => !skip.has(String(m.id)) && !isExpertLocked(m));
   const updates = {};
-  for (const m of currentData.masks) {
+  for (const m of masks) {
     updates[String(m.id)] = m.status;
   }
-  const res = await fetch(`/api/image/${encodeURIComponent(filename)}/masks`, {
-    method: 'PUT',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ updates }),
-  });
+  const answer = await sendMaskWrite(filename, { updates });
   // A frame save carrying a fresh accept is refused whole while nobody is
   // named. Say so here rather than letting the operator find out at export.
-  const saved = await res.json().catch(() => null);
-  if (saved && saved.needs_reviewer) { bounceForReviewer(saved.error); return; }
+  const refusal = maskWriteRefusal(answer, null);
+  if (refusal) {
+    if (answer.body && answer.body.needs_reviewer) bounceForReviewer(answer.body.error);
+    setConflictStatus(frameRefusalText(refusal, filename));
+    return false;
+  }
   scheduleFlush();
   // A label fix on this frame may have just cleared (or a hand-added mask
   // may have just added) an unlabeled entry. Keep the filter/jump current.
   refreshUnlabeledSet();
+  return reportBlankAcceptedMasks(masks, answer.body.needs_species, filename);
+}
+
+// The label guard's answer to a frame save: masks shown accepted that the
+// server holds with no species, so it will not accept them. After the wait
+// for in-flight writes the page already mirrors the server for these (the
+// usual case is a mask stored accepted and blank before the guard existed),
+// so nothing is put back; the masks are named, next step first, so the
+// operator can label them. Returns true when there were none.
+function reportBlankAcceptedMasks(masks, refusedIds, filename) {
+  const refused = new Set(idStrings(refusedIds));
+  const names = masks.filter(m => refused.has(String(m.id))).map(maskDisplayName);
+  if (!names.length) return true;
+  const one = names.length === 1;
+  const pick = one ? `select mask ${names[0]} and pick a species`
+    : `select masks ${names.join(', ')} and pick a species for each`;
+  const lead = isOnScreen(filename) ? capitalize(pick) : `Reopen frame ${filename}, then ${pick}`;
+  setConflictStatus(`${lead}: ${one ? 'it has' : 'they have'} no species, `
+    + `so the server will not accept ${one ? 'it' : 'them'}.`);
+  return false;
+}
+
+// Stop an Export or a Done while the loaded frame's save is refused. The
+// save's own message stays on the row, led by what did not happen.
+function holdForUnsavedFrame(lead) {
+  const notice = document.getElementById('status-text').textContent;
+  setConflictStatus(notice ? `${lead} ${notice}` : lead);
 }
 
 // ══════════════════════════════
@@ -1862,46 +2024,517 @@ function bounceForReviewer(msg) {
   setStatus(msg || 'Set your initials first (top bar) so this work is credited.');
 }
 
-// Put a mask back to what the server actually stores after a refused accept,
-// so the screen never shows a checkmark for work that was not recorded. The
-// caller passes the status the mask held BEFORE it optimistically flipped;
-// 'pending' is only the fallback for a caller that did not capture one.
-function revertLocalStatus(maskId, prevStatus) {
-  if (!currentData) return;
-  const m = (currentData.masks || []).find(x => x.id === maskId);
-  if (m) m.status = prevStatus || 'pending';
-  try { renderMaskList(); render(); } catch (e) {}
+// ── Mask writes the server must confirm ──────────────────────────────────
+// A label picked on this page and the status that goes with it travel in ONE
+// PUT (the route's additive `relabel` field beside `updates`), and the page
+// keeps only what the server confirms. The defect this closes (2026-10-15):
+// the label popup set species, category and name on the browser copy and
+// sent the accept alone; the server's label guard refused to accept a mask
+// it held blank (and its expert lock refuses a mask out with an expert), so
+// the server kept the mask as it was while this page showed the new label.
+// Any refusal now puts the mask back the way the server holds it and leaves
+// a message in the status row until the operator acts.
+//
+// Every write and every frame save goes to the frame whose masks are loaded
+// (loadedFrameName), never to the frame the index points at. selectImage
+// moves the index at once but loads the new frame's masks later, and a save
+// that paired the two sent one frame's statuses to another frame's file
+// (2026-10-16: an accepted mask on T308 became pending after a double Prev).
+
+// Everything a label write can change on a mask, saved and put back together.
+const MASK_WRITE_FIELDS = ['status', 'species', 'category', 'name', 'review'];
+
+// The category a target label is stored with when the project's label list
+// records none for it: the fallback armedMaskFields already uses, since the
+// target list is a list of corals.
+const DEFAULT_TARGET_CATEGORY = 'Coral';
+
+// Writes not yet answered and handled, each with the frame it went to, in
+// the order they were asked for: single-mask writes from the moment they are
+// sent, frame requests from the click (beginFrameRequest). A frame save, a
+// frame load and every frame request wait for their frame's
+// (writesSettledFor), so what they send or read already holds them.
+const _maskWritesInFlight = new Map();
+
+// The longest a mask write may wait for the server, in milliseconds. A write
+// with no answer by then counts as refused, so no save path (a frame switch,
+// Done, Export) ever waits on a server that has stopped answering. A frame
+// load gives up after the same time (fetchFrameMasks), so edits, refused
+// while a frame loads, never stay refused.
+const MASK_WRITE_TIMEOUT_MS = 15000;
+
+// The longest a frame request (a merge, an add, a refine, a scan, Reload IDs)
+// may wait for its answer, in milliseconds. A model call on a busy card can
+// take tens of seconds, so the limit sits far above any normal answer and
+// only cuts off a server that has stopped answering.
+const FRAME_REQUEST_TIMEOUT_MS = 120000;
+
+// Per mask, while any write to it is unanswered: the values the server last
+// confirmed for each field and which write confirmed each, the writes still
+// out for each field in the order they were sent, and how many are out.
+// Dropped when the last one is answered.
+const _maskWriteState = new WeakMap();
+
+// Numbers the writes in the order they are sent.
+let _maskWriteSeq = 0;
+
+// Masks whose write got no answer in time, by frame (a Set of id strings
+// per filename). The server may still have applied such a write, so a frame
+// save leaves these masks out (restating the put-back status could undo it)
+// until the frame is next loaded from the server or a later write to the
+// mask is confirmed.
+const _timedOutMaskIds = new Map();
+
+// The not-saved message on show for one mask, {filename, maskId, text}, so a
+// later confirmed write to that mask can clear it (clearMaskNotice).
+let _maskNotice = null;
+
+// The frame whose masks are loaded (currentData), the only file a save or an
+// edit may go to; '' while no frame is loaded. selectImage stamps the name
+// on the data when that frame's masks arrive.
+function loadedFrameName() {
+  return (currentData && currentData.filename) || '';
 }
 
-// Persist JUST the status for a single mask, right now. Used by
-// accept/reject so that the backend's view of which masks are rejected
-// stays in sync — otherwise Add/Refine would still clip against a
-// just-rejected mask because the backend hadn't seen the status change
-// yet (saveCurrentMasks only runs on frame change).
-// `prevStatus` is what the mask held before the caller flipped it locally; it
-// is what gets restored if the server refuses the accept.
-async function persistMaskStatus(maskId, status, prevStatus) {
-  if (currentIdx < 0 || !images[currentIdx]) return;
-  const filename = images[currentIdx].filename;
+// Resolves to true once every write still out on `filename` (a single-mask
+// write, or a frame request such as a merge or an add, see
+// beginFrameRequest) has been answered, or to false after
+// MASK_WRITE_TIMEOUT_MS with some still out, so nothing waits on a dead
+// request for ever. Never rejects. A frame request passes its own entry as
+// `own` and waits only for the writes asked for before it, so it never waits
+// on itself and two requests never wait on each other.
+function writesSettledFor(filename, own) {
+  const out = [];
+  for (const [write, file] of _maskWritesInFlight) {
+    if (write === own) break;
+    if (file === filename) out.push(write);
+  }
+  return Promise.race([Promise.all(out).then(() => true),
+                       new Promise(r => setTimeout(() => r(false), MASK_WRITE_TIMEOUT_MS))]);
+}
+
+// Count a frame request (a merge, an add, a refine, a scan, Reload IDs) as a
+// write out on its frame from the click, before it waits for the writes
+// asked for ahead of it. A save or a load of that frame started meanwhile
+// then waits for the request too, and reads a copy that already holds its
+// answer. Returns the entry: the caller hands it to writesSettledFor and
+// calls its end() once the answer is handled or the request is dropped.
+// The entry's send() runs the request with FRAME_REQUEST_TIMEOUT_MS counted
+// from the send, so a wait behind earlier writes does not use it up; on the
+// limit the request fails through its usual error message, and end() frees
+// the frame.
+function beginFrameRequest(filename) {
+  let finish = null;
+  let timer = null;
+  const entry = new Promise(resolve => { finish = resolve; });
+  const controller = new AbortController();
+  entry.send = (url, options) => {
+    timer = setTimeout(() => controller.abort(
+      new Error(`no answer within ${FRAME_REQUEST_TIMEOUT_MS / 1000} seconds`)), FRAME_REQUEST_TIMEOUT_MS);
+    return fetch(url, Object.assign({}, options, {signal: controller.signal}));
+  };
+  entry.end = () => { clearTimeout(timer); _maskWritesInFlight.delete(entry); finish(); };
+  _maskWritesInFlight.set(entry, filename);
+  return entry;
+}
+
+// True when `frame` (a currentData object captured before an await) is no
+// longer the loaded frame. A request for it is then not sent, and an answer
+// for it changes nothing on the page. The data object is compared, not the
+// name, so a reload of the same frame (A to B and back to A) counts.
+function frameChanged(frame) {
+  return currentData !== frame;
+}
+
+// True while a frame switch is still loading its masks (selectImage).
+let _frameLoading = false;
+
+// True, after saying so, while a frame is loading: an edit now would act on
+// the masks of the frame being left, drawn over the next frame's picture,
+// and a reload of the same frame would drop it.
+function editBlockedByLoad() {
+  if (!_frameLoading) return false;
+  setStatus('This frame is still loading. Try again in a moment.');
+  return true;
+}
+
+// A frame that did not load: the index and the picture go back to the frame
+// whose masks are still loaded, and the status row says so, naming the time
+// limit when the server did not answer in time (`timedOut`).
+function restoreLoadedFrame(failedName, timedOut) {
+  _frameLoading = false;
+  const loaded = loadedFrameName();
+  currentIdx = images.findIndex(f => f.filename === loaded);
+  if (loaded) {
+    img = new Image();
+    img.onload = () => { fitImage(); render(); };
+    img.src = `/images/${encodeURIComponent(loaded)}`;
+    _timerStart();
+  }
+  updateCounter();
+  const failure = timedOut
+    ? `frame ${failedName} did not answer within ${MASK_WRITE_TIMEOUT_MS / 1000} seconds`
+    : `frame ${failedName} did not load`;
+  setConflictStatus(loaded
+    ? `Try again in a moment: ${failure}, so ${loaded} stays open.`
+    : `Try again in a moment: ${failure}.`);
+}
+
+// A sentence's first letter in capitals.
+function capitalize(text) {
+  const t = String(text || '');
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+// How the status row names a mask: its letter label, else its id.
+function maskDisplayName(mask) {
+  return (mask && mask.label) || ('#' + (mask ? mask.id : '?'));
+}
+
+/**
+ * The label fields a target-label code is stored with.
+ *
+ * @param {string} code a target-label code, from a popup row or a number key
+ * @returns {Object} species, category and name: the code as
+ *   the species; the label list's category, or DEFAULT_TARGET_CATEGORY when
+ *   the list records none; the label list's full name, or the code itself
+ *   only when the list records no name for it.
+ */
+function targetLabelFields(code) {
+  const species = String(code || '').trim();
+  const hit = TARGET_LABELS.find(l => l.code === species);
+  return {
+    species,
+    category: (hit && hit.category) || DEFAULT_TARGET_CATEGORY,
+    name: (hit && hit.name) || species,
+  };
+}
+
+/**
+ * The label fields one of the popup's category chips is stored with.
+ *
+ * @param {string} category 'Sponge', 'Macroalgae', 'Gorgonian' or 'Turf', or
+ *   '' for Unlabel
+ * @returns {Object} species, category and name: the chip's
+ *   code, its category, and the category word as its name; all three blank
+ *   for Unlabel.
+ */
+function categoryLabelFields(category) {
+  const catCodes = {'Sponge':'SPO', 'Macroalgae':'MACA', 'Gorgonian':'GORG',
+    'Turf':'TURF', '':''};
+  const code = catCodes[category] !== undefined
+    ? catCodes[category] : category.toUpperCase().slice(0, 4);
+  return {species: code, category: category, name: code ? category : ''};
+}
+
+// A copy of the fields a label write can change, taken before the change.
+function maskWriteSnapshot(mask) {
+  const snap = {};
+  for (const k of MASK_WRITE_FIELDS) snap[k] = mask[k];
+  return snap;
+}
+
+/**
+ * Label a mask on the page and store the label with its status in one PUT.
+ *
+ * The page shows the change at once; persistMaskStatus puts every field back
+ * if the server does not confirm it.
+ *
+ * @param {Object} mask a mask in currentData.masks
+ * @param {string} status the status stored with the label ('accepted', or
+ *   'pending' for Unlabel)
+ * @param {Object} fields the label fields to store, from targetLabelFields
+ *   or categoryLabelFields
+ * @returns {Promise<boolean>} true when the server confirmed the write
+ */
+function labelMask(mask, status, fields) {
+  const before = maskWriteSnapshot(mask);
+  Object.assign(mask, fields);
+  mask.status = status;
+  return persistMaskStatus(mask.id, status, before.status, {fields, before});
+}
+
+// PUT one body to a frame's /masks route, giving up after
+// MASK_WRITE_TIMEOUT_MS. Never throws: resolves to {res, body, timedOut},
+// where res is null when the server did not answer (timedOut says whether
+// the time limit ran out) and body is null when the answer was not JSON.
+async function sendMaskWrite(filename, payload) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MASK_WRITE_TIMEOUT_MS);
   try {
     const res = await fetch(`/api/image/${encodeURIComponent(filename)}/masks`, {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ updates: { [String(maskId)]: status } }),
+      body: JSON.stringify(payload),
+      signal: controller.signal,
     });
-    const saved = await res.json().catch(() => null);
-    if (saved && saved.needs_reviewer) {
-      // Nothing was applied server-side, so put the mask back to the stored
-      // status and point the operator at the initials box.
-      revertLocalStatus(maskId, prevStatus);
-      bounceForReviewer(saved.error);
-      return;
-    }
-    scheduleFlush();
+    const body = await res.json().catch(() => null);
+    if (body === null && controller.signal.aborted) return {res: null, body: null, timedOut: true};
+    return {res, body, timedOut: false};
   } catch (e) {
-    // Non-fatal: next frame-change save will catch up.
-    console.warn('persistMaskStatus failed', e);
+    if (controller.signal.aborted) return {res: null, body: null, timedOut: true};
+    console.warn('mask write got no answer', e);
+    return {res: null, body: null, timedOut: false};
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+// A server reason as a sentence: capital first letter, closing full stop.
+function asSentence(text) {
+  const t = String(text || '').trim();
+  if (!t) return '';
+  const s = t.charAt(0).toUpperCase() + t.slice(1);
+  return /[.!?]$/.test(s) ? s : s + '.';
+}
+
+// A list of mask ids from a server answer, as strings so 5 and "5" match.
+// Anything that is not a list counts as no ids rather than throwing.
+function idStrings(value) {
+  return (Array.isArray(value) ? value : []).map(String);
+}
+
+/**
+ * Why the server did not apply a /masks write.
+ *
+ * @param {Object} answer what sendMaskWrite resolved to, {res, body, timedOut}
+ * @param {?number} maskId the one mask the write was for; null for a frame
+ *   save, whose label-guard answer reportBlankAcceptedMasks reads instead
+ * @returns {?Object} null when the server confirmed the write, else
+ *   {kind, reason}: kind is 'timeout', 'no-answer', 'initials', 'unreadable',
+ *   'refused', 'expert' (Edit Masks) or 'species'; reason is the server's own
+ *   sentence, when it gave one. A status code never reaches the page's text.
+ */
+function maskWriteRefusal(answer, maskId) {
+  const {res, body} = answer;
+  if (answer.timedOut) return {kind: 'timeout', reason: ''};
+  if (!res) return {kind: 'no-answer', reason: ''};
+  if (body && body.needs_reviewer) return {kind: 'initials', reason: ''};
+  const reason = asSentence(body && body.error);
+  if (!res.ok) {
+    console.warn('mask write refused with status', res.status);
+    return {kind: 'refused', reason};
+  }
+  if (!body) return {kind: 'unreadable', reason: ''};
+  const key = String(maskId);
+  const expertLocked = idStrings(body.locked_ids).includes(key)
+    && !idStrings(body.review_locked_ids).includes(key);
+  if (maskId !== null && expertLocked) return {kind: 'expert', reason: ''};
+  if (body.ok !== true || reason) return {kind: 'refused', reason};
+  if (maskId !== null && idStrings(body.needs_species).includes(String(maskId))) {
+    return {kind: 'species', reason: ''};
+  }
+  return null;
+}
+
+// A refused mask write in words, next step first so it survives the row's
+// cut at narrow widths. `subject` is 'mask C', or 'mask C on <frame>' when
+// that frame is no longer the loaded one.
+function maskRefusalText(refusal, subject) {
+  const why = refusal.reason ? ' ' + refusal.reason : '';
+  switch (refusal.kind) {
+    case 'timeout':
+      return `Reopen the frame to see what ${subject} holds: no answer came within `
+        + `${MASK_WRITE_TIMEOUT_MS / 1000} seconds, and the server may still have saved it.`;
+    case 'initials':
+      return `Type your initials in the top bar, then try ${subject} again: it was not saved without them.`;
+    case 'species':
+      return `Pick a species and accept ${subject} again: it was not saved because it has no species.`;
+    case 'expert':
+      return `${capitalize(subject)} is in expert review and read-only here, so the change was not saved.`;
+    case 'no-answer':
+      return `Try ${subject} again: the annotator server did not answer, so it was not saved.`;
+    case 'unreadable':
+      return `Try ${subject} again: the server's answer could not be read, so it was not saved.`;
+    default:
+      return `Try ${subject} again: the server refused it.${why}`;
+  }
+}
+
+// A refused frame save in words, next step first. The frame is named only
+// when it is no longer the loaded one (Ctrl+S saves the loaded frame).
+function frameRefusalText(refusal, filename) {
+  const here = isOnScreen(filename);
+  const again = here ? 'save this frame again (Ctrl+S)'
+    : `reopen frame ${filename} and save it again (Ctrl+S)`;
+  const why = refusal.reason ? ' ' + refusal.reason : '';
+  switch (refusal.kind) {
+    case 'timeout':
+      return `Reopen ${here ? 'this frame' : 'frame ' + filename} to see what the server holds: `
+        + `its save got no answer within ${MASK_WRITE_TIMEOUT_MS / 1000} seconds and may still have gone through.`;
+    case 'initials':
+      return `Type your initials in the top bar, then ${again}: its statuses were not saved without them.`;
+    case 'no-answer':
+      return `${capitalize(again)}: the annotator server did not answer, so its statuses were not saved.`;
+    case 'unreadable':
+      return `${capitalize(again)}: the server's answer could not be read, so its statuses were not saved.`;
+    default:
+      return `${capitalize(again)}: the server refused its statuses.${why}`;
+  }
+}
+
+// True when `filename` is the frame whose masks are loaded now.
+function isOnScreen(filename) {
+  return !!filename && loadedFrameName() === filename;
+}
+
+// ' on <frame>' for a status-row message about a frame that is no longer on
+// screen, else '' (the frame on screen needs no naming, and the row is short).
+function frameNote(filename) {
+  return isOnScreen(filename) ? '' : ' on ' + filename;
+}
+
+/**
+ * Start tracking one write to a mask.
+ *
+ * @param {Object} mask the mask object the write was made from
+ * @param {Object} written the fields this write sets, with their values
+ * @param {Object} confirmedNow the mask's fields as the server holds them
+ *   before this change; used only when no other write to it is unanswered,
+ *   since otherwise the page already shows values the server has not confirmed
+ * @returns {number} this write's sequence number
+ */
+function beginMaskWrite(mask, written, confirmedNow) {
+  let state = _maskWriteState.get(mask);
+  if (!state) {
+    state = {confirmed: Object.assign({}, confirmedNow), confirmedBy: {}, out: {}, count: 0};
+    _maskWriteState.set(mask, state);
+  }
+  const seq = ++_maskWriteSeq;
+  for (const k of Object.keys(written)) {
+    (state.out[k] = state.out[k] || []).push({seq, value: written[k]});
+  }
+  state.count += 1;
+  return seq;
+}
+
+/**
+ * Close one write to a mask once its answer is in.
+ *
+ * A confirmed write becomes the server's value for each field it set (unless
+ * a later write was already confirmed for that field). A refused write gives
+ * a field back only while it is the latest write to set that field and the
+ * page still shows its value, so a later write (whose own answer decides the
+ * field) or an answer from another route is never undone. The field goes to
+ * the newest earlier write still out, if that one is newer than the last
+ * confirmed write (its answer will decide), and otherwise to the confirmed
+ * value. Answers may arrive in any order.
+ *
+ * @param {Object} mask the mask object the write was made from
+ * @param {number} seq the number beginMaskWrite gave the write
+ * @param {Object} written the fields the write set, with their values
+ * @param {boolean} confirmed true when the server confirmed the write
+ */
+function finishMaskWrite(mask, seq, written, confirmed) {
+  const state = _maskWriteState.get(mask);
+  if (!state) return;
+  for (const k of Object.keys(written)) {
+    const queue = state.out[k] || [];
+    const at = queue.findIndex(w => w.seq === seq);
+    const wasLatest = at >= 0 && at === queue.length - 1;
+    if (at >= 0) queue.splice(at, 1);
+    if (confirmed) {
+      if ((state.confirmedBy[k] || 0) < seq) {
+        state.confirmed[k] = written[k];
+        state.confirmedBy[k] = seq;
+      }
+    } else if (wasLatest && mask[k] === written[k]) {
+      const heir = queue.filter(w => w.seq > (state.confirmedBy[k] || 0)).pop();
+      const value = heir ? heir.value : state.confirmed[k];
+      if (value === undefined) delete mask[k];
+      else mask[k] = value;
+    }
+  }
+  state.count -= 1;
+  if (state.count === 0) _maskWriteState.delete(mask);
+}
+
+// Note a mask whose write got no answer in time (see _timedOutMaskIds).
+function rememberTimedOut(filename, maskId) {
+  if (!_timedOutMaskIds.has(filename)) _timedOutMaskIds.set(filename, new Set());
+  _timedOutMaskIds.get(filename).add(String(maskId));
+}
+
+// A later confirmed write to the mask settles it: frame saves include it again.
+function forgetTimedOut(filename, maskId) {
+  const ids = _timedOutMaskIds.get(filename);
+  if (!ids) return;
+  ids.delete(String(maskId));
+  if (!ids.size) _timedOutMaskIds.delete(filename);
+}
+
+// Show a mask's not-saved message and remember whose it is.
+function showMaskNotice(filename, maskId, text) {
+  setConflictStatus(text);
+  _maskNotice = {filename, maskId: String(maskId), text};
+}
+
+// A confirmed write to a mask clears that mask's not-saved message, if it is
+// still the one on show; any other message stays.
+function clearMaskNotice(filename, maskId) {
+  const notice = _maskNotice;
+  if (!notice || notice.filename !== filename || notice.maskId !== String(maskId)) return;
+  _maskNotice = null;
+  if (document.getElementById('status-text').textContent === notice.text) setStatus('');
+}
+
+// After a refused write: a mask no longer rejected stops counting as deleted
+// for /add, and the frame is redrawn when it is still the one on screen. A
+// frame switch since the write leaves the new frame (loaded from the server,
+// where mask ids start over) untouched.
+function redrawRefusedMask(mask, filename) {
+  if (!mask || !isOnScreen(filename)) return;
+  if (mask.status !== 'rejected') recentlyDeletedIds.delete(mask.id);
+  try { renderMaskList(); render(); } catch (e) {}
+}
+
+// Store one mask's status, and with `relabel` its label fields in the SAME
+// request, right now. Used by accept/reject so that the backend's view of
+// which masks are rejected stays in sync. Otherwise Add/Refine would still
+// clip against a just-rejected mask because the backend hadn't seen the
+// status change yet (saveCurrentMasks only runs on frame change).
+// `prevStatus` is what the mask held before the caller flipped it locally;
+// `relabel` ({fields, before}, built by labelMask) is the label to store and
+// the mask as it was before the change. A confirmed write arms the trailing
+// flush. Anything else (a refusal of any kind, an unreadable answer, no
+// answer within MASK_WRITE_TIMEOUT_MS) is put back (finishMaskWrite) and
+// named in the status row until the operator acts; a confirmed later write
+// clears that. The write goes to the loaded frame (loadedFrameName).
+// Resolves to true only when the server confirmed the write.
+async function persistMaskStatus(maskId, status, prevStatus, relabel) {
+  const filename = loadedFrameName();
+  if (!filename) return false;
+  // Found now, before any await: mask ids start over on every frame, so a
+  // lookup after the answer could find another frame's mask with this id.
+  const mask = ((currentData && currentData.masks) || []).find(m => m.id === maskId) || null;
+  const key = String(maskId);
+  const payload = relabel
+    ? { updates: { [key]: status }, relabel: { [key]: relabel.fields } }
+    : { updates: { [key]: status } };
+  const written = Object.assign({status}, relabel ? relabel.fields : {});
+  const seq = mask ? beginMaskWrite(mask, written, relabel ? relabel.before
+    : Object.assign(maskWriteSnapshot(mask), {status: prevStatus || 'pending'})) : 0;
+  // The write and the handling of its answer are one unit, and that unit is
+  // what a frame save waits for, so a put-back always comes first.
+  const settled = (async () => {
+    const answer = await sendMaskWrite(filename, payload);
+    const refusal = maskWriteRefusal(answer, maskId);
+    if (mask) finishMaskWrite(mask, seq, written, !refusal);
+    if (!refusal) {
+      forgetTimedOut(filename, maskId);
+      clearMaskNotice(filename, maskId);
+      scheduleFlush();
+      return true;
+    }
+    if (refusal.kind === 'timeout') rememberTimedOut(filename, maskId);
+    redrawRefusedMask(mask, filename);
+    if (answer.body && answer.body.needs_reviewer) bounceForReviewer(answer.body.error);
+    const subject = `mask ${mask ? maskDisplayName(mask) : '#' + maskId}${frameNote(filename)}`;
+    showMaskNotice(filename, maskId, maskRefusalText(refusal, subject));
+    return false;
+  })();
+  _maskWritesInFlight.set(settled, filename);
+  try { return await settled; } finally { _maskWritesInFlight.delete(settled); }
 }
 
 // The REVIEW-persist helper is REMOVED in editMasks: this app must never flag
@@ -2406,20 +3039,26 @@ function focusScanCandidate() {
 // seg['masks'] as an accepted mask with a fresh id), push the returned mask into
 // the main list, drop the candidate from the ephemeral set, and advance.
 async function scanReviewAccept() {
+  if (editBlockedByLoad()) return;
+  const frame = currentData;
   if (_committingCandidate) return;          // guard: drop double-Enter while in-flight
   const c = scanCandidates[scanReviewIdx];
   if (!c) return;
   const idx = scanReviewIdx;
   _committingCandidate = true;
-  const fn = images[currentIdx].filename;
+  const fn = loadedFrameName();
   let kept = false;
+  const request = beginFrameRequest(fn);
   try {
-    const res = await fetch(`/api/image/${encodeURIComponent(fn)}/commit_mask`, {
+    await writesSettledFor(fn, request);
+    if (frameChanged(frame)) return;
+    const res = await request.send(`/api/image/${encodeURIComponent(fn)}/commit_mask`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({mask: c}),
     });
     const data = await res.json();
+    if (frameChanged(frame)) return;
     if (data.ok && data.mask) {
       currentData.masks.push(data.mask);
       renderMaskList();
@@ -2445,6 +3084,7 @@ async function scanReviewAccept() {
     setScanStatus('Keep error: ' + e.message);
   } finally {
     _committingCandidate = false;            // always clear, even on error
+    request.end();
   }
   // Only a candidate the server actually committed leaves the ephemeral set.
   // A refusal or a network error used to splice it out here too, discarding
@@ -2518,6 +3158,7 @@ function selectMaskFromList(i, event) {
 // is "deleted" in the operator's mental model, is skipped on export, and can be
 // recovered. Persists each status so Add/Refine stop clipping against them.
 async function deleteCheckedMasks() {
+  if (editBlockedByLoad()) return;
   if (!currentData || currentIdx < 0) return;
   if (checkedMaskIds.size < 1) { setStatus('No masks selected (Ctrl+click rows)'); return; }
   const ids = Array.from(checkedMaskIds);
@@ -2527,11 +3168,12 @@ async function deleteCheckedMasks() {
     const m = currentData.masks.find(mm => mm.id === id);
     if (!m || m.status === 'rejected') continue;
     if (isExpertLocked(m)) { nLocked++; continue; }
+    const prevStatus = m.status;
     m.status = 'rejected';
     // Track independently of currentData.masks so a reload can't drop it from
     // rejectedMaskIds() before the PUT completes. Cleared per-frame in selectImage().
     recentlyDeletedIds.add(m.id);
-    persistMaskStatus(m.id, 'rejected');
+    persistMaskStatus(m.id, 'rejected', prevStatus);
     n++;
   }
   // If the single selected mask was in the deleted set, drop the selection.
@@ -2673,6 +3315,7 @@ function _updateStickyAddIndicator() {
 }
 
 function acceptMask() {
+  if (editBlockedByLoad()) return;
   if (!currentData) return;
   // Fresh frame (nothing selected) -> Enter zooms to the first pending mask.
   // This lets the user open a frame in full view, then press Enter once
@@ -2719,12 +3362,14 @@ function acceptMask() {
 }
 
 function rejectMask() {
+  if (editBlockedByLoad()) return;
   if (selectedMask < 0 || !currentData) return;
   const m = currentData.masks[selectedMask];
   if (isExpertLocked(m)) {
     setStatus('This mask is in expert review, read-only here.');
     return;
   }
+  const prevStatus = m.status;
   m.status = 'rejected';
   // Track the deletion independently of currentData.masks so rejectedMaskIds()
   // keeps reporting it to /add even if a reload restores its 'pending' status
@@ -2732,7 +3377,7 @@ function rejectMask() {
   recentlyDeletedIds.add(m.id);
   // Persist right away so the next Add/Refine request sees this mask as
   // rejected and stops clipping against it.
-  persistMaskStatus(m.id, 'rejected');
+  persistMaskStatus(m.id, 'rejected', prevStatus);
   // Drop it from the multi-select too: hide-rejected takes the row out of the
   // list, and a merge would then block on a mask the operator cannot see.
   checkedMaskIds.delete(m.id);
@@ -2771,19 +3416,24 @@ function applyAffected(affected) {
 }
 
 async function doRefine(clickX, clickY, clickLabel) {
+  if (editBlockedByLoad()) return;
+  const frame = currentData;
   if (selectedMask < 0 || !currentData || refineInFlight) return;
   const mask = currentData.masks[selectedMask];
   if (isExpertLocked(mask)) {
     setStatus('This mask is in expert review, read-only here.');
     return;
   }
-  const filename = images[currentIdx].filename;
+  const filename = loadedFrameName();
 
   refineInFlight = true;
   setStatus(clickLabel === 1 ? 'Adding...' : 'Removing...');
 
+  const request = beginFrameRequest(filename);
   try {
-    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/refine`, {
+    await writesSettledFor(filename, request);
+    if (frameChanged(frame)) return;
+    const res = await request.send(`/api/image/${encodeURIComponent(filename)}/refine`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
@@ -2793,6 +3443,7 @@ async function doRefine(clickX, clickY, clickLabel) {
       }),
     });
     const data = await res.json();
+    if (frameChanged(frame)) return;
     if (data.ok && data.mask) {
       // Update mask in place
       Object.assign(mask, data.mask);
@@ -2803,8 +3454,10 @@ async function doRefine(clickX, clickY, clickLabel) {
     }
   } catch (e) {
     setStatus('Refinement error');
+  } finally {
+    refineInFlight = false;
+    request.end();
   }
-  refineInFlight = false;
 }
 
 // ══════════════════════════════════════════════
@@ -2813,22 +3466,28 @@ async function doRefine(clickX, clickY, clickLabel) {
 // Returns true when the mask was actually redrawn, so callers (the mask-size
 // slider) never claim a re-run that the backend refused.
 async function doBoxRedraw(imgBox) {
+  if (editBlockedByLoad()) return false;
+  const frame = currentData;
   if (selectedMask < 0 || !currentData) return false;
   const mask = currentData.masks[selectedMask];
   if (isExpertLocked(mask)) {
     setStatus('This mask is in expert review, read-only here.');
     return false;
   }
-  const filename = images[currentIdx].filename;
+  const filename = loadedFrameName();
 
   setStatus('Redrawing from box...');
+  const request = beginFrameRequest(filename);
   try {
-    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/rebox`, {
+    await writesSettledFor(filename, request);
+    if (frameChanged(frame)) return false;
+    const res = await request.send(`/api/image/${encodeURIComponent(filename)}/rebox`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ mask_id: mask.id, box: imgBox, rejected_ids: rejectedMaskIds() }),
     });
     const data = await res.json();
+    if (frameChanged(frame)) return false;
     if (data.ok && data.mask) {
       Object.assign(mask, data.mask);
       applyAffected(data.affected);
@@ -2843,6 +3502,8 @@ async function doBoxRedraw(imgBox) {
   } catch (e) {
     setStatus('Box redraw error');
     return false;
+  } finally {
+    request.end();
   }
 }
 
@@ -2855,6 +3516,7 @@ async function doBoxRedraw(imgBox) {
 const MASK_SIZES = ['tight', 'medium', 'generous'];
 
 async function setMaskSize(v) {
+  const frame = currentData;
   const size = MASK_SIZES[parseInt(v, 10)] || 'generous';
   const valEl = document.getElementById('mask-size-val');
   const slider = document.getElementById('mask-size');
@@ -2872,6 +3534,7 @@ async function setMaskSize(v) {
     if (!d.ok) { restore(); setStatus('Mask size: ' + (d.error || 'failed')); return; }
   } catch (e) { restore(); setStatus('Mask size error: ' + e.message); return; }
   if (valEl) valEl.textContent = size;
+  if (frameChanged(frame)) { setStatus(`Mask size ${size} for the next click or box`); return; }
   // Re-run the selected mask's own prompt. A failed re-run keeps the message
   // doBoxRedraw/rerunPrompt already put up instead of claiming success.
   if (selectedMask >= 0 && currentData && currentData.masks[selectedMask]) {
@@ -2893,15 +3556,21 @@ async function setMaskSize(v) {
 // adds no new click and records nothing), so the new variant reshapes the mask
 // without changing its history.
 async function rerunPrompt(m) {
-  if (currentIdx < 0 || !images[currentIdx]) return false;
-  const filename = images[currentIdx].filename;
+  if (editBlockedByLoad()) return false;
+  const frame = currentData;
+  const filename = loadedFrameName();
+  if (!filename) return false;
+  const request = beginFrameRequest(filename);
   try {
-    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/refine`, {
+    await writesSettledFor(filename, request);
+    if (frameChanged(frame)) return false;
+    const res = await request.send(`/api/image/${encodeURIComponent(filename)}/refine`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ mask_id: m.id, rerun: true, rejected_ids: rejectedMaskIds() }),
     });
     const data = await res.json();
+    if (frameChanged(frame)) return false;
     if (data.ok && data.mask) {
       Object.assign(m, data.mask);
       applyAffected(data.affected);
@@ -2910,7 +3579,7 @@ async function rerunPrompt(m) {
     }
     setStatus('Re-run failed: ' + (data.error || ''));
     return false;
-  } catch (e) { setStatus('Re-run error: ' + e.message); return false; }
+  } catch (e) { setStatus('Re-run error: ' + e.message); return false; } finally { request.end(); }
 }
 
 // ══════════════════════════════════════════════
@@ -2931,6 +3600,8 @@ function mergeAction() {
 // The old loop chained pairwise /merge calls, so a failure halfway through left
 // the frame half-merged; one call is all-or-nothing and keeps every part.
 async function mergeCheckedMasks() {
+  if (editBlockedByLoad()) return;
+  const frame = currentData;
   if (!currentData || currentIdx < 0) return;
   if (checkedMaskIds.size < 2) { setStatus('Check at least 2 masks first'); return; }
   const anyLocked = currentData.masks.some(
@@ -2940,47 +3611,60 @@ async function mergeCheckedMasks() {
     return;
   }
 
-  const filename = images[currentIdx].filename;
+  const filename = loadedFrameName();
   const ids = Array.from(checkedMaskIds).sort((a, b) => a - b);
   setStatus(`Merging ${ids.length} masks...`);
-  let data;
+  const request = beginFrameRequest(filename);
   try {
-    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/merge_many`, {
+    await writesSettledFor(filename, request);
+    if (frameChanged(frame)) return;
+    const res = await request.send(`/api/image/${encodeURIComponent(filename)}/merge_many`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ mask_ids: ids, rejected_ids: rejectedMaskIds() }),
     });
-    data = await res.json();
-  } catch (e) { setStatus('Merge error: ' + e.message); return; }
-  if (!data.ok) { setStatus('Merge failed: ' + (data.error || 'unknown')); return; }
-  // The survivor is whichever mask the backend kept (lowest id); everything in
-  // removed_ids is gone. Adopt by id, never by position.
-  const removed = new Set(data.removed_ids || []);
-  currentData.masks = currentData.masks.filter(m => !removed.has(m.id));
-  const idx = currentData.masks.findIndex(m => m.id === data.mask.id);
-  if (idx >= 0) Object.assign(currentData.masks[idx], data.mask);
-  checkedMaskIds = new Set([data.mask.id]);
-  selectedMask = idx;
-  saveCurrentMasks();
-  setInteractionMode('select');
-  setStatus(`Merged ${ids.length} masks into ${data.mask.label} (every part kept)`);
-  renderMaskList(); render();
+    const data = await res.json();
+    if (frameChanged(frame)) return;
+    if (!data.ok) { setStatus('Merge failed: ' + (data.error || 'unknown')); return; }
+    // The survivor is whichever mask the backend kept (lowest id); everything in
+    // removed_ids is gone. Adopt by id, never by position.
+    const removed = new Set(data.removed_ids || []);
+    currentData.masks = currentData.masks.filter(m => !removed.has(m.id));
+    const idx = currentData.masks.findIndex(m => m.id === data.mask.id);
+    if (idx >= 0) Object.assign(currentData.masks[idx], data.mask);
+    checkedMaskIds = new Set([data.mask.id]);
+    selectedMask = idx;
+    saveCurrentMasks();
+    setInteractionMode('select');
+    setStatus(`Merged ${ids.length} masks into ${data.mask.label} (every part kept)`);
+    renderMaskList(); render();
+  } catch (e) {
+    setStatus('Merge error: ' + e.message);
+  } finally {
+    request.end();
+  }
 }
 
 async function doMerge(idxA, idxB) {
+  if (editBlockedByLoad()) return;
+  const frame = currentData;
   if (!currentData) return;
   const maskA = currentData.masks[idxA];
   const maskB = currentData.masks[idxB];
-  const filename = images[currentIdx].filename;
+  const filename = loadedFrameName();
 
   setStatus('Merging...');
+  const request = beginFrameRequest(filename);
   try {
-    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/merge`, {
+    await writesSettledFor(filename, request);
+    if (frameChanged(frame)) return;
+    const res = await request.send(`/api/image/${encodeURIComponent(filename)}/merge`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ mask_id_a: maskA.id, mask_id_b: maskB.id }),
     });
     const data = await res.json();
+    if (frameChanged(frame)) return;
     if (data.ok) {
       // The survivor is the LOWER id, which may be maskB. Adopt the response
       // onto whichever local mask carries the returned id; never assume maskA.
@@ -2997,6 +3681,8 @@ async function doMerge(idxA, idxB) {
     }
   } catch (e) {
     setStatus('Merge error');
+  } finally {
+    request.end();
   }
 }
 
@@ -3005,15 +3691,21 @@ async function doMerge(idxA, idxB) {
 // overlapping same-species masks; this unions them back so a colony split
 // across two clicks becomes a single mask. Server returns the rebuilt list.
 async function mergeSameId() {
+  if (editBlockedByLoad()) return;
+  const frame = currentData;
   if (!currentData || currentIdx < 0) return;
-  const filename = images[currentIdx].filename;
+  const filename = loadedFrameName();
   setStatus('Merging overlapping same-ID masks...');
+  const request = beginFrameRequest(filename);
   try {
-    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/merge_same_id`, {
+    await writesSettledFor(filename, request);
+    if (frameChanged(frame)) return;
+    const res = await request.send(`/api/image/${encodeURIComponent(filename)}/merge_same_id`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
     });
     const data = await res.json();
+    if (frameChanged(frame)) return;
     if (data.ok) {
       // Preserve the selected mask's identity across the rebuild if possible.
       const selId = (selectedMask >= 0 && currentData.masks[selectedMask])
@@ -3036,27 +3728,44 @@ async function mergeSameId() {
     }
   } catch (e) {
     setStatus('Merge same-ID error: ' + e.message);
+  } finally {
+    request.end();
   }
+}
+
+// True when any of `masks` carries what an expert import writes: an expert
+// ID or a returned review. Reload IDs says "nothing new" for such a frame and
+// "no imported IDs yet" only for a frame with none.
+function hasImportedIds(masks) {
+  return (masks || []).some(m => m && (
+    (m.expert_id && typeof m.expert_id === 'object' && Object.keys(m.expert_id).length > 0)
+    || (Array.isArray(m.reviews) && m.reviews.length > 0)));
 }
 
 // Re-read this frame's segmentations.json from disk and merge in imported
 // expert/pending review fields WITHOUT clobbering unsaved operator edits, then
 // re-render so expert-green / pending-amber colors appear without a restart.
 async function reloadSegmentations() {
+  if (editBlockedByLoad()) return;
+  const frame = currentData;
   if (!currentData || currentIdx < 0) return;
-  const filename = images[currentIdx].filename;
+  const filename = loadedFrameName();
   setStatus('Reloading IDs from disk...');
-  // Flush the operator's current accept/reject statuses to the server's
-  // in-memory copy first, so the merge preserves them (it merges imported
-  // review fields onto that copy, never the other way around).
-  try { await saveCurrentMasks(); } catch (e) { /* best-effort */ }
+  // No frame save first: every status here is already confirmed one write
+  // at a time (the wait below lets the last ones answer), and a restating
+  // save would mark the frame edited here, so any outside change to it
+  // would be reported as edited on both sides.
+  const request = beginFrameRequest(filename);
   try {
-    const res = await fetch('/api/reload_segmentations', {
+    await writesSettledFor(filename, request);
+    if (frameChanged(frame)) return;
+    const res = await request.send('/api/reload_segmentations', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ filename }),
     });
     const data = await res.json();
+    if (frameChanged(frame)) return;
     if (data.ok) {
       // The server merged fields onto its own in-memory masks; pull the fresh
       // copy so the canvas + list reflect the imported IDs. Keep the current
@@ -3078,6 +3787,8 @@ async function reloadSegmentations() {
         );
       } else if (data.merged > 0) {
         setStatus(`Reloaded: ${data.merged} mask${data.merged === 1 ? '' : 's'} updated (${data.expert} expert ID${data.expert === 1 ? '' : 's'})`);
+      } else if (hasImportedIds(currentData.masks)) {
+        setStatus('Reloaded: nothing new for this frame.');
       } else {
         setStatus('Reloaded: no imported IDs for this frame yet');
       }
@@ -3087,6 +3798,8 @@ async function reloadSegmentations() {
     }
   } catch (e) {
     setStatus('Reload error: ' + e.message);
+  } finally {
+    request.end();
   }
 }
 
@@ -3094,16 +3807,17 @@ async function reloadSegmentations() {
 // orchestrator if we were launched from it, otherwise try to close the tab and
 // fall back to the startup screen.
 async function doneAndReturn() {
-  try {
-    if (currentData && currentIdx >= 0) await saveCurrentMasks();
-  } catch (e) { /* save best-effort — still return */ }
+  if (loadedFrameName() && !(await saveCurrentMasks())) {
+    holdForUnsavedFrame('The window stays open because this frame did not save.');
+    return;
+  }
   if (ORCHESTRATOR_URL) {
     window.location.href = ORCHESTRATOR_URL;
     return;
   }
   window.close();
-  // window.close() is a no-op for tabs the script didn't open — fall back to
-  // the setup screen so the operator isn't stranded on a finished review.
+  // window.close() is a no-op for tabs the script didn't open, so fall back
+  // to the setup screen so the operator isn't stranded on a finished review.
   setTimeout(() => { showScreen('startup'); }, 100);
 }
 
@@ -3122,6 +3836,8 @@ document.getElementById('scan-threshold').addEventListener('input', function() {
 document.getElementById('scan-threshold').addEventListener('change', function() { this.blur(); });
 
 async function doExemplarScan(mode) {
+  if (editBlockedByLoad()) return;
+  const frame = currentData;
   if (!currentData || currentIdx < 0) return;
   // Unfold the sub-panel first so the status line and candidates stay visible
   // even when the scan was started from the S key with the panel collapsed.
@@ -3133,7 +3849,7 @@ async function doExemplarScan(mode) {
     return;
   }
 
-  const filename = images[currentIdx].filename;
+  const filename = loadedFrameName();
   const threshold = getScanThreshold();
 
   const body = { mode: mode, threshold: threshold };
@@ -3145,13 +3861,17 @@ async function doExemplarScan(mode) {
   const startMsg = `${label} (threshold ${threshold})...`;
   setStatus(startMsg); setScanStatus(startMsg);
 
+  const request = beginFrameRequest(filename);
   try {
-    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/exemplar`, {
+    await writesSettledFor(filename, request);
+    if (frameChanged(frame)) return;
+    const res = await request.send(`/api/image/${encodeURIComponent(filename)}/exemplar`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
     });
     const data = await res.json();
+    if (frameChanged(frame)) return;
     if (data.ok) {
       // Candidates are EPHEMERAL (Task 12): hold them client-side in
       // scanCandidates[] and show them in the second panel. They are NOT pushed
@@ -3180,6 +3900,8 @@ async function doExemplarScan(mode) {
   } catch (e) {
     const msg = 'Scan error: ' + e.message;
     setStatus(msg); setScanStatus(msg);
+  } finally {
+    request.end();
   }
 }
 
@@ -3292,8 +4014,10 @@ function adoptNewMask(data, {label, species, category, name, reviewFlag}) {
 }
 
 async function addMaskAt(imgX, imgY) {
+  if (editBlockedByLoad()) return;
+  const frame = currentData;
   if (!currentData || currentIdx < 0) return;
-  const filename = images[currentIdx].filename;
+  const filename = loadedFrameName();
   const label = nextAddLabel();
 
   // If a target-label number is currently armed, pre-assign species+category so
@@ -3304,8 +4028,11 @@ async function addMaskAt(imgX, imgY) {
 
   setStatus(`Segmenting ${label}${reviewFlag ? ' as REVIEW' : (species ? ' as ' + species : '')}...`);
 
+  const request = beginFrameRequest(filename);
   try {
-    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/add`, {
+    await writesSettledFor(filename, request);
+    if (frameChanged(frame)) return;
+    const res = await request.send(`/api/image/${encodeURIComponent(filename)}/add`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
@@ -3315,6 +4042,7 @@ async function addMaskAt(imgX, imgY) {
       }),
     });
     const data = await res.json();
+    if (frameChanged(frame)) return;
     if (data.ok && data.mask) {
       adoptNewMask(data, {label, species, category, name, reviewFlag});
       setStatus(`${label}${species ? ' -> ' + species : ''} added: refine now, Enter to accept`);
@@ -3324,6 +4052,8 @@ async function addMaskAt(imgX, imgY) {
     }
   } catch (e) {
     setStatus('Add error: ' + e.message);
+  } finally {
+    request.end();
   }
 }
 
@@ -3331,14 +4061,19 @@ async function addMaskAt(imgX, imgY) {
 // Same arming, clip, and provenance rules as a click add; the backend keeps the
 // box so a later refine or mask-size change re-prompts with it.
 async function doBoxAdd(imgBox) {
+  if (editBlockedByLoad()) return;
+  const frame = currentData;
   if (!currentData || currentIdx < 0) return;
-  const filename = images[currentIdx].filename;
+  const filename = loadedFrameName();
   const label = nextAddLabel();
   const {species, category, name, reviewFlag} = armedMaskFields();
 
   setStatus(`Segmenting ${label} from box${reviewFlag ? ' as REVIEW' : (species ? ' as ' + species : '')}...`);
+  const request = beginFrameRequest(filename);
   try {
-    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/add_box`, {
+    await writesSettledFor(filename, request);
+    if (frameChanged(frame)) return;
+    const res = await request.send(`/api/image/${encodeURIComponent(filename)}/add_box`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
@@ -3347,6 +4082,7 @@ async function doBoxAdd(imgBox) {
       }),
     });
     const data = await res.json();
+    if (frameChanged(frame)) return;
     if (data.ok && data.mask) {
       adoptNewMask(data, {label, species, category, name, reviewFlag});
       setStatus(`${label}${species ? ' -> ' + species : ''} added from box: refine now, Enter to accept`);
@@ -3354,7 +4090,7 @@ async function doBoxAdd(imgBox) {
       const bb = (data.blocked_by || []).map(b => `#${b.id} ${b.species || '?'}`).join(', ');
       setStatus(bb ? `Blocked by ${bb}: delete it or draw a clearer box` : ('Box add failed: ' + (data.error || 'no mask')));
     }
-  } catch (e) { setStatus('Box add error: ' + e.message); }
+  } catch (e) { setStatus('Box add error: ' + e.message); } finally { request.end(); }
 }
 
 function showCatPopup() {
@@ -3438,20 +4174,22 @@ function labelScanCandidate(fields) {
   scanReviewAccept();
 }
 
+// Label the mask (or refused scan candidate) the popup is open on with a
+// target label, from a popup row or a number key, and accept it. The species,
+// the label list's category and the full name go to the server in the same
+// request as the accept (labelMask), so a mask is never shown accepted as a
+// species the server does not hold.
 function assignNewMaskSpecies(species) {
+  if (editBlockedByLoad()) return;
+  const fields = targetLabelFields(species);
   if (pendingScanCandidateIdx >= 0) {
-    labelScanCandidate({species: species, category: 'Coral', name: species});
+    labelScanCandidate(fields);
     return;
   }
   if (pendingAddMaskIdx < 0 || !currentData) { hideCatPopup(); return; }
   const mask = currentData.masks[pendingAddMaskIdx];
-  mask.species = species;
-  mask.category = 'Coral';
-  mask.name = species;
   hideCatPopup();
-  const prevStatus = mask.status;
-  mask.status = 'accepted';
-  persistMaskStatus(mask.id, 'accepted', prevStatus);
+  labelMask(mask, 'accepted', fields);
   flashMode('\u2713 ' + mask.label + ' ' + species);
   if (stickyAddMode || stickyBoxMode) {
     resumeStickyMode('Accepted:');
@@ -3466,28 +4204,25 @@ function assignNewMaskSpecies(species) {
 // this app must never flag a mask for expert REVIEW (see the armedReview note
 // above). combinedAnnotate keeps the equivalent popup option on purpose.
 
+// Label the mask (or refused scan candidate) the popup is open on with one of
+// the category chips, or clear its label with Unlabel. The code, category and
+// name go to the server in the same request as the status (labelMask).
 function assignNewMaskCategory(category) {
-  const catCodes = {'Sponge':'SPO', 'Macroalgae':'MACA', 'Gorgonian':'GORG',
-    'Turf':'TURF', '':''};
-  const code = catCodes[category] !== undefined
-    ? catCodes[category] : category.toUpperCase().slice(0, 4);
+  if (editBlockedByLoad()) return;
+  const fields = categoryLabelFields(category);
   if (pendingScanCandidateIdx >= 0) {
-    labelScanCandidate({species: code, category: category});
+    labelScanCandidate(fields);
     return;
   }
   if (pendingAddMaskIdx < 0 || !currentData) { hideCatPopup(); return; }
   const mask = currentData.masks[pendingAddMaskIdx];
-  mask.species = code;
-  mask.category = category;
   hideCatPopup();
   // Unlabel (category '') leaves the mask with no species, and the server
-  // refuses to accept an unlabeled mask. Keeping it 'pending' here matches
-  // what the backend stores; flipping it to 'accepted' painted a checkmark
-  // the server had already refused.
-  const newStatus = mask.species ? 'accepted' : 'pending';
-  const prevStatus = mask.status;
-  mask.status = newStatus;
-  persistMaskStatus(mask.id, newStatus, prevStatus);
+  // refuses to accept an unlabeled mask. Storing it 'pending' with the blank
+  // species matches what the backend keeps; flipping it to 'accepted' painted
+  // a checkmark the server had already refused.
+  const newStatus = fields.species ? 'accepted' : 'pending';
+  labelMask(mask, newStatus, fields);
   if (newStatus === 'accepted') {
     flashMode('\u2713 ' + mask.label + ' ' + mask.species);
   } else {
@@ -3782,6 +4517,8 @@ canvas.addEventListener('wheel', e => {
 // UNDO
 // ══════════════════════════════════════════════
 async function undoRefine() {
+  if (editBlockedByLoad()) return;
+  const frame = currentData;
   if (selectedMask < 0 || !currentData) return;
   const mask = currentData.masks[selectedMask];
   if (isExpertLocked(mask)) {
@@ -3792,15 +4529,19 @@ async function undoRefine() {
     setStatus('Nothing to undo');
     return;
   }
-  const filename = images[currentIdx].filename;
+  const filename = loadedFrameName();
   setStatus('Undoing...');
+  const request = beginFrameRequest(filename);
   try {
-    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/undo_refine`, {
+    await writesSettledFor(filename, request);
+    if (frameChanged(frame)) return;
+    const res = await request.send(`/api/image/${encodeURIComponent(filename)}/undo_refine`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ mask_id: mask.id, rejected_ids: rejectedMaskIds() }),
     });
     const data = await res.json();
+    if (frameChanged(frame)) return;
     if (data.ok && data.mask) {
       Object.assign(mask, data.mask);
       setStatus(`Undo (${data.remaining_undos} edits left)`);
@@ -3808,7 +4549,7 @@ async function undoRefine() {
     } else {
       setStatus('Undo failed: ' + (data.error || ''));
     }
-  } catch (e) { setStatus('Undo error'); }
+  } catch (e) { setStatus('Undo error'); } finally { request.end(); }
 }
 
 // ══════════════════════════════════════════════
@@ -4206,17 +4947,22 @@ loadPrefs();
 // Draw edit: post a freehand stroke against the selected mask.
 // ══════════════════════════════════════════════
 async function submitDrawEdit(path) {
+  if (editBlockedByLoad()) return;
+  const frame = currentData;
   if (selectedMask < 0 || !currentData || currentIdx < 0) return;
   const mask = currentData.masks[selectedMask];
   if (isExpertLocked(mask)) {
     setStatus('This mask is in expert review, read-only here.');
     return;
   }
-  const filename = images[currentIdx].filename;
+  const filename = loadedFrameName();
 
   setStatus(`Applying draw edit (${path.length} pts)...`);
+  const request = beginFrameRequest(filename);
   try {
-    const res = await fetch(`/api/image/${encodeURIComponent(filename)}/draw_edit`, {
+    await writesSettledFor(filename, request);
+    if (frameChanged(frame)) return;
+    const res = await request.send(`/api/image/${encodeURIComponent(filename)}/draw_edit`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
@@ -4226,6 +4972,7 @@ async function submitDrawEdit(path) {
       }),
     });
     const data = await res.json();
+    if (frameChanged(frame)) return;
     if (data.ok && data.mask) {
       Object.assign(mask, data.mask);
       applyAffected(data.affected);
@@ -4237,6 +4984,8 @@ async function submitDrawEdit(path) {
     }
   } catch (e) {
     setStatus('Draw edit error: ' + e.message);
+  } finally {
+    request.end();
   }
   render();
 }
@@ -4286,7 +5035,7 @@ function advanceToNextOrFrame() {
 }
 
 // ── Per-frame timer (mirrors step 4) ─────────────────────────────
-// Per-session rolling average of time-per-frame. `P` or the ⏸ button pauses.
+// Per-session rolling average of time-per-frame. `P` or the Pause button pauses.
 const FRAME_TIMER_TARGET_S = 15.0;
 let _frameStartMs = 0;
 let _framePausedAtMs = 0;
@@ -4295,7 +5044,7 @@ let _frameTickInt = null;
 let _frameTimesSec = [];
 
 function _timerFmt(sec) {
-  if (!isFinite(sec)) return '—';
+  if (!isFinite(sec)) return '--';
   if (sec < 60) return sec.toFixed(1) + 's';
   const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
   return `${m}m ${s}s`;
@@ -4310,26 +5059,42 @@ function _timerElapsedSec() {
   const now = _framePausedAtMs > 0 ? _framePausedAtMs : Date.now();
   return Math.max(0, (now - _frameStartMs - _framePausedTotalMs) / 1000);
 }
+// The title the timer carries before any frame has a reading.
+const FRAME_TIMER_IDLE_TITLE = 'This frame: target 15.0s. Average is the rolling mean for this session.';
+
+// Show the live reading ("Frame 1m 12s (paused)") and keep the session
+// average, the frame count and the target on the title, as combinedAnnotate
+// does. Before a frame has a reading the timer shows nothing at all.
 function _timerRender() {
   const el = document.getElementById('frame-timer');
   if (!el) return;
+  const paused = _framePausedAtMs > 0;
+  const btn = document.getElementById('frame-timer-pause');
+  if (btn) {
+    btn.textContent = paused ? 'Resume' : 'Pause';
+    // Nothing to pause until a frame has a reading.
+    btn.disabled = _frameStartMs <= 0;
+  }
+  if (_frameStartMs <= 0) {
+    el.textContent = '';
+    el.title = FRAME_TIMER_IDLE_TITLE;
+    return;
+  }
   const now = _timerElapsedSec();
   const avg = _frameTimesSec.length
     ? _frameTimesSec.reduce((a, b) => a + b, 0) / _frameTimesSec.length
     : NaN;
-  const nowStr = _frameStartMs > 0 ? _timerFmt(now) : '—';
-  const avgStr = isFinite(avg) ? _timerFmt(avg) : '—';
+  const nowStr = _timerFmt(now);
+  const n = _frameTimesSec.length;
+  const average = isFinite(avg)
+    ? `Session average: ${_timerFmt(avg)} over ${n} frame${n === 1 ? '' : 's'}.`
+    : 'No session average yet.';
   const color = _timerColor(now);
-  const avgColor = isFinite(avg) ? _timerColor(avg) : '#b0a7ab';
-  const paused = _framePausedAtMs > 0;
   el.innerHTML =
-    '<span style="color:var(--text-dim)">this </span>' +
-    `<span style="color:${paused ? 'var(--text-dim)' : color};font-weight:700">${nowStr}${paused ? ' (paused)' : ''}</span>` +
-    ' <span style="color:var(--text-dim)">· avg </span>' +
-    `<span style="color:${avgColor}">${avgStr}</span>` +
-    ` <span style="color:var(--text-dim)">(n=${_frameTimesSec.length}, target ${FRAME_TIMER_TARGET_S.toFixed(0)}s)</span>`;
-  const btn = document.getElementById('frame-timer-pause');
-  if (btn) btn.textContent = paused ? 'Resume' : 'Pause';
+    '<span style="color:var(--text-dim)">Frame </span>' +
+    `<span style="color:${paused ? 'var(--text-dim)' : color};font-weight:700">${nowStr}${paused ? ' (paused)' : ''}</span>`;
+  el.title = `This frame: ${nowStr}${paused ? ', paused' : ''}, target ${FRAME_TIMER_TARGET_S.toFixed(1)}s. `
+    + average;
 }
 function _timerStart() {
   _frameStartMs = Date.now();
@@ -4396,10 +5161,14 @@ let statusTimer = null;
 function setStatus(msg) {
   const el = document.getElementById('status-text');
   el.textContent = msg;
+  // A message too long for the row is cut off; the title carries it whole.
+  el.title = msg;
   el.classList.remove('conflict');
   el.classList.add('flash');
   clearTimeout(statusTimer);
-  statusTimer = setTimeout(() => { el.textContent = ''; el.classList.remove('flash'); }, 3000);
+  statusTimer = setTimeout(() => {
+    el.textContent = ''; el.title = ''; el.classList.remove('flash');
+  }, 3000);
 }
 
 // A save that found the same frame edited here AND on disk (most likely the
@@ -4408,11 +5177,13 @@ function setStatus(msg) {
 // status row as setStatus, so the image never moves, but in the error color
 // and with no 3s timer, so the operator cannot miss it or have it clear
 // itself while they keep working. The next ordinary setStatus call replaces
-// it once they act.
+// it once they act. A mask write the server did not confirm
+// (persistMaskStatus, saveCurrentMasks) is reported the same way.
 function setConflictStatus(msg) {
   const el = document.getElementById('status-text');
   clearTimeout(statusTimer);
   el.textContent = msg;
+  el.title = msg;
   el.classList.remove('flash');
   el.classList.add('conflict');
 }
@@ -4447,7 +5218,10 @@ async function openExportManifest() {
 }
 
 async function doExport() {
-  if (currentData && currentIdx >= 0) await saveCurrentMasks();
+  if (loadedFrameName() && !(await saveCurrentMasks())) {
+    holdForUnsavedFrame('Export stopped because this frame did not save.');
+    return;
+  }
 
   setStatus('Exporting batch...');
   const res = await fetch('/api/export_batch', { method: 'POST' });
@@ -4461,6 +5235,7 @@ async function doExport() {
     New classes: ${data.new_classes}<br>
     Total classes: ${data.total_classes}
     ${data.blocked_unlabeled ? `<br><span style="color:var(--error)">Blocked (no species): ${data.blocked_unlabeled}, nothing was dropped silently, label and re-export.</span>` : ''}
+    ${data.image_missing_total ? `<br><span style="color:var(--error)">Image file missing: ${data.image_missing_total} frame(s) not exported. They return to the queue when the file is back.</span>` : ''}
   `;
 
   // Last-batch detection: ask the backend whether any review batches remain
@@ -4480,7 +5255,9 @@ async function doExport() {
     remEl.textContent = `Batch of ${data.exported_images} exported to YOLO format`;
     document.getElementById('export-title').textContent = 'Batch Exported';
   } else {
-    remEl.textContent = 'All images exported!';
+    remEl.textContent = data.image_missing_total
+      ? `All images with a file exported; ${data.image_missing_total} frame(s) are waiting for a missing image.`
+      : 'All images exported!';
     document.getElementById('export-title').textContent = 'All Done!';
   }
 

@@ -75,6 +75,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# Images are never deleted: a replaced dataset or split is set aside under
+# <parent>/_superseded/<stamp>/ (scripts/_superseded.py, two folders above src/).
+_SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+import _superseded as _sup  # noqa: E402
+
 # Atlantic Standard Time, fixed UTC-4, no daylight saving (house rule: every
 # timestamp this platform writes is AST 24h).
 AST = timezone(timedelta(hours=-4))
@@ -82,6 +89,9 @@ AST = timezone(timedelta(hours=-4))
 BBOX_LABEL_DIRS = ("labels_localized", "labels")
 SPLIT_DIRS = ("train", "valid", "test")
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp")
+# Every extension that counts as image bytes when deciding whether a folder
+# may be removed (the list above plus .jfif, which the bounding-box tools accept).
+REAL_IMAGE_EXTS = IMAGE_EXTS + (".jfif",)
 
 # Held-out fractions of a lab-random split. Both callers read these constants:
 # scripts/pipeline_orchestrator/app.py forwards the Train panel's validation
@@ -330,6 +340,60 @@ def assign_split(names: Iterable[str], seed_text: object, existing: Mapping | No
     return pins
 
 
+def holds_real_images(path) -> bool:
+    """True when ``path`` is an image file or a folder with one anywhere inside.
+
+    Symlinks do not count: a link holds no image bytes, so removing it loses
+    nothing. A missing path holds none.
+    """
+    if os.path.islink(path):
+        return False
+    if os.path.isfile(path):
+        return path.lower().endswith(REAL_IMAGE_EXTS)
+    for dirpath, _dirs, files in os.walk(path):
+        for name in files:
+            full = os.path.join(dirpath, name)
+            if name.lower().endswith(REAL_IMAGE_EXTS) and not os.path.islink(full):
+                return True
+    return False
+
+
+def count_real_images(path) -> int:
+    """Number of real (non-symlink) image files at or under ``path``."""
+    if os.path.isfile(path) and not os.path.islink(path):
+        return int(path.lower().endswith(REAL_IMAGE_EXTS))
+    return sum(1 for dp, _d, fs in os.walk(path) for n in fs
+               if n.lower().endswith(REAL_IMAGE_EXTS)
+               and not os.path.islink(os.path.join(dp, n)))
+
+
+def set_aside_images(path, base_dir, stamp=None, log=print):
+    """Move ``path`` to <base_dir>/_superseded/<stamp>/<path relative to base_dir>
+    when it holds real image files; otherwise remove it (a tree of symlinks,
+    text or nothing holds no image bytes).
+
+    Parameters:
+        path: the file or folder being replaced; a missing path returns None.
+        base_dir: the folder the holding folder hangs from; path sits inside it.
+        stamp: YYYYMMDD-HHMMSS shared by every move of one operation; default now.
+        log: a callable taking one line.
+    Returns:
+        The new location, or None when nothing was moved.
+    Raises:
+        OSError: the move or the removal failed; the source is left in place.
+    """
+    if not os.path.lexists(path):
+        return None
+    if holds_real_images(path):
+        log(f"[superseded] setting aside {count_real_images(path)} image file(s) from {path}")
+        return _sup.supersede(path, base_dir=base_dir, stamp=stamp, log=log)
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.remove(path)
+    return None
+
+
 def _place(src, dst):
     """Hardlink when the filesystem allows it (a staged dataset is read-only
     input, and a 10k-image link costs nothing), else copy."""
@@ -363,6 +427,10 @@ def _swap_into_place(tmp_dir: str, final: str) -> None:
     is. Raises OSError naming the paths when a rename fails, or when the new
     dataset is in place but the old copy could not be removed (it stays
     beside it under a .dataset_old_ folder for Lauren to delete by hand).
+
+    A previous dataset that holds real image files is never removed: it is
+    moved to <parent of final>/_superseded/<stamp>/ instead (see
+    _retire_previous_dataset).
     """
     old_dir = ""
     if os.path.isdir(final):
@@ -384,11 +452,25 @@ def _swap_into_place(tmp_dir: str, final: str) -> None:
     if not old_dir:
         return
     try:
-        shutil.rmtree(old_dir)
+        _retire_previous_dataset(old_dir, final)
     except OSError as e:
         raise type(e)(f"the new dataset is in place at {final}, but its previous copy could "
                       f"not be removed from {old_dir}: {e.strerror or e}; delete that folder "
                       "by hand") from e
+
+
+def _retire_previous_dataset(old_dir: str, final: str) -> None:
+    """Dispose of the previous dataset waiting at ``old_dir``/dataset once the
+    new one is in place. A dataset holding real image files is moved to
+    <parent of final>/_superseded/<stamp>/<old_dir name>/dataset (images are
+    never deleted) and the then-empty ``old_dir`` is removed; one with no image
+    bytes (symlinks, text) is removed with ``old_dir``."""
+    kept = os.path.join(old_dir, "dataset")
+    if os.path.isdir(kept) and holds_real_images(kept):
+        set_aside_images(kept, base_dir=os.path.dirname(os.path.abspath(final)))
+        os.rmdir(old_dir)
+        return
+    shutil.rmtree(old_dir)
 
 
 def _rollback_after_failed_swap(error: OSError, tmp_dir: str, final: str, old_dir: str) -> OSError:

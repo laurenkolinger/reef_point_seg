@@ -9,7 +9,9 @@ Outcome rules (computed from a finished image's masks):
   found_expert   : an ACCEPTED non-review mask of that species carries an
                    accepted expert ID (expert_id.mode == 'EXPERT').
   found_manual   : an ACCEPTED non-review mask of that species has
-                   source_type in {manual_box, manual_click}.
+                   source_type in MANUAL_SOURCE_TYPES (manual_box,
+                   manual_click, merged; the one list in
+                   _reefreview/manual_sources.py).
   found_ai       : an ACCEPTED non-review mask of that species exists but is
                    only model-proposed (source_type in {auto, exemplar, model}).
   pending_expert : a non-rejected REVIEW mask is still awaiting an expert ID.
@@ -21,16 +23,23 @@ Outcome rules (computed from a finished image's masks):
                    mask. Only emitted for codes in target_species.
 """
 
-import csv
 import os
+import sys
 from datetime import datetime, timezone, timedelta
+
+# scripts/ holds the shared _reefreview package; this file sits at
+# scripts/<app>/src/provenance.py.
+_SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+from _reefreview.ledger_io import CSV_HEADER, write_frames  # noqa: E402
+from _reefreview.manual_sources import MANUAL_SOURCE_TYPES  # noqa: E402
 
 # Atlantic Standard Time, fixed UTC-4, no daylight saving.
 AST = timezone(timedelta(hours=-4))
 
-CSV_HEADER = ['basename', 'label', 'outcome', 'source', 'reviewer', 'at', 'project_id']
-
-_MANUAL_SOURCES = {'manual_box', 'manual_click'}
+_MANUAL_SOURCES = MANUAL_SOURCE_TYPES
 _AI_SOURCES = {'auto', 'exemplar', 'model'}
 
 
@@ -91,7 +100,9 @@ def compute_label_outcomes(seg_dict, target_species, source, reviewer=''):
 
     found = {}  # code -> {'manual': bool, 'expert': bool, 'ai': bool}
     for m in accepted:
-        code = m.get('species', 'UNK')
+        code = str(m.get('species') or '').strip()
+        if not code:
+            continue  # an unlabelled mask is not a label: no outcome, no row
         rec = found.setdefault(code, {'manual': False, 'expert': False, 'ai': False})
         if m.get('source_type') in _MANUAL_SOURCES:
             rec['manual'] = True
@@ -129,38 +140,11 @@ def compute_label_outcomes(seg_dict, target_species, source, reviewer=''):
 
 
 def write_provenance_csv(export_dir, basename, outcomes, project_id):
-    """Upsert one row per (basename, label) into export_dir/label_provenance.csv.
+    """Replace one frame's rows in export_dir/label_provenance.csv.
 
-    Existing rows for the same (basename, label) are replaced; all other rows
-    are preserved. The whole file is rewritten atomically each call (it is
-    small: one row per image-species).
+    Same behaviour as the combined annotator's writer (shared code in
+    _reefreview/ledger_io.py): locked with a file lock, unique temp file,
+    fsync, mode 0664, no blank label, and every row the frame has under
+    step4test, step4loop, step5 or edit is replaced as one group.
     """
-    path = os.path.join(export_dir, 'label_provenance.csv')
-
-    rows = []
-    if os.path.exists(path):
-        with open(path, newline='') as f:
-            for r in csv.DictReader(f):
-                rows.append(r)
-
-    incoming = {(basename, code) for code in outcomes}
-    rows = [r for r in rows
-            if (r.get('basename'), r.get('label')) not in incoming]
-
-    for code, o in outcomes.items():
-        rows.append({
-            'basename': basename, 'label': code, 'outcome': o['outcome'],
-            'source': o['source'], 'reviewer': o.get('reviewer', ''),
-            'at': o['at'], 'project_id': project_id,
-        })
-
-    rows.sort(key=lambda r: (r.get('basename', ''), r.get('label', '')))
-
-    os.makedirs(export_dir, exist_ok=True)
-    tmp = path + '.tmp'
-    with open(tmp, 'w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=CSV_HEADER)
-        writer.writeheader()
-        for r in rows:
-            writer.writerow({k: r.get(k, '') for k in CSV_HEADER})
-    os.replace(tmp, path)
+    write_frames(export_dir, {basename: outcomes}, project_id)

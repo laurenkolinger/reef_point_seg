@@ -20,6 +20,18 @@ Covers:
   CACHE-BUST      - ASSET_VERSION reaches both asset tags.
 """
 
+# Keep this suite off the live mask registry, expert library and clip index
+# when it is run alone: scripts/tests/_isolation.py sets the isolating
+# variables to temp dirs and blocks any write to the live stores.
+import os as _iso_os
+import sys as _iso_sys
+_iso_dir = _iso_os.path.dirname(_iso_os.path.abspath(__file__))
+while _iso_os.path.basename(_iso_dir) != 'scripts' and _iso_dir != _iso_os.path.dirname(_iso_dir):
+    _iso_dir = _iso_os.path.dirname(_iso_dir)
+_iso_sys.path.insert(0, _iso_os.path.join(_iso_dir, 'tests'))
+import _isolation
+_isolation.install()
+
 import ast
 import os
 import re
@@ -586,8 +598,8 @@ def test_tool_tile_tooltips_match_emitted_states():
 # ── cache-bust ──────────────────────────────────────────────────────
 def test_asset_version_on_both_tags():
     import app as appmod
-    check(getattr(appmod, "ASSET_VERSION", None) == "20260921-start",
-          "app.ASSET_VERSION must be '20260921-start'")
+    check(getattr(appmod, "ASSET_VERSION", None) == "20261017-cardrows",
+          "app.ASSET_VERSION must be '20261017-cardrows'")
     html = _html()
     v = appmod.ASSET_VERSION
     check(f"/static/style.css?v={v}" in html, "style.css tag missing the asset version")

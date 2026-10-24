@@ -14,15 +14,27 @@ Restructures CVAT YOLOv8 Segmentation format directories into standardized forma
 """
 
 import os
+import sys
 import shutil
 import argparse
 import yaml
 from pathlib import Path
 
+# Images are never deleted (VEGA rules, 2026-10-15): a replaced folder that
+# holds images is moved to <parent>/_superseded/<stamp>/ (scripts/_superseded.py).
+_SCRIPTS_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
+sys.path.insert(0, os.path.join(_SCRIPTS_DIR, "TCRMPtrain_oceankindCV", "src"))
+sys.path.insert(0, _SCRIPTS_DIR)
+from detect_dataset import set_aside_images  # noqa: E402
+
 def clean_directory(directory):
-    """Remove directory and its contents if it exists"""
-    if os.path.exists(directory):
-        shutil.rmtree(directory)
+    """Empty ``directory`` and recreate it.
+
+    A previous folder that holds any image is moved to
+    <parent>/_superseded/<stamp>/<name> instead of being removed.
+    """
+    directory = os.path.abspath(directory)
+    set_aside_images(directory, base_dir=os.path.dirname(directory))
     os.makedirs(directory)
 
 def move_label_files(src_dir, dest_dir):

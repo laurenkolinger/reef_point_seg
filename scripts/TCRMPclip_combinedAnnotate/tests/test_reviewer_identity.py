@@ -24,6 +24,18 @@ TCRMP_MASK_REGISTRY_DIR points at a temp dir that is removed at the end.
 
 Run: env/bin/python scripts/TCRMPclip_combinedAnnotate/tests/test_reviewer_identity.py
 """
+# Keep this suite off the live mask registry, expert library and clip index
+# when it is run alone: scripts/tests/_isolation.py sets the isolating
+# variables to temp dirs and blocks any write to the live stores.
+import os as _iso_os
+import sys as _iso_sys
+_iso_dir = _iso_os.path.dirname(_iso_os.path.abspath(__file__))
+while _iso_os.path.basename(_iso_dir) != 'scripts' and _iso_dir != _iso_os.path.dirname(_iso_dir):
+    _iso_dir = _iso_os.path.dirname(_iso_dir)
+_iso_sys.path.insert(0, _iso_os.path.join(_iso_dir, 'tests'))
+import _isolation
+_isolation.install()
+
 import csv
 import json
 import os
@@ -149,6 +161,8 @@ with A.app.test_client() as c:
     lo = seg.get('label_outcomes') or {}
     check(lo.get('PA', {}).get('reviewer') == 'LO',
           f"label_outcomes carry the reviewer (got {lo.get('PA')})")
+    # The ledger is written with the save (flush_all), not on the edit.
+    A.flush_all()
     prov = os.path.join(_EXPORT, 'label_provenance.csv')
     rows = []
     if os.path.exists(prov):

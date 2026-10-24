@@ -120,7 +120,7 @@ def build_clip_index(clip_dir):
     if paths is None:
         paths = []
         for root, dirs, files in os.walk(clip_dir):
-            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d != "_superseded"]
             for fn in files:
                 if not fn.startswith("."):
                     paths.append(os.path.join(root, fn))
@@ -291,22 +291,67 @@ def fully_screened_frame_ids(binary, name_fn, prior_screening, species_list):
     return drop
 
 
-def _load_species_remap():
-    """Load old_code -> new_code mapping from recodeSpecies remap_log."""
-    import json as _json
-    remap = {}
-    recode_dir = os.path.join(config._REPO_DIR, "TCRMPcvr_recodeSpecies", "output")
-    logs = sorted(glob.glob(os.path.join(recode_dir, "remap_log_*.json")))
-    if not logs:
-        return remap
-    with open(logs[-1]) as f:
-        data = _json.load(f)
-    for entry in data.get("remaps", []):
-        old = entry.get("old_code", "")
-        new = entry.get("new_code", "")
-        if old and new and old != new:
-            remap[old] = new
+NO_REMAP_PREFIX = "No species remap applied"
+
+
+def _remap_pair(entry):
+    """(old, new) code from one remap-log entry, or None when unusable.
+
+    Accepts the recode tool's {old_code, new_code} shape and the Label
+    Manager's {old, new} and {from, to} shapes, as the orchestrator's own
+    recode does. An entry that keeps its code (a rename) is not a remap.
+    """
+    if not isinstance(entry, dict):
+        return None
+    old = str(entry.get("old_code") or entry.get("old") or entry.get("from") or "").strip()
+    new = str(entry.get("new_code") or entry.get("new") or entry.get("to") or "").strip()
+    if not old or not new or old == new:
+        return None
+    return old, new
+
+
+def _load_species_remap(remap_log_path=None):
+    """Load the old_code -> new_code mapping from a project's remap log.
+
+    The log is the step 2 remap_log.json the orchestrator passes with
+    --remap-log. Without a path, or when the file is absent, no remap is
+    applied and the output says so plainly; the pre-2020 points are then read
+    with their original codes.
+
+    Parameters:
+        remap_log_path: path to a remap log JSON, or None.
+    Returns:
+        dict: {old_code: new_code}; empty when nothing applies.
+    Raises:
+        ValueError: the file exists but is not readable JSON holding an object,
+            so a damaged log is never mistaken for "no remap".
+    """
+    if not remap_log_path:
+        print(f"{NO_REMAP_PREFIX}: no remap log was given.")
+        return {}
+    if not os.path.isfile(remap_log_path):
+        print(f"{NO_REMAP_PREFIX}: no remap log at {remap_log_path}.")
+        return {}
+    try:
+        with open(remap_log_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"remap log {remap_log_path} could not be read: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"remap log {remap_log_path} is not a JSON object")
+    pairs = (_remap_pair(e) for e in data.get("remaps", []))
+    remap = {old: new for old, new in (p for p in pairs if p)}
+    if remap:
+        print(f"Species remap from {remap_log_path}: {len(remap)} code(s).")
+    else:
+        print(f"{NO_REMAP_PREFIX}: {remap_log_path} changes no codes.")
     return remap
+
+
+def describe_cpc_load(n_points, remap):
+    """The log line for the pre-2020 points, saying 'remapped' only if a remap applied."""
+    suffix = ", remapped" if remap else ""
+    return f"Loaded {n_points:,} CPC points from cpc_all (pre-2020{suffix})"
 
 
 def load_cpc_species(cpc_dir, years, remap):
@@ -1147,6 +1192,11 @@ def main():
     parser.add_argument("--max-site-frac", type=float, default=0.25,
                         help="Max share of the selected frames any one site may "
                              "hold when site-balance is on (default: 0.25).")
+    parser.add_argument("--remap-log", default=None,
+                        help="Path to the project's species recode log "
+                             "(step 2 remap_log.json). Its remaps are applied to the "
+                             "pre-2020 cpc_all points and to all_points. Omitted or "
+                             "missing: no remap is applied and the output says so.")
     parser.add_argument("--prior-screening", default=None,
                         help="Path to a {stem: [labels]} JSON (written by the "
                              "orchestrator from the coverage matrix, "
@@ -1179,7 +1229,7 @@ def main():
     print()
 
     # Load species remap (e.g. MFRA->OFRA, MA->OA, MFAV->OFAV)
-    remap = _load_species_remap()
+    remap = _load_species_remap(args.remap_log)
     if remap:
         print(f"Species remap: {remap}")
 
@@ -1192,7 +1242,7 @@ def main():
     cpc_years = list(range(min_year, 2020))
     cpc_species = load_cpc_species(config.CPC_ALL_DIR, cpc_years, remap)
     if len(cpc_species) > 0:
-        print(f"Loaded {len(cpc_species):,} CPC points from cpc_all (pre-2020, remapped)")
+        print(describe_cpc_load(len(cpc_species), remap))
         # Remove pre-2020 rows from all_points, replace with cpc_all data
         ap = ap[ap["year"] >= 2020].copy()
         # Apply remap to post-2020 all_points too

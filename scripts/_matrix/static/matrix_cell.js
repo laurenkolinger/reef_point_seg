@@ -140,7 +140,29 @@
     var v = (el.by.value || '').trim().toUpperCase().slice(0, 8);
     return v;
   }
+  // The initials VICARIUS passes as ?initials=XX when it opens this page:
+  // trimmed, upper-cased, two to four letters, else "" (ignored). Only ever
+  // assigned to a field's .value, never inserted as markup.
+  function paramInitials() {
+    try {
+      var raw = new URLSearchParams(window.location.search).getAll('initials');
+      var v = String(raw.length === 1 ? raw[0] : '').trim().toUpperCase();
+      return /^[A-Z]{2,4}$/.test(v) ? v : '';
+    } catch (e) { return ''; }
+  }
+  // Rewrites a field's value to upper case as it is typed and keeps the caret.
+  function upperAsTyped(input) {
+    var upper = input.value.toUpperCase();
+    if (upper === input.value) return;
+    var at = input.selectionStart;
+    input.value = upper;
+    try { input.setSelectionRange(at, at); } catch (e) { /* not a text field */ }
+  }
+  // Seed order: the passed initials, then the remembered ones, then blank.
+  // Seeding never writes mx.by; only a typed change does (saveBy).
   function loadBy() {
+    var passed = paramInitials();
+    if (passed) { el.by.value = passed; return; }
     try { var v = localStorage.getItem(LS_BY); if (v) el.by.value = v; } catch (e) { /* storage blocked */ }
   }
   function saveBy() {
@@ -828,6 +850,7 @@
 
   // ── Wiring ─────────────────────────────────────────────
   el.close.addEventListener('click', close);
+  el.by.addEventListener('input', function () { upperAsTyped(el.by); });
   el.by.addEventListener('change', saveBy);
   el.opacity.addEventListener('input', function () {
     S.opacity = Math.max(0, Math.min(1, Number(el.opacity.value) / 100));

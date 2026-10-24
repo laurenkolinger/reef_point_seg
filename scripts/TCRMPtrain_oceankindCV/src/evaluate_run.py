@@ -31,6 +31,10 @@ Emits (inside --out_dir):
     previews/             rendered overlay images used in the PDF
     val_run/              ultralytics validation output (curves, matrices)
 
+Refreshes (beside the evaluated weights, test split and best.pt only):
+    best.pt.card.md       the model card's record rebuilt from disk (scores,
+                          report link, checksum) plus the best confidence
+
 The PDF is printed by headless Chrome (CHROME_BINARY_DEFAULT; the
 TCRMP_CHROME_BINARY environment variable points at another Chrome). The
 engine changed from WeasyPrint on 2026-09-04 because that library was
@@ -63,6 +67,7 @@ page plan (_plan_pages); nothing is hardcoded.
 
 import argparse
 import csv as _csv
+import hashlib
 import json
 import os
 import random
@@ -88,6 +93,201 @@ AST = timezone(timedelta(hours=-4))
 def ast_now():
     """AST ISO-8601 timestamp, second precision, e.g. 2026-06-25T08:13:42-04:00."""
     return datetime.now(AST).isoformat(timespec='seconds')
+
+
+# The shared model card code (standard library plus PyYAML), imported by path
+# from the platform tree so this script needs no install.
+DEFAULT_VICARIUS_ROOT = '/mnt/rip/vicarius_drive/vicarius'
+MODEL_CARD_FOLDER = ('_METADATA', 'model_card')
+CARD_WRITER_EVALUATE = 'VEGA Evaluate'
+CARD_SPLIT = 'test'
+CARD_WEIGHTS_NAME = 'best.pt'
+SEGMENT_TASK = 'segment'
+# The card builder's layouts (build.LAYOUTS) for the run folders VEGA evaluates.
+CARD_LAYOUT_RUN = 'vega_run'
+CARD_LAYOUT_ARCHIVED = 'vega_archived_run'
+CARD_LAYOUT_LAB = 'vega_lab_run'
+STEP6_FOLDER = 'step6_trainModel'
+RUNS_FOLDER = 'runs'
+LAB_PARENT_FOLDER = '_models'
+ARCHIVE_FOLDER = 'archive'
+CARD_HASH_CHUNK_BYTES = 1024 * 1024
+
+
+def card_vicarius_root():
+    """The platform tree the card code and its reference tables come from: VICARIUS_ROOT, else the default install."""
+    return os.environ.get('VICARIUS_ROOT') or DEFAULT_VICARIUS_ROOT
+
+
+def load_model_card_modules():
+    """Import the platform's f1 and card modules by path.
+
+    Returns:
+        (f1, card) the two modules.
+    Raises:
+        ImportError naming the folder when it is not on this machine.
+    """
+    root = card_vicarius_root()
+    folder = os.path.join(root, *MODEL_CARD_FOLDER)
+    if not os.path.isdir(folder):
+        raise ImportError(f'the shared model card code is not at {folder}')
+    if folder not in sys.path:
+        sys.path.insert(0, folder)
+    import f1
+    import card
+    return f1, card
+
+
+def best_conf_fields(results):
+    """The confidence where the model's mean F1 peaks, from the live val results.
+
+    Reads px and f1_curve from results.seg for a segmentation model (the
+    results' task is 'segment') and from results.box otherwise, and finds the
+    peak with the platform's f1.best_conf_from_curve.
+
+    Parameters:
+        results: the ultralytics validation results object.
+    Returns:
+        {'best_conf': float, 'best_conf_f1': float}, or {} when the results
+        carry no F1 curve (the line printed says so) or the curve is empty.
+    """
+    try:
+        f1, _ = load_model_card_modules()
+    except ImportError as exc:
+        print(f'[eval] best confidence not recorded: {exc}')
+        return {}
+    family = 'seg' if getattr(results, 'task', None) == SEGMENT_TASK and getattr(results, 'seg', None) is not None else 'box'
+    block = getattr(results, family, None)
+    px = getattr(block, 'px', None)
+    curve = getattr(block, 'f1_curve', None)
+    if px is None or curve is None:
+        print(f'[eval] results carry no {family} F1 curve; best confidence not recorded')
+        return {}
+    try:
+        conf, best_f1 = f1.best_conf_from_curve(np.asarray(px).tolist(), np.asarray(curve).tolist())
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        print(f'[eval] best confidence not recorded: {exc}')
+        return {}
+    return {'best_conf': conf, 'best_conf_f1': best_f1}
+
+
+def load_card_builder():
+    """Import the platform's card record builder (build.py) by path.
+
+    Returns:
+        the build module.
+    Raises:
+        ImportError naming the folder when it is not on this machine.
+    """
+    load_model_card_modules()
+    import build
+    return build
+
+
+def card_layout_for(weights):
+    """The card builder's layout for an evaluated best.pt, read from the folders around it.
+
+    A run under <project>/step6_trainModel/runs/ is vega_run (vega_archived_run
+    when the project sits in the module's archive folder); a run under
+    _models/<lab>/runs/ is vega_lab_run. Any other folder is read as vega_run,
+    the layout VEGA's Train step writes its card with.
+
+    Parameters:
+        weights: path of best.pt (<run>/weights/best.pt).
+    Returns:
+        one of CARD_LAYOUT_RUN, CARD_LAYOUT_ARCHIVED, CARD_LAYOUT_LAB.
+    """
+    runs = Path(weights).parent.parent.parent
+    holder = runs.parent
+    if runs.name == RUNS_FOLDER and holder.name == STEP6_FOLDER:
+        return CARD_LAYOUT_ARCHIVED if holder.parent.parent.name == ARCHIVE_FOLDER else CARD_LAYOUT_RUN
+    if runs.name == RUNS_FOLDER and holder.parent.name == LAB_PARENT_FOLDER:
+        return CARD_LAYOUT_LAB
+    return CARD_LAYOUT_RUN
+
+
+def card_sha256(path):
+    """Lowercase hex SHA-256 of a weights file, read in 1 MiB chunks.
+
+    Raises:
+        OSError naming the file when it cannot be read.
+    """
+    digest = hashlib.sha256()
+    try:
+        with open(path, 'rb') as handle:
+            for chunk in iter(lambda: handle.read(CARD_HASH_CHUNK_BYTES), b''):
+                digest.update(chunk)
+    except OSError as exc:
+        raise OSError(f'could not read {path} to checksum it: {exc}') from exc
+    return digest.hexdigest()
+
+
+def rewrite_card_record(card, build, weights):
+    """Rebuild the whole machine-written record of the card beside weights.
+
+    The record comes from the shared builder (build.record_for), so it carries
+    the newest evaluation's scores and report link exactly as a backfill
+    would. write_record keeps the person fields and history, and a measured
+    best confidence only while the checksum is unchanged; the other copies
+    (also_at) a backfill found are carried over on the same condition.
+
+    Parameters:
+        card, build: the platform's card and build modules.
+        weights: path of best.pt.
+    Returns:
+        The card path.
+    Raises:
+        OSError or ValueError (card.CardError included) naming what failed.
+    """
+    weights = Path(weights)
+    digest = card_sha256(weights)
+    path = card.card_path_for(weights)
+    old = card.read_card(path)['vicarius']['record'] if path.exists() else {}
+    old_weights = old.get('weights') if isinstance(old.get('weights'), dict) else {}
+    same_weights = old_weights.get('sha256') == digest
+    also_at = old.get('also_at') if same_weights and isinstance(old.get('also_at'), list) else ()
+    refs = build.load_references(Path(card_vicarius_root()))
+    record = build.record_for(weights, card_layout_for(weights), refs, digest, also_at)
+    return card.write_record(weights, record, CARD_WRITER_EVALUATE)
+
+
+def refresh_model_card(weights, metrics, split):
+    """Refresh the card beside best.pt after a test-split evaluation.
+
+    Rewrites the card's whole record from the files on disk (scores,
+    evaluation folder and report link, checksum), then writes the measured
+    best confidence into it when the metrics carry one. Both writes are
+    signed CARD_WRITER_EVALUATE.
+
+    Parameters:
+        weights: path of the evaluated weights.
+        metrics: the extracted metrics dict, which may carry best_conf.
+        split: the split that was evaluated; only the held-out test split
+            measures the scores the card describes.
+    Returns:
+        The card path, or None when nothing was written (another split,
+        last.pt, or a card problem, each printed as one line).
+    """
+    if split != CARD_SPLIT or os.path.basename(str(weights)) != CARD_WEIGHTS_NAME:
+        print(f'[eval] card not refreshed: VEGA refreshes the card of {CARD_WEIGHTS_NAME} '
+              f'from a {CARD_SPLIT} split evaluation only')
+        return None
+    try:
+        _, card = load_model_card_modules()
+        build = load_card_builder()
+    except ImportError as exc:
+        print(f'[eval] card not refreshed for {weights}: {exc}')
+        return None
+    try:
+        path = rewrite_card_record(card, build, weights)
+        if 'best_conf' in metrics:
+            fields = {'best_conf': metrics['best_conf'], 'best_conf_f1': metrics['best_conf_f1'],
+                      'best_conf_source': f'VEGA evaluation {ast_report_stamp()}'}
+            path = card.merge_record(Path(weights), fields, CARD_WRITER_EVALUATE)
+        return path
+    except (OSError, ValueError, KeyError, TypeError) as exc:  # card.CardError is a ValueError
+        print(f'[eval] card not refreshed for {weights}: {exc}')
+        return None
 
 
 def ast_report_stamp():
@@ -161,6 +361,78 @@ EXIT_OUTPUT_MISSING = 2
 # ─────────────────────────────────────────────────────────────────────────
 MEASUREMENT_CONF_DEFAULT = 0.001
 PREVIEW_CONF_DEFAULT = 0.25
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GPU traffic (docs/superpowers/specs/2026-09-28-gpu-traffic-design.md,
+# section 7): when VICARIUS starts this evaluation under the "vega" GPU
+# right-of-way tier, stage_runner.py sets this environment variable to the
+# CUDA device string for the card it assigned, in place of --device, because
+# Ultralytics reads CUDA_VISIBLE_DEVICES from its own --device string.
+# Unset or empty: this script behaves exactly as it did before this
+# variable existed, evaluating on --device as given.
+# ─────────────────────────────────────────────────────────────────────────
+GPU_DEVICE_ENV = 'VICARIUS_GPU_DEVICE'
+
+# A CUDA device string: one or more non-negative whole numbers, comma
+# separated (Ultralytics' own --device grammar). Anything else is a
+# malformed assignment, refused rather than silently ignored.
+# Matched with fullmatch(), never match(): match() alone would accept a
+# trailing newline ("1\n"), which fullmatch refuses along with anything
+# else the pattern does not account for.
+_DEVICE_STRING_RE = re.compile(r'\d+(,\d+)*')
+
+
+def resolve_device_override(cli_device, env_value):
+    """The --device value to evaluate with, honoring a VICARIUS GPU traffic override.
+
+    Parameters:
+        cli_device: the value --device was parsed to (or its default).
+        env_value: os.environ.get(GPU_DEVICE_ENV), or '' / None when unset.
+
+    Returns:
+        cli_device unchanged when env_value is falsy. Otherwise env_value
+        itself, once validated as a CUDA device string.
+
+    Raises:
+        ValueError naming GPU_DEVICE_ENV and the bad value when env_value is
+        set to something that is not a comma-separated list of non-negative
+        whole numbers.
+    """
+    if not env_value:
+        return cli_device
+    if not _DEVICE_STRING_RE.fullmatch(env_value):
+        raise ValueError(
+            f'{GPU_DEVICE_ENV}={env_value!r} is not a valid CUDA device string '
+            "(expected whole numbers separated by commas, e.g. '0' or '0,1'); "
+            'refusing to guess which card to evaluate on')
+    return env_value
+
+
+def apply_gpu_device_override(args):
+    """Replace args.device with VICARIUS's per-card assignment, when given.
+
+    Reads GPU_DEVICE_ENV once and mutates args.device in place; prints one
+    line naming the override when it applies. Unset or empty, this makes no
+    change and prints nothing.
+
+    Parameters:
+        args: the parsed command line (argparse.Namespace); args.device may
+            be replaced.
+
+    Returns:
+        None.
+
+    Raises:
+        ValueError: see resolve_device_override.
+    """
+    env_device = os.environ.get(GPU_DEVICE_ENV, '')
+    if not env_device:
+        return
+    original = args.device
+    args.device = resolve_device_override(args.device, env_device)
+    print(f'[eval] {GPU_DEVICE_ENV} overrides --device: evaluating on '
+          f'device={args.device} (was {original})')
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -609,6 +881,7 @@ def extract_metrics(val_out):
     speed = getattr(results, 'speed', None)
     if isinstance(speed, dict):
         metrics['speed_ms'] = {k: float(v) for k, v in speed.items()}
+    metrics.update(best_conf_fields(results))
     print(f"[eval] metric family: {metrics['metric_family']}; "
           f"{len(per_class)} of {len(names)} classes scored, {len(absent)} absent from the split; "
           f"instance counts from {source}")
@@ -5243,7 +5516,9 @@ def main():
 
     Order of writes, so a late failure never loses the numbers: report.md
     and metrics.json first, then the ledger row, then report.html and the
-    PDF, then the optional export copy. A failed ledger row, PDF or export
+    PDF, then the optional export copy, then the model card beside best.pt
+    (a card problem is one printed line and never changes the exit code).
+    A failed ledger row, PDF or export
     copy is printed with its traceback, the outputs that were written are
     listed, and the code is EXIT_OUTPUT_MISSING; EXIT_OK only when everything
     asked for exists.
@@ -5256,6 +5531,7 @@ def main():
         first output is written.
     """
     args = arg_parse()
+    apply_gpu_device_override(args)
     _validate_main_inputs(args)
     os.makedirs(args.out_dir, exist_ok=True)
 
@@ -5332,6 +5608,16 @@ def main():
             written.append(dest)
         except OSError as exc:
             failures.append(f'PDF export copy not made: {exc}')
+
+    # Last, so the card's record reads this evaluation's metrics.json, report
+    # and ledger row from disk.
+    try:
+        card_path = refresh_model_card(val_out['weights'], metrics, args.split)
+    except Exception as exc:  # a card problem never fails the evaluation
+        print(f'[eval] card not refreshed: {exc}')
+        card_path = None
+    if card_path:
+        print(f'[eval] model card refreshed: {card_path}')
 
     print('[eval] written: ' + ', '.join(written))
     if failures:

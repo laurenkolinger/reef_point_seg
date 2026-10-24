@@ -38,6 +38,7 @@ from .builder import (  # noqa: E402
     scan_projects,
 )
 from .preferences import Preferences  # noqa: E402
+from _superseded import is_superseded_path  # noqa: E402
 
 
 def segmentation_files(project_dir):
@@ -46,7 +47,8 @@ def segmentation_files(project_dir):
                      recursive=True)
     nested = glob.glob(os.path.join(project_dir, "**", "segmentations", "*", "segmentations.json"),
                        recursive=True)
-    return sorted(set(flat) | set(nested))
+    return sorted(p for p in set(flat) | set(nested)
+                  if not is_superseded_path(p, root=project_dir))
 
 
 # mtime+size keyed parse cache for segmentations.json files. Bounded LRU

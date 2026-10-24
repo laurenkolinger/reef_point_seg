@@ -685,6 +685,29 @@
   elConvert.addEventListener('click', startConvert);
   elStop.addEventListener('click', stopJob);
 
+  // The initials VICARIUS passes as ?initials=XX when it opens this page:
+  // trimmed, upper-cased, two to four letters, else "" (ignored). Only ever
+  // assigned to .value, never inserted as markup.
+  function passedInitials() {
+    try {
+      var raw = new URLSearchParams(window.location.search).getAll('initials');
+      var v = String(raw.length === 1 ? raw[0] : '').trim().toUpperCase();
+      return /^[A-Z]{2,4}$/.test(v) ? v : '';
+    } catch (e) { return ''; }
+  }
+  // Rewrites the initials value to upper case as it is typed, keeping the caret.
+  function upperAsTyped(input) {
+    var upper = input.value.toUpperCase();
+    if (upper === input.value) return;
+    var at = input.selectionStart;
+    input.value = upper;
+    try { input.setSelectionRange(at, at); } catch (e) { /* not a text field */ }
+  }
+  if (elProjectBy) {
+    elProjectBy.value = passedInitials();
+    elProjectBy.addEventListener('input', function () { upperAsTyped(elProjectBy); });
+  }
+
   loadDatasets();
   loadOutputs();
   poll();

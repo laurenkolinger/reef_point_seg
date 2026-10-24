@@ -57,6 +57,11 @@ except ImportError:  # pragma: no cover - non-POSIX fallback
 
 from orchestrator_config import REPO_DIR, DEFAULT_STEP_CONFIGS
 
+# Images are never deleted: a reset sets image-holding content aside in
+# <project>/_superseded/<stamp>/ (scripts/_superseded.py).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _superseded as _sup  # noqa: E402
+
 STEP_DIRS = {
     "1": "step1_makeAllPoints",
     "2": "step2_recodeSpecies",
@@ -1159,8 +1164,15 @@ def complete_step(state, step_num):
 
 
 def reset_step(state, step_num):
-    """Clear step outputs and lock it + all subsequent steps."""
+    """Clear step outputs and lock it + all subsequent steps.
+
+    Content that holds an image, an outline record (segmentations.json,
+    label_provenance.csv, export_manifest.csv) or a label folder, or any file
+    of an unlisted type, is moved to <project>/_superseded/<stamp>/<step dir>/
+    and never deleted; plain tables, logs and model weights are removed as
+    before."""
     last = int(STEP_KEYS[-1])
+    stamp = _sup.stamp_now()
     for s in range(step_num, last + 1):
         ss = str(s)
         if ss not in state["steps"]:
@@ -1170,10 +1182,19 @@ def reset_step(state, step_num):
         if os.path.isdir(step_dir):
             for item in os.listdir(step_dir):
                 path = os.path.join(step_dir, item)
-                if os.path.isdir(path):
-                    shutil.rmtree(path)
+                # Removed only when it is plainly safe: a link, or a tree of
+                # known non-image files and model weights with no outline
+                # record or label folder in it. Everything else is moved.
+                if os.path.islink(path) or (
+                        _sup.is_removable_tree(path, _sup.MODEL_ARTIFACT_EXTENSIONS)
+                        and not _sup.holds_annotation_work(path)):
+                    if os.path.isdir(path) and not os.path.islink(path):
+                        shutil.rmtree(path)
+                    else:
+                        os.remove(path)
                 else:
-                    os.remove(path)
+                    _sup.supersede(path, base_dir=state["project_dir"], stamp=stamp,
+                                   log=lambda m: None)
         state["steps"][ss]["status"] = "locked" if s > step_num else "pending"
         state["steps"][ss]["outputs"] = {}
         state["steps"][ss].pop("completed_at", None)

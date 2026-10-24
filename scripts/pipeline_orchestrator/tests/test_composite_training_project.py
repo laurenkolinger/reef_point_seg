@@ -20,6 +20,18 @@ VICARIUS event bridge is stubbed to no-ops, and the only stage launch a test
 reaches is a stubbed runner.run_cli_stage.
 """
 
+# Keep this suite off the live mask registry, expert library and clip index
+# when it is run alone: scripts/tests/_isolation.py sets the isolating
+# variables to temp dirs and blocks any write to the live stores.
+import os as _iso_os
+import sys as _iso_sys
+_iso_dir = _iso_os.path.dirname(_iso_os.path.abspath(__file__))
+while _iso_os.path.basename(_iso_dir) != 'scripts' and _iso_dir != _iso_os.path.dirname(_iso_dir):
+    _iso_dir = _iso_os.path.dirname(_iso_dir)
+_iso_sys.path.insert(0, _iso_os.path.join(_iso_dir, 'tests'))
+import _isolation
+_isolation.install()
+
 import json
 import os
 import shutil
@@ -437,12 +449,12 @@ def test_ui_disabled_tiles_and_banner():
 
 
 def test_asset_version_bumped():
-    check(appmod.ASSET_VERSION == "20260921-start",
+    check(appmod.ASSET_VERSION == "20261017-cardrows",
           f"ASSET_VERSION is {appmod.ASSET_VERSION}")
     sh = open(os.path.join(_SCRIPTS, "restart_reef_point_seg.sh")).read()
-    check("orchestrator.js?v=20260921-start" in sh,
+    check("orchestrator.js?v=20261017-cardrows" in sh,
           "the restart script must fetch the fresh JS")
-    check("assert_html_present '20260921-start'" in sh,
+    check("assert_html_present '20261017-cardrows'" in sh,
           "the restart self-test must pin the new cache-bust")
     check("20260901-quality-sweep" not in sh and "20260902-uniform-training" not in sh
           and "20260902-final-polish" not in sh,

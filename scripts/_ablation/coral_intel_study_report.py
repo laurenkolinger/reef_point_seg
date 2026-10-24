@@ -205,8 +205,8 @@ are the final measure and come from the evaluation PDF of each scored model.</p>
 <th>Validation, best (mAP50 / 50-95)</th><th>Test (mAP50 / 50-95)</th><th>Report</th></tr>
 {''.join(rows)}</table>
 <p>A0 to B3 share one split of 10,361 photographs made before augmentation (7,257 training,
-1,552 validation, 1,552 test), so their test scores compare directly. L0 uses the same
-settings as A0 on images split after augmenting, where 91 percent of test images have a copy
+1,552 validation, 1,552 test), so their test scores compare directly. L0 uses the A0
+settings, on one GPU, on images split after augmenting, where 91 percent of test images have a copy
 of the same photograph in training; its test score is not comparable with A0 to B3 and exists
 to show how much that overlap raises a score. The published Coral Intel test mAP50 is
 0.938.</p>

@@ -15,6 +15,18 @@ a real process (relevant right now: a real VOYAGER reconstruction is running
 on this box and must never be touched by a test).
 """
 
+# Keep this suite off the live mask registry, expert library and clip index
+# when it is run alone: scripts/tests/_isolation.py sets the isolating
+# variables to temp dirs and blocks any write to the live stores.
+import os as _iso_os
+import sys as _iso_sys
+_iso_dir = _iso_os.path.dirname(_iso_os.path.abspath(__file__))
+while _iso_os.path.basename(_iso_dir) != 'scripts' and _iso_dir != _iso_os.path.dirname(_iso_dir):
+    _iso_dir = _iso_os.path.dirname(_iso_dir)
+_iso_sys.path.insert(0, _iso_os.path.join(_iso_dir, 'tests'))
+import _isolation
+_isolation.install()
+
 import os
 import subprocess
 import sys
@@ -122,6 +134,17 @@ _RELEASE_CALLS = []
 def _install_gpu_stub(check_decision, claim_decision="granted"):
     """Replace gpu_claim.check/claim/release with recording stand-ins.
 
+    Also replaces launch_env/card_uuids/device_string (GPU traffic,
+    docs/superpowers/specs/2026-09-28-gpu-traffic-design.md) with the real
+    shared-contract behaviour over whatever "cards"/"env"/"device" keys the
+    answer dict happens to carry. Every check_decision this file uses
+    ("granted", "refused", "needs_pin", "unregistered") carries none of
+    those keys, so for every test in this file these three read as "nothing
+    to add", exactly the "an answer without these fields changes nothing"
+    case the shared contract calls out; the per-card behaviour itself
+    (cards_wanted, the env each tier gets, cards= on the claim) is pinned by
+    the sibling suite test_gpu_traffic_stage_runner.py.
+
     Parameters:
         check_decision: the "decision" value gpu_claim.check() returns
             every call, one of "granted", "refused", "needs_pin",
@@ -136,16 +159,18 @@ def _install_gpu_stub(check_decision, claim_decision="granted"):
     _CLAIM_CALLS.clear()
     _RELEASE_CALLS.clear()
 
-    def _check(module, tier=None, by="LO"):
-        _CHECK_CALLS.append({"module": module, "tier": tier, "by": by})
+    def _check(module, tier=None, by="LO", cards_wanted=None):
+        _CHECK_CALLS.append({"module": module, "tier": tier, "by": by,
+                              "cards_wanted": cards_wanted})
         result = {"decision": check_decision}
         if check_decision in ("refused", "needs_pin"):
             result["message"] = f"GPU right of way: {tier} is busy for testing."
         return result
 
-    def _claim(module, tier=None, run_id="", pid=None, by="LO", bypass=False, reason=""):
+    def _claim(module, tier=None, run_id="", pid=None, by="LO", bypass=False,
+               reason="", cards=None):
         _CLAIM_CALLS.append({"module": module, "tier": tier, "run_id": run_id,
-                              "pid": pid, "by": by})
+                              "pid": pid, "by": by, "cards": cards})
         result = {"decision": claim_decision}
         if claim_decision == "granted":
             result["claim_id"] = f"c-test-{pid}"
@@ -155,9 +180,26 @@ def _install_gpu_stub(check_decision, claim_decision="granted"):
         _RELEASE_CALLS.append({"claim_id": claim_id, "pid": pid})
         return {"released": True}
 
+    def _launch_env(answer):
+        env = (answer or {}).get("env")
+        return dict(env) if isinstance(env, dict) else {}
+
+    def _card_uuids(answer):
+        cards = (answer or {}).get("cards")
+        if not isinstance(cards, list):
+            return []
+        return [c.get("uuid") for c in cards if isinstance(c, dict) and c.get("uuid")]
+
+    def _device_string(answer):
+        device = (answer or {}).get("device")
+        return device if isinstance(device, str) and device else None
+
     gpu_claim.check = _check
     gpu_claim.claim = _claim
     gpu_claim.release = _release
+    gpu_claim.launch_env = _launch_env
+    gpu_claim.card_uuids = _card_uuids
+    gpu_claim.device_string = _device_string
 
 
 def _restore_gpu():
@@ -299,14 +341,21 @@ def test_unregistered_helper_lets_the_stage_run():
           "an unregistered claim leaves nothing to release later")
 
 
-def test_malformed_check_reply_fails_open_rather_than_crashing():
+def test_malformed_check_reply_fails_closed_rather_than_crashing():
     # A defensive edge case: gpu_claim never raises per its own contract, but
-    # an unexpected reply shape (missing "decision") must not crash a launch.
+    # an unexpected reply shape (missing "decision") must not crash a
+    # launch. Per ADR 0008, _GPU_STARTABLE_DECISIONS is an allow-list (only
+    # "granted" and "unregistered" ever mean proceed), so a reply this file
+    # cannot make sense of must fail CLOSED, refusing with the generic
+    # fallback message, not open (this test's name and assertion were
+    # reversed before that allow-list existed, when a block-list let
+    # anything not on it through).
     _install_gpu_stub(check_decision="granted")
-    gpu_claim.check = lambda module, tier=None, by="LO": {}
+    gpu_claim.check = lambda module, tier=None, by="LO", cards_wanted=None: {}
     runner = _new_runner({"6": "vega"})
     result = runner.run_cli_stage(6, ["true"])
-    check("pid" in result, f"a malformed check reply fails open, not closed: {result}")
+    check(result == {"error": stage_runner.GPU_NO_USABLE_ANSWER_MESSAGE, "busy": True},
+          f"a malformed check reply fails closed, with the fallback message: {result}")
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +479,7 @@ if __name__ == "__main__":
     run(test_empty_gpu_stages_gates_nothing)
     print("UNREGISTERED:")
     run(test_unregistered_helper_lets_the_stage_run)
-    run(test_malformed_check_reply_fails_open_rather_than_crashing)
+    run(test_malformed_check_reply_fails_closed_rather_than_crashing)
     print("RELEASE:")
     run(test_claim_is_released_when_the_process_exits)
     run(test_ungated_stage_release_is_a_no_op)

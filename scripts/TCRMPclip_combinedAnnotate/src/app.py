@@ -41,7 +41,8 @@ from mask_ops import (
 )
 from export_yolo import load_class_map, save_class_map, export_batch, update_data_yaml
 from render_overlay import render_segmentation_overlays
-from provenance import compute_label_outcomes, write_provenance_csv, ast_now
+from provenance import (compute_label_outcomes, ast_now, frames_with_ledger_drift,
+                        read_prior_screening, write_provenance_frames)
 import custom_imports as ci
 
 app = Flask(__name__, template_folder='templates')
@@ -631,75 +632,19 @@ def load_segmentations(export_dir):
     return {}
 
 
-# Version this file's own reader expects; bump alongside a documented shape
-# change to the contract in docs/superpowers/plans/
-# 2026-09-27-vega-annotator-tidy-and-no-rescreening.md.
-_PRIOR_SCREENING_VERSION = 1
-
-
 def load_prior_screening(export_dir):
     """Load <export_dir>/prior_screening.json: what OTHER reef_point_seg
     projects already screened on this project's images (no-rescreening rule,
-    VEGA annotator tidy-up, 2026-09-27). The orchestrator regenerates this
-    file, keyed by file stem, before every annotator launch, covering every
-    frame of this project that carries at least one label screened
-    elsewhere, partly or fully. A new Step 3 selection never includes a
-    fully screened frame, but a frame selected before that rule existed, or
-    screened elsewhere after selection, still needs its previews. See the
-    plan's Contract section for the exact upstream shape.
-
-    Args:
-        export_dir: the project's export directory (session['export_dir']).
+    VEGA annotator tidy-up, 2026-09-27). The reading and sanitizing live in
+    provenance.read_prior_screening, shared with Edit Masks; this wrapper
+    only supplies the app's log.
 
     Returns:
         {stem: {'screened': {label_code: {...}}, 'masks': [{...}, ...]}},
-        keyed by file stem WITHOUT an extension (session['segmentations'] and
-        session['prior_screening'] use different keys for the same frame:
-        see _prior_screening_for). Never raises. A missing file, an unreadable
-        file, non-JSON content, or a top level that is not a {"version": 1,
-        "frames": {...}} object all become {} with exactly one log line, so a
-        broken or not-yet-deployed prior-screening file can never stop the
-        annotator from opening (W2's orchestrator half of this plan ships
-        separately; until it does, every project sees an absent file here).
-        A single malformed FRAME inside an otherwise valid file degrades to
-        {'screened': {}, 'masks': []} for that frame alone, without an extra
-        log line, so one bad entry never costs the rest of a good file.
+        keyed by file stem WITHOUT an extension. Never raises: a missing,
+        unreadable or malformed file becomes {} with one log line.
     """
-    path = os.path.join(export_dir, 'prior_screening.json')
-    if not os.path.exists(path):
-        log(f"[prior-screening] no prior_screening.json at {path}; every "
-            f"frame is treated as unscreened elsewhere")
-        return {}
-
-    try:
-        with open(path) as f:
-            payload = json.load(f)
-    except (OSError, ValueError) as e:
-        log(f"[prior-screening] could not read {path} ({e}); treating "
-            f"every frame as unscreened elsewhere")
-        return {}
-
-    valid_envelope = (isinstance(payload, dict)
-                       and payload.get('version') == _PRIOR_SCREENING_VERSION
-                       and isinstance(payload.get('frames'), dict))
-    if not valid_envelope:
-        log(f"[prior-screening] {path} is not a version "
-            f"{_PRIOR_SCREENING_VERSION} prior-screening file "
-            f"({{'version': 1, 'frames': {{...}}}} expected); ignoring it")
-        return {}
-
-    frames = {}
-    for stem, entry in payload['frames'].items():
-        if not isinstance(entry, dict):
-            continue
-        screened = entry.get('screened')
-        masks = entry.get('masks')
-        frames[stem] = {
-            'screened': screened if isinstance(screened, dict) else {},
-            'masks': ([m for m in masks if isinstance(m, dict)]
-                      if isinstance(masks, list) else []),
-        }
-    return frames
+    return read_prior_screening(export_dir, log)
 
 
 # Every writer to the session's on-disk stores serializes here. Three callers
@@ -740,6 +685,25 @@ def _atomic_write_json(path, payload, indent):
         raise
 
 
+def _changed_outside(name, mem_frame, disk_frame, known_frame_hashes):
+    """Say whether a frame's disk version changed outside this process.
+
+    Parameters:
+        name: the frame's filename key.
+        mem_frame: this process's in-memory copy of the frame.
+        disk_frame: the frame as it is on disk now.
+        known_frame_hashes: {frame: hash} of the version this process last
+            read or wrote, from _seg_frame_hash.
+    Returns:
+        True when the disk frame differs from the last known version, or,
+        with no known version recorded, from the in-memory copy.
+    """
+    last_known = known_frame_hashes.get(name)
+    if last_known is None:
+        return _frame_hash(disk_frame) != _frame_hash(mem_frame)
+    return _frame_hash(disk_frame) != last_known
+
+
 def _merge_store_with_disk(path, mem_store, disk_store, dirty_frame_names):
     """Three-way per-frame reconciliation between the in-memory store being
     saved and what is currently on disk.
@@ -772,8 +736,11 @@ def _merge_store_with_disk(path, mem_store, disk_store, dirty_frame_names):
     Returns:
         (merged, both_sides, taken_from_disk, kept_local, review_counts):
         merged is the reconciled {frame: seg_dict} store; both_sides is the
-        list of frame filenames changed on both sides; taken_from_disk and
-        kept_local are plain per-frame counts; review_counts is
+        list of frame filenames changed on both sides; taken_from_disk counts
+        the frames whose disk version differs from the last version this
+        process read or wrote, plus frames present only on disk (what the
+        page reports as changed outside the window); kept_local is a plain
+        per-frame count; review_counts is
         {frame: (merged_count, expert_count)} from
         _merge_imported_review_fields, one entry per dirty frame that also
         existed on disk.
@@ -799,7 +766,8 @@ def _merge_store_with_disk(path, mem_store, disk_store, dirty_frame_names):
                     both_sides.append(name)
             else:
                 merged[name] = disk_store[name]
-                taken_from_disk += 1
+                if _changed_outside(name, mem_store[name], disk_store[name], known_frame_hashes):
+                    taken_from_disk += 1
         elif on_disk:
             merged[name] = disk_store[name]
             taken_from_disk += 1
@@ -951,6 +919,9 @@ def save_segmentations(export_dir, data):
         with _dirty_lock:
             _segmentations_saved_version = version_being_saved
             _dirty_frames.difference_update(frames_being_saved)
+        # The ledger follows the JSON, in the same locked section, so the two
+        # files never describe different states.
+        _write_pending_ledger(export_dir, data)
         return status, info
 
 
@@ -1187,6 +1158,11 @@ def _build_review_list():
 
     If `session['shuffle']` is set, the unexported list is shuffled so the
     user sees a random sample instead of alphabetical ordering.
+
+    A frame sent back for review (scripts/return_frames_to_review.py: not
+    exported, carrying a `returned_to_review` event) goes to the front, sorted
+    or shuffled, so the first batches hold every frame waiting for a second
+    look; every other frame keeps its order behind them.
     """
     import random as _random
     target_only = getattr(cfg, 'TARGET_SPECIES_ONLY', 0)
@@ -1198,6 +1174,12 @@ def _build_review_list():
             continue
         if seg.get('exported', False):
             continue
+        if seg.get('image_missing_at'):
+            # Out of the queue only while the image file is absent.
+            if not _image_on_disk(seg):
+                continue
+            seg.pop('image_missing_at', None)
+            _mark_dirty(filename=fn)
         if target_only and not getattr(cfg, 'MANUAL_ANNOTATE', False):
             # Custom imports start maskless by definition (no routed prompts),
             # so the no-target-mask skip must not hide them from review.
@@ -1208,6 +1190,12 @@ def _build_review_list():
         unexported.append(fn)
     if session.get('shuffle'):
         _random.shuffle(unexported)
+    segs = session['segmentations']
+    sent_back = {fn for fn in unexported
+                 if not segs[fn].get('exported', False) and segs[fn].get('returned_to_review')}
+    if sent_back:
+        unexported = ([fn for fn in unexported if fn in sent_back]
+                      + [fn for fn in unexported if fn not in sent_back])
     session['review_files'] = unexported
     session['review_offset'] = 0
 
@@ -1567,6 +1555,8 @@ def configure():
     existing = load_segmentations(session['export_dir'])
     session['segmentations'] = {}
     session['segmentations'].update(existing)
+    # Repair a ledger left behind by a failed write or a quit (see _heal_ledger).
+    _heal_ledger(session['export_dir'])
     already_processed = set(existing.keys())
 
     with open(ids_path) as f:
@@ -1741,6 +1731,8 @@ def resume():
     session['prior_screening'] = load_prior_screening(export_dir_abs)
 
     session['segmentations'] = load_segmentations(export_dir_abs)
+    # Repair a ledger left behind by a failed write or a quit (see _heal_ledger).
+    _heal_ledger(export_dir_abs)
     total = len(session['segmentations'])
 
     # Backfill custom imports missing from the loaded store (normally none:
@@ -1894,6 +1886,8 @@ def standalone_start():
     session['contacts'] = []
     session['class_map'] = load_class_map(session_dir)
     session['segmentations'] = load_segmentations(session_dir)
+    # Repair a ledger left behind by a failed write or a quit (see _heal_ledger).
+    _heal_ledger(session_dir)
     # A standalone session has no orchestrator-launched project to cross-check
     # against, so it never carries a prior_screening.json of its own; loading
     # it anyway (almost always {}) also clears out whatever a PREVIOUSLY open
@@ -3115,6 +3109,47 @@ def _expert_id_conflict(by_id, ids):
     return None
 
 
+def _merge_species_donor(by_id, ids):
+    """The input mask whose species the merged mask must carry, or None.
+
+    A merge used to keep the lowest id's species even when that mask was
+    blank or a different species from the others, silently relabelling the
+    absorbed masks. The rule now: the inputs may carry at most one distinct
+    non-blank species, and the survivor takes it.
+
+    Parameters:
+        by_id: {mask id: mask dict} for the frame.
+        ids: the ascending mask ids being merged.
+
+    Returns:
+        The lowest-id input carrying the single non-blank species, or None
+        when every input is blank and none is accepted (the merge stays
+        blank and pending).
+
+    Raises:
+        MergeError (400): two inputs carry different species (both named), or
+        every input is blank and any input is accepted (an accepted mask
+        needs a species).
+    """
+    first = None
+    for i in ids:
+        code = str(by_id[i].get('species') or '').strip()
+        if not code:
+            continue
+        if first is None:
+            first = (i, code)
+        elif code != first[1]:
+            raise MergeError(f'masks #{first[0]} and #{i} carry different species '
+                             f'({first[1]} vs {code}); give them the same species '
+                             f'before merging')
+    if first is not None:
+        return by_id[first[0]]
+    if any(by_id[i].get('status') == 'accepted' for i in ids):
+        raise MergeError('these masks have no species yet; choose a species for '
+                         'them before merging')
+    return None
+
+
 def _merge_ids(seg, ids):
     """Union the masks with these ids into the lowest id. Returns (survivor, removed_ids).
 
@@ -3130,6 +3165,9 @@ def _merge_ids(seg, ids):
     grouping uses, so a hand-picked merge and an automatic one treat review
     state identically) and its merge lineage, so re-merging a merged mask
     extends `merged_from` rather than overwriting it.
+
+    The survivor takes the one non-blank species among the inputs
+    (_merge_species_donor).
 
     Raises MergeError (carrying the HTTP status the route should use) for every
     condition the operator can fix: non-integer ids, fewer than two distinct
@@ -3172,6 +3210,10 @@ def _merge_ids(seg, ids):
         raise MergeError(f'masks #{a} and #{b} are each awaiting their own expert ID; '
                          f'resolve those before merging')
 
+    # Species is settled before any geometry changes, so a refusal leaves the
+    # frame exactly as it was.
+    species_donor = _merge_species_donor(by_id, ids)
+
     h, w = seg['image_height'], seg['image_width']
     parts = [rle_decode(by_id[i]['rle'], (h, w)) for i in ids]
     survivor = by_id[ids[0]]
@@ -3192,6 +3234,11 @@ def _merge_ids(seg, ids):
         if not _merge_review_state(survivor, by_id[i]):
             raise MergeError(f'masks #{ids[0]} and #{i} carry different expert IDs; '
                              f'resolve that in Edit Masks before merging')
+    if species_donor is not None and species_donor is not survivor:
+        # The survivor was blank: take the species with its name and category.
+        for field in ('species', 'name', 'category'):
+            if field in species_donor:
+                survivor[field] = species_donor[field]
     survivor['source_type'] = 'merged'
     # Lineage, not just this merge: a survivor that was already a merge keeps
     # every id it has ever absorbed.
@@ -3404,7 +3451,9 @@ def reload_segmentations():
 
     The response still reports the ONE requested frame's own review-field
     counts and refreshed masks, since that is the frame the operator is
-    looking at and the client repaints from this response. Lets imported
+    looking at and the client repaints from this response. The counts name
+    only masks whose imported review fields the reload changed, so a frame
+    with nothing imported reports 0. Lets imported
     expert/pending colours appear without restarting the app: after the
     importer (or a teammate) writes accepted IDs into the on-disk
     segmentations.json, the operator hits "Reload IDs" and the
@@ -3459,6 +3508,13 @@ def reload_segmentations():
         with _dirty_lock:
             frames_being_reconciled = set(_dirty_frames)
 
+        # The requested frame as this window held it before the reload, one
+        # shallow copy per mask: the counts below compare against it, and
+        # _merge_imported_review_fields only reassigns top-level fields, so
+        # nothing it writes reaches the session.
+        held_masks = [dict(m) for m in
+                      session['segmentations'].get(filename, {}).get('masks', [])]
+
         merged, _both_sides, _taken, _kept, review_counts = _merge_store_with_disk(
             path, session['segmentations'], disk_store, frames_being_reconciled)
         session['segmentations'].clear()
@@ -3470,13 +3526,12 @@ def reload_segmentations():
         if filename in review_counts:
             merged_count, expert_count = review_counts[filename]
         else:
-            # Not a dirty frame: taken wholesale from disk, so every review/
-            # expert field it now carries is "new" from this session's view.
-            final_masks = seg.get('masks', [])
-            merged_count = len(final_masks)
-            expert_count = sum(
-                1 for m in final_masks
-                if isinstance(m.get('expert_id'), dict) and m['expert_id'].get('mode') == 'EXPERT')
+            # Not a dirty frame: taken wholesale from disk, or kept when only
+            # this window holds it. Count the masks whose imported review
+            # fields differ from what this window held, by the same rule as a
+            # dirty frame, instead of every mask on the frame.
+            merged_count, expert_count = _merge_imported_review_fields(
+                held_masks, seg.get('masks', []))
 
         out = {
             'ok': True,
@@ -3742,6 +3797,7 @@ def scrap_segmentation(filename):
             return jsonify({'error': 'not found'}), 404
         seg['scrapped'] = True
         seg['reviewed'] = True
+        _queue_ledger_frame(filename)
         # Marked here, before this route's own flush_all(), not left to
         # @_dirty_on_success: that decorator fires AFTER the route returns,
         # which would mark the session dirty again right after this call
@@ -3761,6 +3817,7 @@ def unscrap_segmentation(filename):
         if not seg:
             return jsonify({'error': 'not found'}), 404
         seg['scrapped'] = False
+        _queue_ledger_frame(filename)
         _mark_dirty(filename=filename)
         status, info = flush_all()
         _build_review_list()
@@ -4043,34 +4100,182 @@ def _derive_project_id(export_dir):
     return os.path.basename(os.path.dirname(os.path.abspath(export_dir))) or 'project'
 
 
+# Frames whose label_outcomes were re-stamped in memory (or whose scrapped
+# state changed) but whose ledger rows are not on disk yet: {export_dir:
+# {filename, ...}}. _stamp_provenance adds; _write_pending_ledger (run by
+# save_segmentations, under _store_write_lock, right after segmentations.json
+# is written) drains the whole queue in one read-modify-write. The ledger
+# therefore changes only when segmentations.json does, and both files describe
+# one state. _heal_ledger rebuilds the queue from disk when a project opens, so
+# a write that failed, or a quit before the retry, is repaired next time.
+_ledger_pending = {}
+
+# Marker on a frame entry in segmentations.json: its ledger rows are not
+# confirmed written. Old stores never carry it, so opening one writes nothing.
+LEDGER_PENDING_KEY = 'ledger_pending'
+
+# Ledger sources written by the expert-ID importer: the self-repair treats a
+# row from one of these as agreement and never overwrites it.
+EXPERT_IMPORT_SOURCES = frozenset({'expertids'})
+
+
+def _ledger_outcomes(seg):
+    """The outcomes the ledger should hold for one frame: none when the frame
+    is scrapped (a scrapped frame is not screened), else its stored
+    label_outcomes."""
+    if seg.get('scrapped'):
+        return {}
+    return seg.get('label_outcomes') or {}
+
+
+def _queue_ledger_frame(filename):
+    """Queue one frame for the next ledger write (also used by scrap and
+    unscrap, whose label_outcomes do not change but whose ledger rows must).
+
+    The frame entry gets a persistent 'ledger_pending' marker, saved with
+    segmentations.json in the same save. It is cleared only after the ledger
+    write for that frame succeeded, so the next open repairs exactly the
+    drift this code created and nothing else.
+    """
+    with _store_write_lock:
+        seg = session['segmentations'].get(filename)
+        if seg is not None:
+            seg[LEDGER_PENDING_KEY] = True
+        _ledger_pending.setdefault(session['export_dir'], set()).add(filename)
+
+
 def _stamp_provenance(seg, filename):
-    """Compute per-(image,label) outcomes for a finished/exported frame and
-    upsert the flat ledger. Stamps seg['label_outcomes'] in place. The CSV
-    write is wrapped non-fatally so a provenance hiccup never blocks review or
-    export.
+    """Compute per-(image,label) outcomes for a finished/exported frame,
+    stamp them on seg['label_outcomes'] in place, and queue the frame for the
+    ledger. The ledger CSV itself is written by the next save (see
+    _write_pending_ledger), never here.
 
     No-rescreening (2026-09-27): a target label another project already
     screened this same image for (session['prior_screening'][stem]['screened'])
     is passed to compute_label_outcomes as screened_elsewhere, so a frame
     left without a local mask for that label gets no fresh not_found row; a
-    label this project DOES find a mask for is unaffected. Persistence of the
-    block rides on the existing flush.
+    label this project DOES find a mask for is unaffected.
     """
-    export_dir = session['export_dir']
+    seg['label_outcomes'] = _compute_frame_outcomes(seg, filename)
+    _queue_ledger_frame(filename)
+
+
+def _compute_frame_outcomes(seg, filename):
+    """The frame's label outcomes from its current outlines, with this
+    session's target species and the labels another project already screened
+    (no-rescreening rule)."""
     screened_elsewhere = frozenset(
         (_prior_screening_for(filename).get('screened') or {}).keys())
-    outcomes = compute_label_outcomes(
+    return compute_label_outcomes(
         seg, _target_species(), source=cfg.PROVENANCE_SOURCE,
         reviewer=_current_reviewer(), screened_elsewhere=screened_elsewhere)
-    seg['label_outcomes'] = outcomes
+
+
+def _write_pending_ledger(export_dir, segmentations, protect_sources=frozenset()):
+    """Write the ledger rows of every queued frame of this project in ONE
+    locked read-modify-write, from the outcomes that segmentations.json now
+    holds.
+
+    Called by save_segmentations() under _store_write_lock, after the JSON
+    write, so the ledger and the JSON always describe the same state. When the
+    write fails, every frame stays queued for the next save and the failure is
+    logged; it never blocks the save (a provenance hiccup must not block
+    review or export).
+    """
+    pending = _ledger_pending.get(export_dir)
+    if not pending:
+        return
+    frames = {}
+    attempted = set()
+    for filename in sorted(pending):
+        seg = segmentations.get(filename)
+        if seg is None:
+            pending.discard(filename)
+            continue
+        frames[os.path.splitext(filename)[0]] = _ledger_outcomes(seg)
+        attempted.add(filename)
+    if frames:
+        project_id = cfg.PROJECT_ID or _derive_project_id(export_dir)
+        try:
+            write_provenance_frames(export_dir, frames, project_id,
+                                    source=cfg.PROVENANCE_SOURCE,
+                                    protect_sources=protect_sources)
+            pending.difference_update(attempted)
+            for filename in attempted:
+                if segmentations[filename].pop(LEDGER_PENDING_KEY, None):
+                    # Dirty, so the next save (the quit save included) writes
+                    # the cleared marker; a marker left on disk after a good
+                    # write would let a later open undo another tool's row.
+                    _mark_dirty(filename=filename)
+        except Exception as e:
+            log(f"[provenance] ledger write failed for {len(frames)} frame(s), "
+                f"will retry on the next save (non-fatal): {e}")
+    if not pending:
+        _ledger_pending.pop(export_dir, None)
+
+
+def _heal_ledger(export_dir):
+    """Finish the ledger writes this code started but did not confirm.
+
+    Run when a project opens. Only frames carrying the 'ledger_pending'
+    marker are looked at (a failed write, or a quit before the retry, leaves
+    the marker in segmentations.json). Each marked frame's outcomes are
+    recomputed from its current outlines, not taken from what was stored
+    earlier, so a tool that changed the frame since cannot be undone. An
+    importer row (`expertids`) for a label always counts as agreement and is
+    never overwritten. A marked frame whose rows disagree is written at once;
+    every marked frame then loses its marker and is marked dirty so the clear
+    is saved. Frames without the marker are never rewritten, whatever they
+    disagree on: a store from an older version, or from another tool, opens
+    without touching its ledger. Never raises.
+    """
     try:
-        write_provenance_csv(
-            export_dir,
-            os.path.splitext(filename)[0],
-            outcomes,
-            cfg.PROJECT_ID or _derive_project_id(export_dir))
+        with _store_write_lock:
+            segs = session['segmentations']
+            marked = {os.path.splitext(fn)[0]: fn for fn, seg in segs.items()
+                      if seg.get(LEDGER_PENDING_KEY)}
+            if not marked:
+                return
+            for fn in marked.values():
+                if segs[fn].get('scrapped'):
+                    continue
+                segs[fn]['label_outcomes'] = _compute_frame_outcomes(segs[fn], fn)
+            expected = {stem: _ledger_outcomes(segs[fn]) for stem, fn in marked.items()}
+            drifted = frames_with_ledger_drift(
+                export_dir, expected, agree_sources=EXPERT_IMPORT_SOURCES)
+            for stem, fn in marked.items():
+                if stem not in drifted:
+                    segs[fn].pop(LEDGER_PENDING_KEY, None)
+                    _mark_dirty(filename=fn)
+            if not drifted:
+                return
+            log(f"[provenance] repairing the ledger for {len(drifted)} frame(s) "
+                f"whose last write was not confirmed")
+            _ledger_pending.setdefault(export_dir, set()).update(marked[s] for s in drifted)
+            _write_pending_ledger(export_dir, segs, protect_sources=EXPERT_IMPORT_SOURCES)
     except Exception as e:
-        log(f"[provenance] csv write failed for {filename} (non-fatal): {e}")
+        log(f"[provenance] ledger repair failed (non-fatal): {e}")
+
+
+def _count_image_missing(segs):
+    """How many frames carry an image_missing_at mark whose image is still absent."""
+    return sum(1 for s in segs.values()
+               if s.get('image_missing_at') and not _image_on_disk(s))
+
+
+def _image_on_disk(seg):
+    """True when the frame's image file (seg['image_path_abs']) exists.
+
+    Parameters:
+        seg: one segmentation dict.
+
+    Returns:
+        False for a missing key, an empty path or a path with no file behind
+        it. Export, the ledger and the registry treat such a frame as having
+        nothing to report on.
+    """
+    path = seg.get('image_path_abs')
+    return bool(path) and os.path.exists(path)
 
 
 def _count_review_masks(to_export, batch_files):
@@ -4183,8 +4388,13 @@ def do_export():
         if seg:
             to_export[fn] = seg
 
+    # A frame whose image file is gone is recorded as image_missing in the
+    # export manifest below and nowhere else: export_batch (which also upserts
+    # the mask registry) never sees it, and it gets no ledger row, so a missing
+    # file can never read as a false not_found.
+    exportable = {fn: seg for fn, seg in to_export.items() if _image_on_disk(seg)}
     stats = export_batch(
-        to_export, export_dir, session['class_map'],
+        exportable, export_dir, session['class_map'],
         symlink=cfg.SYMLINK_IMAGES,
         reviewer=_current_reviewer(),
     )
@@ -4201,13 +4411,25 @@ def do_export():
     # a dict no longer reachable afterward (see _dirty_on_success). Export's
     # own file I/O above and below this loop does not touch
     # session['segmentations'] and stays outside the lock.
+    # The dirty mark is set in this same locked section as the stamp, so a save
+    # that runs between the two can never drop the exported flag or take the
+    # outcomes from disk.
     with _store_write_lock:
         for fn in batch_files:
             seg = _find_segmentation(fn)
-            if seg:
-                seg['exported'] = True
-                _stamp_provenance(seg, fn)
-                render_segmentation_overlays(seg, fn, export_dir, stage="reviewed")
+            if not seg:
+                continue
+            if not _image_on_disk(seg):
+                # Not exported: the frame leaves the queue only while its image
+                # is absent, and the dated mark says since when.
+                seg['image_missing_at'] = seg.get('image_missing_at') or ast_now()
+                _mark_dirty(filename=fn)
+                continue
+            seg['exported'] = True
+            seg.pop('image_missing_at', None)
+            _stamp_provenance(seg, fn)
+            _mark_dirty(filename=fn)
+            render_segmentation_overlays(seg, fn, export_dir, stage="reviewed")
 
     # Build per-frame manifest entries (one row per routed frame in this batch)
     batch_name = _next_batch_name(export_dir)
@@ -4225,7 +4447,7 @@ def do_export():
         image_path = seg.get('image_path_abs')
         if seg.get('scrapped'):
             outcome, lbl, img = 'scrapped', '', ''
-        elif not image_path or not os.path.exists(image_path):
+        elif not _image_on_disk(seg):
             outcome, lbl, img = 'image_missing', '', ''   # export_yolo skips it; no label is written
         elif accepted:
             outcome, lbl, img = 'exported_with_masks', stem + '.txt', fn
@@ -4274,26 +4496,31 @@ def do_export():
     # exported + scrapped == routed. Assert it so a silently-dropped frame is
     # caught loudly instead of vanishing from the YOLO export.
     if not session['review_files']:
-        routed = exported = scrapped = 0
+        routed = exported = scrapped = missing = 0
         for _s in session['segmentations'].values():
             routed += 1
             if _s.get('scrapped', False):
                 scrapped += 1
             elif _s.get('exported', False):
                 exported += 1
-        accounted = exported + scrapped
+            elif _s.get('image_missing_at') and not _image_on_disk(_s):
+                missing += 1
+        accounted = exported + scrapped + missing
         if accounted != routed:
             log(f"[batch] ALL-DONE RECONCILE MISMATCH: routed={routed} "
-                f"exported={exported} scrapped={scrapped} "
+                f"exported={exported} scrapped={scrapped} missing_image={missing} "
                 f"accounted={accounted} (lost {routed - accounted})")
         else:
             log(f"[batch] all done: routed={routed} = exported={exported} "
-                f"+ scrapped={scrapped}; every frame accounted for")
+                f"+ scrapped={scrapped} + missing_image={missing}; every frame accounted for")
         assert accounted == routed, (
             f"review queue empty but {routed - accounted} routed frame(s) "
-            f"unaccounted (exported={exported} scrapped={scrapped} routed={routed})")
+            f"unaccounted (exported={exported} scrapped={scrapped} "
+            f"missing_image={missing} routed={routed})")
 
-    out = {'ok': True, **stats}
+    out = {'ok': True, **stats,
+           'image_missing': sum(1 for e in manifest_entries if e['outcome'] == 'image_missing'),
+           'image_missing_total': _count_image_missing(session['segmentations'])}
     if review_stats:
         out['review'] = review_stats
     return jsonify(out)
@@ -4322,6 +4549,7 @@ def status():
         'images': len(segs),
         'reviewed': sum(1 for s in segs.values() if s.get('reviewed', False)),
         'exported': sum(1 for s in segs.values() if s.get('exported', False)),
+        'image_missing': _count_image_missing(segs),
         'total_masks': sum(len(s.get('masks', [])) for s in segs.values()),
         'custom_imports': sum(1 for s in segs.values() if s.get('custom_import', False)),
     }

@@ -38,6 +38,18 @@ under node (test_target_only_shows_pending.py).
 No pytest, GPU-free. Run with the unified env python:
     env/bin/python scripts/TCRMPclip_combinedAnnotate/tests/test_review_lock_ui.py
 """
+# Keep this suite off the live mask registry, expert library and clip index
+# when it is run alone: scripts/tests/_isolation.py sets the isolating
+# variables to temp dirs and blocks any write to the live stores.
+import os as _iso_os
+import sys as _iso_sys
+_iso_dir = _iso_os.path.dirname(_iso_os.path.abspath(__file__))
+while _iso_os.path.basename(_iso_dir) != 'scripts' and _iso_dir != _iso_os.path.dirname(_iso_dir):
+    _iso_dir = _iso_os.path.dirname(_iso_dir)
+_iso_sys.path.insert(0, _iso_os.path.join(_iso_dir, 'tests'))
+import _isolation
+_isolation.install()
+
 import os
 import re
 import subprocess
@@ -394,6 +406,7 @@ function _updateStickyAddIndicator() {}
 function setInteractionMode(m) { interactionMode = m; }
 function hideCatPopup() { popupHidden = true; }
 function persistMaskReview(id) { persisted.push(id); }
+function editBlockedByLoad() { return false; }
 function labelScanCandidate(f) { labeledCandidates.push(f); }
 function flashMode() {}
 function resumeStickyMode() {}
@@ -488,9 +501,22 @@ def test_no_bulk_path_can_apply_review():
     check(not offenders,
           "no multi-select path mentions REVIEW (found: %s)" % (", ".join(offenders) or "none"))
     # The relabel field is the only way this page can retag an existing mask.
+    # Since 2026-10-15 every label write (a species, a category chip, Unlabel,
+    # REVIEW) travels with its status in one PUT built by persistMaskStatus and
+    # reached through labelMask, so the review tag is guarded at the callers:
+    # persistMaskReview is the only one that passes it.
     check(src.count("relabel: {") == 1, "the relabel request body is written in exactly one place")
-    check("relabel: {" in funcs.get("persistMaskReview", ""),
-          "the only relabel sender is persistMaskReview")
+    check("relabel: {" in funcs.get("persistMaskStatus", ""),
+          "the only relabel sender is persistMaskStatus")
+    check("labelMask(" in funcs.get("persistMaskReview", ""),
+          "persistMaskReview stores the tag through labelMask")
+    label_writers = [n for n, b in funcs.items()
+                     if "labelMask(" in b and n not in ("labelMask", "persistMaskReview")]
+    check(len(label_writers) > 0, "other label writers exist, so the next check has teeth")
+    tagging = [n for n in label_writers if _writes_a_review_tag(funcs[n])]
+    check(not tagging,
+          "no label writer other than persistMaskReview writes a review tag (found: %s)"
+          % (", ".join(tagging) or "none"))
     callers = [n for n, b in funcs.items()
                if "persistMaskReview(" in b and n != "persistMaskReview"]
     check(callers == ["assignNewMaskReview"],

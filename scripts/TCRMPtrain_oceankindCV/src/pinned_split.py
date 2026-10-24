@@ -54,7 +54,9 @@ import yaml
 _SRC_DIR = str(Path(__file__).resolve().parent)
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
-from detect_dataset import SPLIT_FINGERPRINT_SCHEME, split_fingerprint  # noqa: E402
+from detect_dataset import (SPLIT_FINGERPRINT_SCHEME, set_aside_images,  # noqa: E402
+                            split_fingerprint)
+from _superseded import stamp_now  # noqa: E402
 
 # Atlantic Standard Time, fixed UTC-4, no daylight saving.
 AST = timezone(timedelta(hours=-4))
@@ -774,10 +776,12 @@ def main(argv: list[str] | None = None) -> int:
             json.dump(manifest_out, f, indent=2, sort_keys=False)
             f.write('\n')
 
+        # Images are never deleted: a previous split folder that holds any is
+        # moved to <out_dir>/_superseded/<stamp>/<split>.
+        stamp = stamp_now()
         for split in SPLIT_NAMES:
             final = os.path.join(out_dir, split)
-            if os.path.exists(final):
-                shutil.rmtree(final)
+            set_aside_images(final, base_dir=out_dir, stamp=stamp)
             shutil.move(os.path.join(tmp_dir, split), final)
         for fname in ('data.yaml', 'test.yaml', MANIFEST_NAME):
             shutil.move(os.path.join(tmp_dir, fname), os.path.join(out_dir, fname))

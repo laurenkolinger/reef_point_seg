@@ -8,6 +8,18 @@ Fail-open: a missing, empty, or corrupt registry means unlocked (one stderr
 warning per distinct error), and VICARIUS_LOCK_BYPASS=1 forces unlocked.
 Run with github_repo/env/bin/python.
 """
+# Keep this suite off the live mask registry, expert library and clip index
+# when it is run alone: scripts/tests/_isolation.py sets the isolating
+# variables to temp dirs and blocks any write to the live stores.
+import os as _iso_os
+import sys as _iso_sys
+_iso_dir = _iso_os.path.dirname(_iso_os.path.abspath(__file__))
+while _iso_os.path.basename(_iso_dir) != 'scripts' and _iso_dir != _iso_os.path.dirname(_iso_dir):
+    _iso_dir = _iso_os.path.dirname(_iso_dir)
+_iso_sys.path.insert(0, _iso_os.path.join(_iso_dir, 'tests'))
+import _isolation
+_isolation.install()
+
 import contextlib
 import io
 import json
@@ -138,6 +150,31 @@ r = client.get("/")
 check("vic-lock-page" in r.get_data(as_text=True),
       "lock re-engages once the bypass env var is removed")
 
+
+# k. backend runs pass the lock (Lauren, 2026-09-28): this machine plus the key
+os.environ["VICARIUS_LOCKS_PATH"] = LOCKED
+os.environ["VEGA_BACKEND_TOKEN_PATH"] = os.path.join(tmp, "cfg", "vega_backend_token")
+key = lock_status.backend_token(create=True)
+mode = os.stat(os.environ["VEGA_BACKEND_TOKEN_PATH"]).st_mode & 0o777
+check(len(key) == 64 and mode == 0o600, f"a 64-character key is created owner-only (mode {oct(mode)})")
+check(lock_status.backend_token(create=True) == key, "an existing key is reused, not replaced")
+H = lock_status.BACKEND_HEADER
+r = client.get("/api/project/state", headers={H: key})
+check(r.status_code != 423, f"locked: a local call with the key passes (got {r.status_code})")
+r = client.get("/api/project/state", headers={H: "0" * 64})
+check(r.status_code == 423, f"locked: a wrong key is refused (got {r.status_code})")
+r = client.get("/api/project/state")
+check(r.status_code == 423, f"locked: no key is refused (got {r.status_code})")
+r = client.get("/api/project/state", headers={H: key},
+               environ_base={"REMOTE_ADDR": "10.0.0.7"})
+check(r.status_code == 423, f"locked: the key from another machine is refused (got {r.status_code})")
+r = client.get("/", headers={"Accept": "text/html"})
+check("vic-lock-page" in r.get_data(as_text=True), "locked: a browser still gets the lock page")
+with open(os.environ["VEGA_BACKEND_TOKEN_PATH"], "w") as fh:
+    fh.write("")
+r = client.get("/api/project/state", headers={H: ""})
+check(r.status_code == 423, "locked: an empty key file never matches an empty header")
+os.environ.pop("VEGA_BACKEND_TOKEN_PATH", None)
 del os.environ["VICARIUS_LOCKS_PATH"]
 
 print("PASS" if _fail == 0 else f"{_fail} FAILED")

@@ -47,6 +47,18 @@ Run with:
   env/bin/python scripts/_boxes/tests/test_boxes_routes.py
 """
 
+# Keep this suite off the live mask registry, expert library and clip index
+# when it is run alone: scripts/tests/_isolation.py sets the isolating
+# variables to temp dirs and blocks any write to the live stores.
+import os as _iso_os
+import sys as _iso_sys
+_iso_dir = _iso_os.path.dirname(_iso_os.path.abspath(__file__))
+while _iso_os.path.basename(_iso_dir) != 'scripts' and _iso_dir != _iso_os.path.dirname(_iso_dir):
+    _iso_dir = _iso_os.path.dirname(_iso_dir)
+_iso_sys.path.insert(0, _iso_os.path.join(_iso_dir, 'tests'))
+import _isolation
+_isolation.install()
+
 import io
 import json
 import os
@@ -142,6 +154,42 @@ from _boxes import blueprint as bpmod  # noqa: E402
 from _boxes import ingest_coral_intel as ing  # noqa: E402
 from _boxes import ingest_yolo_boxes as ing_yolo  # noqa: E402
 from _boxes.tests.test_ingest_coral_intel import build_source, write  # noqa: E402
+
+
+class _StubGpuClaim:
+    """A no-network stand-in for blueprint.py's module-level gpu_claim
+    import (GPU right-of-way / GPU traffic,
+    docs/superpowers/specs/2026-09-28-gpu-traffic-design.md), so this suite
+    never calls out to a real (or absent) VICARIUS on port 5090 and never
+    writes a claim into the live GPU claims registry. Always grants, with no
+    per-card fields, so every existing assertion about the launched command
+    and its environment below is unaffected by the gate's addition: the
+    refusal path and the granted-with-cards path are proved end to end by
+    the dedicated suite, test_boxes_gpu_gate.py.
+    """
+
+    @staticmethod
+    def check(module, tier=None, by="LO"):
+        return {"decision": "granted"}
+
+    @staticmethod
+    def claim(module, tier=None, run_id="", pid=None, by="LO", bypass=False, reason="", cards=None):
+        return {"decision": "granted", "claim_id": f"stub-{pid}"}
+
+    @staticmethod
+    def launch_env(answer):
+        return {}
+
+    @staticmethod
+    def card_uuids(answer):
+        return []
+
+    @staticmethod
+    def device_string(answer):
+        return None
+
+
+bpmod.gpu_claim = _StubGpuClaim()
 
 _fail = 0
 

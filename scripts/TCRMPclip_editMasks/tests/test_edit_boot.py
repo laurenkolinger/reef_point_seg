@@ -14,6 +14,18 @@ exercised here (resume, image GET) are SAM-free.
 
 Run: env/bin/python scripts/TCRMPclip_editMasks/tests/test_edit_boot.py
 """
+# Keep this suite off the live mask registry, expert library and clip index
+# when it is run alone: scripts/tests/_isolation.py sets the isolating
+# variables to temp dirs and blocks any write to the live stores.
+import os as _iso_os
+import sys as _iso_sys
+_iso_dir = _iso_os.path.dirname(_iso_os.path.abspath(__file__))
+while _iso_os.path.basename(_iso_dir) != 'scripts' and _iso_dir != _iso_os.path.dirname(_iso_dir):
+    _iso_dir = _iso_os.path.dirname(_iso_dir)
+_iso_sys.path.insert(0, _iso_os.path.join(_iso_dir, 'tests'))
+import _isolation
+_isolation.install()
+
 import json
 import os
 import re
@@ -224,7 +236,10 @@ def test_sticky_flags_and_reset_clip():
 
     # 4. A rejected mask must leave the checked set, or a later merge blocks on
     #    a row the list is hiding.
-    rm = tpl[tpl.index('function rejectMask'):tpl.index('function rejectMask') + 900]
+    # The whole function, not a fixed window: guards added at its top (the
+    # frame-load gate, 2026-10-16) push the line further down.
+    start = tpl.index('function rejectMask')
+    rm = tpl[start:tpl.index('\n}\n', start)]
     check('checkedMaskIds.delete(m.id)' in rm, 'rejectMask unchecks the rejected mask')
 
     # 5. The resetMask CLIENT function is gone (a relic: no caller since Ctrl+Z
@@ -249,14 +264,24 @@ def test_sticky_flags_and_reset_clip():
 # Parity with combinedAnnotate's tests/test_segment_app.py
 # test_header_wrap_and_label_escaping: both templates carry the same rule.
 def test_header_wraps():
+    # 2026-10-16: Edit Masks took combinedAnnotate's two stacked rows
+    # (.review-topbar is flex-direction: column, holding .topbar-row1 and
+    # #status-text), so the wrap-instead-of-clip rule lives on .topbar-row1,
+    # and the timer reaches the row's end inside .timer-pause-group with
+    # Pause. Its own box is a fixed 22ch so a longer reading never changes how
+    # the row wraps (tests in TCRMPclip_combinedAnnotate/tests/
+    # test_editmasks_layout_stability.py).
     tpl = open(os.path.join(SRC, 'templates', 'index.html')).read()
-    rule = tpl[tpl.index('.review-topbar {'):]
+    rule = tpl[tpl.index('.topbar-row1 {'):]
     rule = rule[:rule.index('}') + 1]
-    check('flex-wrap: wrap' in rule, f'.review-topbar wraps instead of clipping: {rule!r}')
-    check('min-height: 40px' in rule and 'row-gap: 6px' in rule,
-          'the hard 40px height is now a min-height with a wrap row-gap')
+    check('flex-wrap: wrap' in rule, f'.topbar-row1 wraps instead of clipping: {rule!r}')
+    check('min-height: 28px' in rule and 'row-gap: 6px' in rule,
+          'a min-height with a wrap row-gap, not a hard height')
     check('.review-topbar #image-filename' in tpl, 'the filename is the only shrinkable cell')
-    check('#frame-timer { margin-left: auto; }' in tpl, 'the timer holds the right edge')
+    group_rule = tpl[tpl.index('.timer-pause-group {'):]
+    group_rule = group_rule[:group_rule.index('}') + 1]
+    check('margin-left: auto' in group_rule,
+          "the timer-and-Pause group holds the row's right edge")
 
 
 # Same check as combinedAnnotate's tests/test_segment_app.py

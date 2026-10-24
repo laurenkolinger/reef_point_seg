@@ -52,6 +52,10 @@ export TCRMP_CLIP_INDEX_DIR="$TMP_CLIP_INDEX"
 # root for the whole run, removed with the clip index on exit.
 TMP_MASK_REGISTRY="$(mktemp -d /tmp/mask_registry_test.XXXXXX)"
 export TCRMP_MASK_REGISTRY_DIR="$TMP_MASK_REGISTRY"
+# Same rule for the expert library (2026-10-15): suites that reach it get a
+# throwaway root, never inprocess/_expert_id_library.
+TMP_EXPERT_LIBRARY="$(mktemp -d /tmp/expert_library_test.XXXXXX)"
+export TCRMP_EXPERT_LIBRARY_DIR="$TMP_EXPERT_LIBRARY"
 
 # Guard (Task 13a): several suites only redirect away from the live registry
 # when this var is set (see task-13a-report.md for the current offender
@@ -86,7 +90,7 @@ _sweep_leaked_fixture_dirs() {
   find /tmp -maxdepth 1 -newer "$RUN_START_STAMP" -type d \( "${name_args[@]}" \) -exec rm -rf {} + 2>/dev/null
 }
 
-trap 'rm -rf "$TMP_CLIP_INDEX" "$TMP_MASK_REGISTRY"; _sweep_leaked_fixture_dirs; rm -f "$RUN_START_STAMP"' EXIT
+trap 'rm -rf "$TMP_CLIP_INDEX" "$TMP_MASK_REGISTRY" "$TMP_EXPERT_LIBRARY"; _sweep_leaked_fixture_dirs; rm -f "$RUN_START_STAMP"' EXIT
 if ! command -v node >/dev/null 2>&1; then
   echo "FATAL: node not on PATH (required for the .js suites)" >&2
   exit 2
@@ -111,6 +115,14 @@ SUITES=(
   "py pipeline_orchestrator/tests/test_project_atomic_write.py"
   "py pipeline_orchestrator/tests/test_rail_family.py"
   "py pipeline_orchestrator/tests/test_reset_guard.py"
+  # An annotated project cannot be re-chosen, re-routed over, or reset without its exported count.
+  "py pipeline_orchestrator/tests/test_annotated_project_guard.py"
+  # No code path deletes an image: resets, re-routes and review removals move it to _superseded.
+  "py pipeline_orchestrator/tests/test_images_never_deleted.py"
+  # The holding-folder helper, readers that skip _superseded, and review removals kept off the public site.
+  "py tests/test_superseded_helper.py"
+  "py _matrix/tests/test_superseded_readers.py"
+  "py _reefreview/tests/test_review_removal_not_published.py"
   "py pipeline_orchestrator/tests/test_run_attribution.py"
   "py pipeline_orchestrator/tests/test_seed_holdout_guard.py"
   "py pipeline_orchestrator/tests/test_source_family_guard.py"
@@ -118,6 +130,8 @@ SUITES=(
   "py _ablation/tests/test_fish_ablation.py"
   "py TCRMPclip_combinedAnnotate/tests/test_annotator_design.py"
   "py TCRMPclip_combinedAnnotate/tests/test_annotator_layout_stability.py"
+  "py TCRMPclip_combinedAnnotate/tests/test_editmasks_layout_stability.py"
+  "py TCRMPclip_combinedAnnotate/tests/test_frame_switch_saves.py"
   # VEGA annotator tidy-up and no re-screening, 2026-09-27 (LO, task W1): the
   # gear settings popover and the cross-project prior-mask echo.
   "py TCRMPclip_combinedAnnotate/tests/test_annotator_settings_menu.py"
@@ -161,6 +175,8 @@ SUITES=(
   # and reserve alike, never touches a partly-screened one, and behaves
   # byte-identically to before this flag existed when it is omitted.
   "py TCRMPcvr_chooseImages/tests/test_prior_screening_exclusion.py"
+  # Step 3 reads the project's own recode log and logs honestly when none applies.
+  "py TCRMPcvr_chooseImages/tests/test_species_remap_path.py"
   "js TCRMPclip_placePoints/tests/test_pp_core.js"
   "py TCRMPclip_placePoints/tests/verify_apps.py"
   "py TCRMPclip_placePoints/tests/test_review_lock_points.py"
@@ -170,6 +186,7 @@ SUITES=(
   "py TCRMPclip_placePoints/tests/test_ocr_offline_load.py"
   "py TCRMPclip_segmentImages/tests/test_segment_app.py"
   "py TCRMPclip_segmentImages/tests/test_review_lock_routes.py"
+  "py TCRMPclip_segmentImages/tests/test_step5_manual_sources.py"
   # Combined annotator (4.test), now the promoted Step 4, so its suites run here.
   "py TCRMPclip_combinedAnnotate/tests/test_segment_app.py"
   # SAM3 must boot from the local HF cache when lab DNS is down (2026-08-13).
@@ -237,6 +254,8 @@ SUITES=(
   "py pipeline_orchestrator/tests/test_ui_sweep_20260901.py"
   "py pipeline_orchestrator/tests/test_step4test_clipdir.py"
   "py pipeline_orchestrator/tests/test_step6_source.py"
+  # Model cards from the Train step: card hook, finding tags route, form rows (2026-10-15).
+  "py pipeline_orchestrator/tests/test_model_card_hook.py"
   # Species filter passed to routing thread (C2 fix: no hardcoded []).
   "py pipeline_orchestrator/tests/test_route_species_filter.py"
   # Staleness-based routed_input/ invalidation (C3 fix: stale cache cleared when Step 3 selection newer).
@@ -283,6 +302,15 @@ SUITES=(
   # single-instance locking, and 14-snapshot retention that never deletes
   # anything unverified, outside dest, or reached through a symlink.
   "py tests/test_snapshot_runs.py"
+  # Live label-store guard (2026-10-15): a suite run alone is pointed at temp
+  # stores and any write to the live mask registry, expert library or clip
+  # index is blocked; this suite proves the guard fires.
+  "py tests/test_isolation_guard.py"
+  # Read-only project integrity checker (2026-10-15): the 14 audit rules over a
+  # clean fixture and one broken fixture per rule, hostile names, CLI exit codes,
+  # and a hash sweep proving it never changes an input.
+  "py tests/test_check_project_integrity.py"
+  "py tests/test_return_frames_to_review.py"
   # Model-assist loop (2026-07-09): inference predictions.json, prediction seeder, transect frozen split.
   "py TCRMPtrain_oceankindCV/tests/test_predictions_output.py"
   "py TCRMPclip_combinedAnnotate/tests/test_seed_from_predictions.py"
@@ -321,6 +349,10 @@ SUITES=(
   # Label guard (2026-07-10): block empty-species accept/export + unlabeled filter.
   "py TCRMPclip_combinedAnnotate/tests/test_label_guard.py"
   "py TCRMPclip_combinedAnnotate/tests/test_unlabeled_filter.py"
+  # Label popup writes (2026-10-15): the species travels with the accept in one
+  # PUT, and any refusal puts the mask back and names it. Drives both
+  # combinedAnnotate and editMasks from this one file.
+  "py TCRMPclip_combinedAnnotate/tests/test_label_persists_with_accept.py"
   # Shared-file parity (2026-08-26): mask_ops.py, sam_engine.py, provenance.py,
   # export_yolo.py stay byte-identical between combinedAnnotate and editMasks.
   "py TCRMPclip_combinedAnnotate/tests/test_shared_file_parity.py"
@@ -334,6 +366,11 @@ SUITES=(
   # not_found. Drives both combinedAnnotate and editMasks from these files.
   "py TCRMPclip_combinedAnnotate/tests/test_save_on_quit.py"
   "py TCRMPclip_combinedAnnotate/tests/test_merged_outcome_found.py"
+  # Label records integrity (2026-10-15): ledger rules (blank species, frame
+  # replace, unique temp file), and export, merge species, ledger-with-the-save
+  # and prior screening in both annotators.
+  "py TCRMPclip_combinedAnnotate/tests/test_ledger_rules.py"
+  "py TCRMPclip_combinedAnnotate/tests/test_label_record_integrity.py"
   # Review defect fix (2026-09-27): flush_all overwrote segmentations.json
   # from memory unconditionally; the expert-ID importer can rewrite the same
   # file while an annotator sits idle. A dirty flag now gates the quiet quit
@@ -384,6 +421,8 @@ SUITES=(
   # Engine: per-class metrics indexed through ap_class_index, the headless
   # Chrome PDF print, and the inference manifest's skipped-detection counts.
   "py TCRMPtrain_oceankindCV/tests/test_evaluate_metrics.py"
+  # Best confidence in metrics.json and the model card refresh (2026-10-15).
+  "py TCRMPtrain_oceankindCV/tests/test_best_conf.py"
   "py TCRMPtrain_oceankindCV/tests/test_evaluate_pdf.py"
   "py TCRMPtrain_oceankindCV/tests/test_inference_manifest.py"
   # Routes: the cross-project runs list, the run-keyed evaluation report and
@@ -438,6 +477,8 @@ SUITES=(
   "py _matrix/tests/test_matrix_cell.py"
   "py _matrix/tests/test_preferences.py"
   "py _matrix/tests/test_composite.py"
+  # One shared list of manual sources, merged included (2026-10-15).
+  "py _matrix/tests/test_manual_sources_shared.py"
   # Composite route layer (2026-09-01, quality-sweep Task 6): source-type filter,
   # rebuild-in-place validation and 409/400 handling on POST /matrix/api/composite.
   "py _matrix/tests/test_composite_routes.py"

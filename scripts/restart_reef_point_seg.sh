@@ -177,7 +177,7 @@ fi
 # Note: the page HTML ($body) carries static markup; the footer Reset/Save&Close
 # buttons and the picker grouping are injected by orchestrator.js at runtime, so
 # those are checked against the served JS, not the HTML.
-js="$(curl -s -m 5 "http://127.0.0.1:${PORT}/static/orchestrator.js?v=20260921-start" 2>/dev/null || true)"
+js="$(curl -s -m 5 "http://127.0.0.1:${PORT}/static/orchestrator.js?v=20261017-cardrows" 2>/dev/null || true)"
 echo "  self-test (live markers on :${PORT}):"
 fail=0
 assert_html_present() { printf '%s' "$body" | grep -q "$1" && echo "    OK  present: $2" || { echo "    FAIL missing: $2"; fail=1; }; }
@@ -185,13 +185,13 @@ assert_html_absent()  { printf '%s' "$body" | grep -q "$1" && { echo "    FAIL s
 assert_js_present()   { printf '%s' "$js"   | grep -q "$1" && echo "    OK  present: $2" || { echo "    FAIL missing: $2"; fail=1; }; }
 assert_html_present 's3-label-chips'        'Step 3 selection chips container'
 assert_html_present 'id="confirm-overlay"'  'reset-confirm modal markup'
-assert_html_present 'Do this:'              'rewritten user instructions'
-assert_html_present '20260921-start' 'fresh orchestrator.js cache-bust'
+assert_html_absent  'Do this:'              'old "Do this:" step text (rewritten in cdb0af5)'
+assert_html_present '20261017-cardrows' 'fresh orchestrator.js cache-bust'
 assert_html_absent  's3-load-labels'        'old "Load labels from Step 2" button'
 assert_html_absent  'What you do'           'old "What you do" phrasing'
 assert_html_absent  'data-step="s4review"'  'old SAM3-Review stub tile'
 assert_html_absent  'panel-s4review'        'old SAM3-Review stub panel'
-assert_html_present 'Expert Review I/O'     'renamed expert tile + panel'
+assert_html_absent  'Expert Review I/O'     'Expert Review I/O tile (removed in cdb0af5)'
 assert_html_present 'data-step="step4test"' 'combined-annotator tile present (route key kept)'
 assert_html_present 'panel-step4test'       'combined-annotator panel present'
 assert_html_present 'Place + Segment'       'combined-annotator promoted to Step 4 label'

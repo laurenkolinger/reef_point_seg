@@ -20,6 +20,18 @@ directly (the app uses a process-global session, not Flask session) and call
 the /api/export_batch + /api/status routes through the Flask test client.
 """
 
+# Keep this suite off the live mask registry, expert library and clip index
+# when it is run alone: scripts/tests/_isolation.py sets the isolating
+# variables to temp dirs and blocks any write to the live stores.
+import os as _iso_os
+import sys as _iso_sys
+_iso_dir = _iso_os.path.dirname(_iso_os.path.abspath(__file__))
+while _iso_os.path.basename(_iso_dir) != 'scripts' and _iso_dir != _iso_os.path.dirname(_iso_dir):
+    _iso_dir = _iso_os.path.dirname(_iso_dir)
+_iso_sys.path.insert(0, _iso_os.path.join(_iso_dir, 'tests'))
+import _isolation
+_isolation.install()
+
 import os
 import sys
 import csv
@@ -201,10 +213,14 @@ def test_eleven_frames_two_batches_no_lost_final():
         nb = client.post('/api/next_review_batch').get_json()
         check(nb['done'] is True, f"next_review_batch must report done=True when empty, got {nb}")
 
-        # All 11 frames exported (reconcile assertion in do_export held).
-        exported = sum(1 for s in app.session['segmentations'].values()
-                       if s.get('exported'))
-        check(exported == 11, f"all 11 frames must be exported, got {exported}")
+        # This fixture has no image files on disk, so no frame is exported:
+        # each carries a dated image_missing_at mark and stays out of the
+        # queue (the reconcile assertion in do_export counts them as accounted).
+        segs = app.session['segmentations'].values()
+        exported = sum(1 for s in segs if s.get('exported'))
+        marked = sum(1 for s in segs if s.get('image_missing_at'))
+        check(exported == 0 and marked == 11,
+              f"11 missing-image frames are marked, none exported (exported={exported}, marked={marked})")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

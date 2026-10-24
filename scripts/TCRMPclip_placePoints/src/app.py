@@ -942,7 +942,7 @@ def _walk_index(clip_dir, exts):
     if paths is None:
         paths = []
         for root, dirs, files in os.walk(clip_dir):
-            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d != '_superseded']
             for fn in files:
                 if not fn.startswith('.'):
                     paths.append(os.path.join(root, fn))

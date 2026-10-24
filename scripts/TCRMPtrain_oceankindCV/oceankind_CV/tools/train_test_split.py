@@ -15,6 +15,13 @@ import random
 import argparse
 from sklearn.model_selection import train_test_split
 
+# Images are never deleted (VEGA rules, 2026-10-15): a replaced folder that
+# holds images is moved to <parent>/_superseded/<stamp>/ (scripts/_superseded.py).
+_SCRIPTS_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
+sys.path.insert(0, os.path.join(_SCRIPTS_DIR, "TCRMPtrain_oceankindCV", "src"))
+sys.path.insert(0, _SCRIPTS_DIR)
+from detect_dataset import set_aside_images  # noqa: E402
+
 random.seed(1)
 
 def arg_parse():
@@ -64,18 +71,18 @@ def main():
 
     # Prompt to overwrite if output dir exists, otherwise attempt to create it
     if os.path.exists(train_out_dir) or os.path.exists(valid_out_dir) or os.path.exists(test_out_dir):
-        print("WARNING: Output Directory Exists, data will be overwritten ", end="")
+        print("WARNING: Output Directory Exists; existing images will be moved to _superseded ", end="")
 
         if input("Y/N?:").lower() != "y":
             print("EXITING...\n")
             exit()
         else:
             print("CONTINUING...\n")
-            # Delete existing output dir
+            # Move the existing splits aside: images are never deleted.
             try:
-                shutil.rmtree(train_out_dir)
-                shutil.rmtree(valid_out_dir)
-                shutil.rmtree(test_out_dir)
+                for split_dir in (train_out_dir, valid_out_dir, test_out_dir):
+                    split_dir = os.path.abspath(split_dir)
+                    set_aside_images(split_dir, base_dir=os.path.dirname(split_dir))
             except OSError as error:
                 print(error)
                 sys.exit()

@@ -38,6 +38,11 @@ else
   echo "[APPLY]   Target: $TARGET"
 fi
 
+# Images are never deleted: a data rsync that would replace or delete a file
+# moves the old one to <destination tree>/_superseded/<stamp>/ instead, and a
+# _superseded folder is never read from or written over.
+STAMP="$(TZ=America/Puerto_Rico date +%Y%m%d-%H%M%S)"
+SUPERSEDED_DIR="_superseded"
 RSYNC_BASE="rsync -a $DRY --info=progress2"
 # Skip ephemeral / rebuilt / misplaced things. Root-level yolo*.pt weights belong
 # in supporting_data/model_weights/, not inside TCRMPtrain_oceankindCV/.
@@ -95,22 +100,39 @@ sync_one_step() {
   $RSYNC_BASE $COMMON_EX "$SRC/$sub/" "$DST/scripts/$sub/"
 }
 
+# rsync_data SRC_PATH DST_PATH: rsync_base plus a backup of every replaced file.
+# The backup folder hangs from the destination tree (DST_PATH when it is a
+# folder, else its parent) so a changed image keeps its relative path there.
+rsync_data() {
+  local from="$1" to="$2" tree
+  case "$to" in
+    */) tree="${to%/}" ;;
+    *)  tree="$(dirname "$to")" ;;
+  esac
+  # shellcheck disable=SC2086  # RSYNC_BASE is a word list on purpose
+  $RSYNC_BASE --backup --backup-dir="$tree/$SUPERSEDED_DIR/$STAMP" \
+    --exclude="$SUPERSEDED_DIR/" "$from" "$to"
+}
+
 sync_data() {
   # Small static supporting-data assets (catches re-run step 1 outputs and added weights)
   echo "  supporting_data/  (diff-sync only)"
-  [ -f "$SRC/output/all_points.csv" ]   && $RSYNC_BASE "$SRC/output/all_points.csv"   "$DST/supporting_data/"
-  [ -f "$SRC/output/master_codes.csv" ] && $RSYNC_BASE "$SRC/output/master_codes.csv" "$DST/supporting_data/"
+  [ -f "$SRC/output/all_points.csv" ]   && rsync_data "$SRC/output/all_points.csv"   "$DST/supporting_data/"
+  [ -f "$SRC/output/master_codes.csv" ] && rsync_data "$SRC/output/master_codes.csv" "$DST/supporting_data/"
   # cpc_all delta (rare — only if cpcID was re-run)
-  [ -d "$SRC/output/cpc_all" ]          && $RSYNC_BASE "$SRC/output/cpc_all/"         "$DST/supporting_data/cpc_all/"
+  [ -d "$SRC/output/cpc_all" ]          && rsync_data "$SRC/output/cpc_all/"         "$DST/supporting_data/cpc_all/"
   # TCRMP_CVR deltas (rare — only if new year added)
-  [ -d "$SRC/input/TCRMP_CVR" ]         && $RSYNC_BASE "$SRC/input/TCRMP_CVR/"        "$DST/supporting_data/TCRMP_CVR/"
+  [ -d "$SRC/input/TCRMP_CVR" ]         && rsync_data "$SRC/input/TCRMP_CVR/"        "$DST/supporting_data/TCRMP_CVR/"
   # TCRMP_clip local subset
-  [ -d "$SRC/input/TCRMP_clip" ]        && $RSYNC_BASE "$SRC/input/TCRMP_clip/"       "$DST/supporting_data/TCRMP_clip/"
+  [ -d "$SRC/input/TCRMP_clip" ]        && rsync_data "$SRC/input/TCRMP_clip/"       "$DST/supporting_data/TCRMP_clip/"
 }
 
 sync_projects() {
   echo "  projects/  (diff-sync only — preserves local path rewrites via rsync deltas)"
-  rsync -aHAX $DRY --info=progress2 "$SRC/projects/" "$DST/projects/"
+  # A changed project image is moved to projects/_superseded/<stamp>/, not overwritten.
+  rsync -aHAX $DRY --info=progress2 --backup \
+    --backup-dir="$DST/projects/$SUPERSEDED_DIR/$STAMP" --exclude="$SUPERSEDED_DIR/" \
+    "$SRC/projects/" "$DST/projects/"
   if [ -z "$DRY" ]; then
     echo "  rerunning project-path rewriter on newly-synced content..."
     "$DST/env/bin/python" "$DST/scripts/rewrite_project_paths.py" \

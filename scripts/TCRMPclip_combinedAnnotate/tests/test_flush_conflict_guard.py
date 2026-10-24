@@ -61,6 +61,18 @@ module never does either; the model load sits behind `if __name__ ==
 Run with the unified env python:
     env/bin/python scripts/TCRMPclip_combinedAnnotate/tests/test_flush_conflict_guard.py
 """
+# Keep this suite off the live mask registry, expert library and clip index
+# when it is run alone: scripts/tests/_isolation.py sets the isolating
+# variables to temp dirs and blocks any write to the live stores.
+import os as _iso_os
+import sys as _iso_sys
+_iso_dir = _iso_os.path.dirname(_iso_os.path.abspath(__file__))
+while _iso_os.path.basename(_iso_dir) != 'scripts' and _iso_dir != _iso_os.path.dirname(_iso_dir):
+    _iso_dir = _iso_os.path.dirname(_iso_dir)
+_iso_sys.path.insert(0, _iso_os.path.join(_iso_dir, 'tests'))
+import _isolation
+_isolation.install()
+
 import json
 import os
 import shutil
@@ -249,6 +261,46 @@ def test_frames_edited_only_outside_are_taken_into_memory(app_dir, label):
                   f"{label}: B's outside edit is in the merged file, got {on_disk.get('B.jpg')}")
             check(on_disk["A.jpg"]["tag"] == "a1_local_edit",
                   f"{label}: A's local edit is untouched, got {on_disk.get('A.jpg')}")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+    finally:
+        _release(app_dir)
+
+
+def test_merge_counts_only_frames_that_changed_outside(app_dir, label):
+    """The merge's taken_from_disk count names frames whose disk version
+    changed outside this window, plus frames new on disk, never every
+    untouched frame (live test 2026-10-15: one outside change among 691
+    frames reported 690)."""
+    A = _import_app(app_dir)
+    try:
+        d = tempfile.mkdtemp(prefix="merge_count_%s_" % label)
+        try:
+            export_dir = os.path.join(d, "out")
+            seg_path = A._seg_path(export_dir)
+            seed = {"F%03d.jpg" % i: {"tag": "t%d" % i} for i in range(50)}
+            _write_json(seg_path, seed)
+            A.load_segmentations(export_dir)
+
+            outside = dict(seed)
+            outside["F007.jpg"] = {"tag": "changed_outside"}
+            outside["NEW.jpg"] = {"tag": "new_on_disk"}
+            _write_json(seg_path, outside)
+            _bump_mtime(seg_path, 5)
+
+            mem_store = dict(seed)
+            mem_store["F001.jpg"] = {"tag": "edited_here"}
+            _set_dirty(A, "F001.jpg")
+            status, info = A.save_segmentations(export_dir, mem_store)
+            check(status == "merged", f"{label}: an outside change runs the merge, got {status!r}")
+            check(info["taken_from_disk"] == 2,
+                  f"{label}: only the changed frame and the new frame count, got {info['taken_from_disk']}")
+            with open(seg_path) as f:
+                on_disk = json.load(f)
+            check(on_disk["F007.jpg"]["tag"] == "changed_outside", f"{label}: outside change kept")
+            check(on_disk["NEW.jpg"]["tag"] == "new_on_disk", f"{label}: new outside frame kept")
+            check(on_disk["F001.jpg"]["tag"] == "edited_here", f"{label}: window edit kept")
+            check(len(on_disk) == 51, f"{label}: no frame lost, got {len(on_disk)}")
         finally:
             shutil.rmtree(d, ignore_errors=True)
     finally:
@@ -600,6 +652,14 @@ def test_scrap_unscrap_export_mark_dirty_before_their_own_flush(app_dir, label):
             with A.app.test_client() as c:
                 r = c.post("/api/image/FRAME.jpg/scrap")
             check(r.status_code == 200, f"{label}: /scrap 200 (got {r.status_code})")
+            # Scrapping queues the frame's ledger rows; once the ledger write
+            # succeeds the cleared ledger_pending marker marks the frame dirty
+            # so the next save persists the clear. That one follow-up save is
+            # expected, so settle it before checking nothing else re-dirtied.
+            check(set(A._dirty_frames) <= {"FRAME.jpg"},
+                  f"{label}: only the scrapped frame is dirty after scrap (marker clear) "
+                  f"(got {sorted(A._dirty_frames)})")
+            A.flush_all()
             check(not A._is_dirty(),
                   f"{label}: the session is clean right after scrap saved it "
                   f"(no post-hoc re-dirty from the decorator)")
@@ -1102,6 +1162,7 @@ for _app_dir, _label in ((CA, "combinedAnnotate"), (EM, "editMasks")):
     test_same_content_different_stat_is_not_a_conflict(_app_dir, _label)
     print(f"\n[{_label}] per-frame merge")
     test_frames_edited_only_outside_are_taken_into_memory(_app_dir, _label)
+    test_merge_counts_only_frames_that_changed_outside(_app_dir, _label)
     test_both_sides_frame_keeps_local_and_folds_review_fields(_app_dir, _label)
     test_one_episode_yields_at_most_one_conflict_file_across_five_saves(_app_dir, _label)
     test_an_edit_during_the_write_is_not_lost(_app_dir, _label)

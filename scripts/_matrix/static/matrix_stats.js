@@ -118,8 +118,8 @@
   // no filter (every source_type, including raw model predictions).
   var SOURCE_TYPE_MAP = {
     all: null,
-    hand: ['manual_box', 'manual_click', 'edit'],
-    hand_model: ['manual_box', 'manual_click', 'edit', 'model']
+    hand: ['manual_box', 'manual_click', 'merged', 'edit'],
+    hand_model: ['manual_box', 'manual_click', 'merged', 'edit', 'model']
   };
   function selectedSourceType() {
     var checked = document.querySelector('input[name="mx-composite-source"]:checked');
@@ -128,11 +128,32 @@
   }
   function getBy() { return (el.by.value || '').trim().toUpperCase().slice(0, 8); }
   function getTrainBy() { return el.trainBy ? (el.trainBy.value || '').trim().toUpperCase().slice(0, 8) : ''; }
-  function loadBy() {
+  // The initials VICARIUS passes as ?initials=XX when it opens this page:
+  // trimmed, upper-cased, two to four letters, else "" (ignored). Only ever
+  // assigned to a field's .value, never inserted as markup.
+  function paramInitials() {
     try {
-      var v = localStorage.getItem(LS_BY);
-      if (v) { el.by.value = v; if (el.trainBy) el.trainBy.value = v; }
-    } catch (e) { /* storage blocked */ }
+      var raw = new URLSearchParams(window.location.search).getAll('initials');
+      var v = String(raw.length === 1 ? raw[0] : '').trim().toUpperCase();
+      return /^[A-Z]{2,4}$/.test(v) ? v : '';
+    } catch (e) { return ''; }
+  }
+  // Rewrites a field's value to upper case as it is typed and keeps the caret.
+  function upperAsTyped(input) {
+    var upper = input.value.toUpperCase();
+    if (upper === input.value) return;
+    var at = input.selectionStart;
+    input.value = upper;
+    try { input.setSelectionRange(at, at); } catch (e) { /* not a text field */ }
+  }
+  // Seed order: the passed initials, then the remembered ones, then blank.
+  // Seeding never writes mx.by; only a typed change does (saveBy).
+  function loadBy() {
+    var v = paramInitials();
+    if (!v) {
+      try { v = localStorage.getItem(LS_BY) || ''; } catch (e) { /* storage blocked */ }
+    }
+    if (v) { el.by.value = v; if (el.trainBy) el.trainBy.value = v; }
   }
   // Shared across the drawer's #mx-by, the build form's #mx-stats-by and the
   // create-project form's #mx-train-by: whichever field changes mirrors into
@@ -1220,8 +1241,12 @@
   el.compProjNone.addEventListener('click', function () { setAllCompProjects(false); });
   el.compBuild.addEventListener('click', buildComposite);
   el.purge.addEventListener('click', purge);
+  el.by.addEventListener('input', function () { upperAsTyped(el.by); });
   el.by.addEventListener('change', saveBy);
-  if (el.trainBy) el.trainBy.addEventListener('change', saveTrainBy);
+  if (el.trainBy) {
+    el.trainBy.addEventListener('input', function () { upperAsTyped(el.trainBy); });
+    el.trainBy.addEventListener('change', saveTrainBy);
+  }
   // Stage rail: click a stage button to show it; click any [data-go] button
   // (built into a result line or a row, data-go="2") to jump there too.
   Object.keys(STAGE_BTNS).forEach(function (i) {

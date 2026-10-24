@@ -22,6 +22,12 @@ queueing. Everything this page touches sits outside the TCRMP survey: staged
 datasets under supporting_data, conversions under inprocess/_bbox, and nothing
 in the per-mask registry, the coverage matrix, or STATS.
 
+A conversion job (bbox_to_seg.py) loads a SAM3 model onto a card, so it asks
+the platform's GPU right-of-way gate before it starts, the same tier="human"
+check every other card-holding reef_point_seg stage asks
+(docs/superpowers/specs/2026-09-28-gpu-traffic-design.md); an ingest job
+touches no card and asks nothing.
+
 The one thing this page does write into a project folder is a TRAINING
 project: create-project mints a run_* dir that carries the dataset's PATH and
 no imagery at all (see _reefreview/training_projects.py). Every scan of
@@ -68,6 +74,18 @@ from _reefreview.training_projects import (  # noqa: E402
     mint_training_project,
 )
 
+# gpu_claim.py (GPU right-of-way / GPU traffic client, docs/superpowers/
+# specs/2026-09-28-gpu-traffic-design.md) lives one level down from
+# _SCRIPTS_DIR, in pipeline_orchestrator/, not directly under it, so it needs
+# its own sys.path entry: when this blueprint is mounted inside the running
+# orchestrator (app.py), pipeline_orchestrator is already on sys.path (it is
+# app.py's own directory), but this module must also import cleanly on its
+# own, e.g. under a test that imports _boxes.blueprint directly.
+_ORCHESTRATOR_DIR = os.path.join(_SCRIPTS_DIR, "pipeline_orchestrator")
+if _ORCHESTRATOR_DIR not in sys.path:
+    sys.path.insert(0, _ORCHESTRATOR_DIR)
+import gpu_claim  # noqa: E402
+
 # The page's asset cache-bust is written into the template itself
 # (boxes/index.html, both ?v= strings), the same way the coverage matrix page
 # carries its own. Nothing here needs to know it.
@@ -103,6 +121,36 @@ _LOG_MAXLEN = 20000
 
 COVERAGE_NOTE = ("These images are outside the TCRMP survey and never appear "
                  "in the label coverage matrix.")
+
+# GPU right-of-way / GPU traffic (docs/superpowers/specs/2026-09-28-gpu-
+# traffic-design.md): bbox_to_seg.py loads a SAM3 model onto a card, exactly
+# like every other tier="human" reef_point_seg stage (module.yaml's
+# gpu.stages block), but its Popen sits outside stage_runner.py's runner-key
+# gate: this blueprint spawns it directly through JobRunner, so it asks the
+# same gate itself rather than through a runner key.
+GPU_CLAIM_MODULE = "reef_point_seg"
+GPU_CLAIM_TIER = "human"
+# Every automated backend claim is signed with this VICARIUS-wide agent
+# initials (platform rule: "Agent actions are signed LO"); this route has no
+# per-request operator identity (api_convert takes no "by" field) to attach
+# a claim to instead.
+GPU_CLAIM_BY = "LO"
+# gpu_claim.check() decisions that mean "spawn". ADR 0008 / gpu_claims.py's
+# own contract is that only "granted" ever means proceed; "unregistered"
+# (port 5090 down) is the sole exception. This is deliberately an allow-list,
+# matching stage_runner.py's own rule: a decision word this file has never
+# seen ("wait", one added after this file was written, or any other), and an
+# answer with no "decision" key at all, must both refuse by default, the same
+# as "refused" and "needs_pin" (a human-tier job asked to bypass a model-tier
+# holder, which this route has no admin-session concept to grant a PIN
+# bypass for). A block-list would do the opposite: it would start the
+# conversion on any word it had not been told to recognise.
+_GPU_STARTABLE_DECISIONS = frozenset({"granted", "unregistered"})
+
+# The refusal shown when gpu_claim.check() answers a decision this file must
+# not start on, and that answer carries no "message" of its own (an unknown
+# decision word, or a reply with no "decision" key at all).
+GPU_NO_USABLE_ANSWER_MESSAGE = "GPU right of way returned no usable answer."
 
 
 def ast_now():
@@ -306,6 +354,70 @@ def list_training_projects(inprocess_root, dataset_path, log=None):
     return found
 
 
+def _gpu_refusal():
+    """Ask the GPU right-of-way gate before a conversion job's Popen.
+
+    Returns:
+        (refusal, answer). refusal is None when the job may start
+        (answer["decision"] is in _GPU_STARTABLE_DECISIONS, checked as an
+        allow-list: a decision word this file has never seen, and an answer
+        with no "decision" key at all, both refuse rather than starting the
+        job on a word nobody taught this file to recognise). Otherwise
+        refusal is the message to answer the request with (the answer's own
+        "message" when it has one, else GPU_NO_USABLE_ANSWER_MESSAGE),
+        exactly the way this blueprint already reports a failed start (the
+        same jsonify({"error": ...}), a 4xx status shape api_convert already
+        uses for a busy JobRunner). answer is the decision dict
+        gpu_claim.check() returned, kept so the caller can build the child's
+        environment from it (gpu_claim.launch_env) and, after Popen, claim
+        the same cards with the child's own pid (gpu_claim.card_uuids).
+    """
+    answer = gpu_claim.check(GPU_CLAIM_MODULE, tier=GPU_CLAIM_TIER, by=GPU_CLAIM_BY)
+    if answer.get("decision") not in _GPU_STARTABLE_DECISIONS:
+        message = answer.get("message") or GPU_NO_USABLE_ANSWER_MESSAGE
+        return message, answer
+    return None, answer
+
+
+def _gpu_claim_after_spawn(pid, answer, log):
+    """Claim the card for a freshly spawned bbox-to-seg conversion.
+
+    Called immediately after Popen returns, with the child's own pid, so the
+    registry protects the process that actually holds the card rather than
+    the orchestrator's own pid.
+
+    No release is ever sent for this claim: the 5090 watcher clears a claim
+    whose pid has exited, on its own liveness sweep, the same way it
+    reconciles any other unclaimed or dead holder. This one-shot background
+    job needs no release thread of its own, unlike stage_runner.py's gated
+    stages, which release explicitly because their log-reader thread already
+    watches for the child's exit for an unrelated reason (draining stdout).
+
+    Parameters:
+        pid: the child process's pid.
+        answer: the decision dict from the pre-spawn _gpu_refusal() call,
+            used to name the same cards on the claim (cards=).
+        log: callable(str) for a claim that came back anything other than
+            "granted" or "unregistered" (a race, or 5090 going down between
+            the check and the claim): the process already exists, so
+            refusing the claim after the fact cannot un-spawn it, and this
+            blueprint has no policy left to enforce at this point.
+
+    Returns:
+        None always. Sends None, never an empty list, when the answer named
+        no cards at all: the claims registry reads an empty list and "no
+        restriction" as two different things, and this is the latter.
+    """
+    cards = gpu_claim.card_uuids(answer) or None
+    result = gpu_claim.claim(GPU_CLAIM_MODULE, tier=GPU_CLAIM_TIER, run_id=str(pid),
+                             pid=pid, by=GPU_CLAIM_BY, cards=cards)
+    decision = result.get("decision")
+    if decision not in ("granted", "unregistered"):
+        log(f"GPU claim for the conversion job (pid {pid}) was not granted after "
+            f"spawn ({decision!r}); the process is already running and proceeds "
+            "without a claim")
+
+
 # ── Background job runner ────────────────────────────────────────────────
 
 class JobRunner:
@@ -368,19 +480,26 @@ class JobRunner:
         return (f"another job is already running ({kind}: {name}). Wait for it to "
                 "finish, or press Stop in Progress.")
 
-    def start(self, cmd, *, kind, name="", out_dir="", cwd=None):
+    def start(self, cmd, *, kind, name="", out_dir="", cwd=None, env_extra=None):
+        """Start a background job. env_extra, when given, is layered over a
+        copy of this process's own environment (GPU right-of-way variables
+        for a job that was gated; omitted, this is unchanged from before
+        that gate existed)."""
         with self._lock:
             self._reconcile()
             if self._state["phase"] == "running":
                 return None, "busy"
             self._log = deque(maxlen=_LOG_MAXLEN)
+            env = os.environ.copy()
+            if env_extra:
+                env.update(env_extra)
             try:
                 proc = subprocess.Popen(
                     list(cmd),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     cwd=cwd,
-                    env=os.environ.copy(),
+                    env=env,
                     text=True,
                     start_new_session=True,
                 )
@@ -1030,16 +1149,22 @@ def make_blueprint(paths_provider, *, name="boxes", log_fn=None):
         if runner.is_busy():
             return jsonify({"error": runner.busy_message()}), 409
 
+        gpu_refusal, gpu_answer = _gpu_refusal()
+        if gpu_refusal is not None:
+            return jsonify({"error": gpu_refusal}), 409
+
         out_dir = os.path.join(p["seg_root"], out_name)
         cmd = [p["python"], _tool(p, "bbox_to_seg.py"),
                "--dataset", chosen["path"], "--out", out_dir,
                "--limit", str(limit)]
         if bool(body.get("keep_degenerate")):
             cmd.append("--keep-degenerate")
-        info, why = runner.start(cmd, kind="convert", name=out_name, out_dir=out_dir)
+        info, why = runner.start(cmd, kind="convert", name=out_name, out_dir=out_dir,
+                                 env_extra=gpu_claim.launch_env(gpu_answer))
         if info is None:
             code = 409 if why == "busy" else 500
             return jsonify({"error": runner.busy_message() if why == "busy" else why}), code
+        _gpu_claim_after_spawn(info["pid"], gpu_answer, log)
         log(f"convert {chosen['name']} ({limit} images) -> {out_dir}")
         return jsonify({"ok": True, "out_dir": out_dir, "name": out_name,
                         "dataset": chosen["path"], "limit": limit,

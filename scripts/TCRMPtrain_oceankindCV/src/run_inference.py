@@ -116,6 +116,78 @@ RENDER_TOTAL_KEYS = ('instances_with_mask', 'instances_box_only',
                      'instances_without_geometry', 'chips_overlapping')
 IGNORED_FLAG_SAVE_CROPS = 'save_crops'
 
+# GPU traffic (docs/superpowers/specs/2026-09-28-gpu-traffic-design.md,
+# section 7): when VICARIUS starts this inference run under the "vega" GPU
+# right-of-way tier, stage_runner.py sets this environment variable to the
+# CUDA device string for the card it assigned, in place of --device, because
+# Ultralytics reads CUDA_VISIBLE_DEVICES from its own --device string.
+# Unset or empty: this script behaves exactly as it did before this
+# variable existed, inferring on --device as given.
+GPU_DEVICE_ENV = 'VICARIUS_GPU_DEVICE'
+
+# A CUDA device string: one or more non-negative whole numbers, comma
+# separated (Ultralytics' own --device grammar). Anything else is a
+# malformed assignment, refused rather than silently ignored.
+# Matched with fullmatch(), never match(): match() alone would accept a
+# trailing newline ("1\n"), which fullmatch refuses along with anything
+# else the pattern does not account for.
+_DEVICE_STRING_RE = re.compile(r'\d+(,\d+)*')
+
+
+def resolve_device_override(cli_device, env_value):
+    """The --device value to infer with, honoring a VICARIUS GPU traffic override.
+
+    Parameters:
+        cli_device: the value --device was parsed to (or its default).
+        env_value: os.environ.get(GPU_DEVICE_ENV), or '' / None when unset.
+
+    Returns:
+        cli_device unchanged when env_value is falsy. Otherwise env_value
+        itself, once validated as a CUDA device string.
+
+    Raises:
+        ValueError naming GPU_DEVICE_ENV and the bad value when env_value is
+        set to something that is not a comma-separated list of non-negative
+        whole numbers.
+    """
+    if not env_value:
+        return cli_device
+    if not _DEVICE_STRING_RE.fullmatch(env_value):
+        raise ValueError(
+            f'{GPU_DEVICE_ENV}={env_value!r} is not a valid CUDA device string '
+            "(expected whole numbers separated by commas, e.g. '0' or '0,1'); "
+            'refusing to guess which card to infer on')
+    return env_value
+
+
+def apply_gpu_device_override(args):
+    """Replace args.device with VICARIUS's per-card assignment, when given.
+
+    Reads GPU_DEVICE_ENV once and mutates args.device in place; prints one
+    line naming the override when it applies. Unset or empty, this makes no
+    change and prints nothing. args.device is also what build_manifest()
+    records under the manifest's own "device" key, so a person reading the
+    manifest later sees the card VICARIUS actually assigned, not the panel's
+    original default.
+
+    Parameters:
+        args: the parsed command line (argparse.Namespace); args.device may
+            be replaced.
+
+    Returns:
+        None.
+
+    Raises:
+        ValueError: see resolve_device_override.
+    """
+    env_device = os.environ.get(GPU_DEVICE_ENV, '')
+    if not env_device:
+        return
+    original = args.device
+    args.device = resolve_device_override(args.device, env_device)
+    print(f'[infer] {GPU_DEVICE_ENV} overrides --device: inferring on '
+          f'device={args.device} (was {original})')
+
 
 def ast_now():
     """Return the current time in Atlantic Standard Time as ISO-8601 with offset, seconds precision."""
@@ -1117,6 +1189,7 @@ def run(args, model, code_lookup=None):
 def main():
     """Parse, validate, load the model, run, and write the outputs."""
     args = arg_parse()
+    apply_gpu_device_override(args)
     if not os.path.isdir(args.run_dir):
         raise FileNotFoundError(f'run_dir not found: {args.run_dir}')
     weights = _find_best_weights(args.run_dir)

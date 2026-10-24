@@ -7,6 +7,10 @@
 # image, so copies of one photograph can sit in training and in test. Built
 # from config/augment_presets/coral_intel_table2_leaky.yaml.
 #
+# One change from A0 besides the data: device "0", a single RTX 5090 with
+# the whole batch of 16 on it (Lauren, 2026-09-28), as the paper trained on
+# one RTX 5070 Ti. A0 split the batch across two cards.
+#
 # Purpose: measure whether that overlap reproduces the paper's published
 # scores (test mAP50 0.938). Run in its own VEGA project, after the four-arm
 # study, by scripts/_ablation/coral_intel_vega_driver.py --study leaky.
@@ -16,7 +20,7 @@
 
 _meta:
   name: "Coral Intel replicate, split after augmenting"
-  description: "A0 exactly, trained on the dataset split after augmenting, so copies of test photos can sit in training."
+  description: "A0 settings on one GPU, trained on the dataset split after augmenting, so copies of test photos can sit in training."
   why: "Tests whether the paper's high scores come from copies of test photos sitting in training: the replicate's settings on data split after augmenting."
   task: detect
   study: coral_intel_replication
@@ -33,7 +37,7 @@ params:
   imgsz: 640
   batch: 16
   patience: 100
-  device: "0,1"
+  device: "0"   # one GPU, as the paper (Lauren, 2026-09-28); A0 used both
   valid_ratio: 0.15
   test_ratio: 0.15
   task: "detect"

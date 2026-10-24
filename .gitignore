@@ -17,9 +17,14 @@ scripts/TCRMPtrain_oceankindCV/ultralytics_src/.git/
 # Large binaries, not source. Covers yolo*.pt under TCRMPtrain_oceankindCV and elsewhere.
 *.pt
 *.pth
+# Model cards VICARIUS writes beside the stock weights above (the weights are not tracked, so neither are their cards).
+scripts/TCRMPtrain_oceankindCV/**/*.card.md
 
 # OS / editor cruft.
 .DS_Store
 .idea/
 .vscode/
 *.swp
+
+# headless Chrome profile of the pixel review (2026-09-16)
+cprofile/

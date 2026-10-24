@@ -49,9 +49,11 @@ except ImportError:          # pragma: no cover — non-POSIX fallback
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _reefreview import codes as codes_mod
 from _reefreview import filename_parse
+from _reefreview.ledger_io import ledger_lock
 from _reefreview.uid import make_uid, mask_uid, is_safe_uid
 from _reefreview import mask_geom
 from _reefreview.library import Library
+from _superseded import is_superseded_path
 from _reefreview.library import replace_preserving_mode as _replace_preserving_mode
 from _reefreview.review_repo import ReviewRepo
 from _reefreview.clock import now_ast, now_ast_iso
@@ -107,7 +109,8 @@ def _resolve_step_dir(project_id, projects_root, step=None):
         # Match _iter_segmentation_files' exact glob so the preference and the
         # write target can never disagree.
         if d4 and (os.path.isfile(os.path.join(d4, 'segmentations', 'segmentations.json'))
-                   or glob.glob(os.path.join(d4, 'segmentations', '*', 'segmentations.json'))):
+                   or [g for g in glob.glob(os.path.join(d4, 'segmentations', '*', 'segmentations.json'))
+                       if not is_superseded_path(g, root=d4)]):
             return d4
         return project_manager.resolve_step_dir(project_id, projects_root, step='5') or ''
     except Exception:
@@ -178,7 +181,7 @@ def _iter_segmentation_files(export_dir):
     if os.path.isfile(flat):
         return [flat]
     pat = os.path.join(export_dir, 'segmentations', '*', 'segmentations.json')
-    return sorted(glob.glob(pat))
+    return sorted(g for g in glob.glob(pat) if not is_superseded_path(g, root=export_dir))
 
 
 def _load(path):
@@ -374,32 +377,35 @@ def _prune_stale_pending_rows(export_dir, fresh, header):
     path = os.path.join(export_dir, 'label_provenance.csv')
     if not fresh or not os.path.isfile(path):
         return False
-    with open(path, newline='') as f:
-        rows = list(csv.DictReader(f))
-    kept = [r for r in rows
-            if not (r.get('outcome') == 'pending_expert'
-                    and r.get('basename') in fresh
-                    and r.get('label') not in fresh[r.get('basename')])]
-    if len(kept) == len(rows):
-        return False
-    # Unique tmp name (same rationale as _save): concurrent refreshes must not
-    # consume each other's tmp file mid-replace.
-    fd, tmp = tempfile.mkstemp(dir=export_dir,
-                               prefix='label_provenance.csv.', suffix='.tmp')
-    try:
-        with os.fdopen(fd, 'w', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=header)
-            writer.writeheader()
-            for r in kept:
-                writer.writerow({k: r.get(k, '') for k in header})
-        _replace_preserving_mode(tmp, path)
-    except BaseException:
+    # The annotators rewrite this same file from another process: hold the
+    # ledger lock across the read and the swap so neither loses the other's rows.
+    with ledger_lock(export_dir):
+        with open(path, newline='') as f:
+            rows = list(csv.DictReader(f))
+        kept = [r for r in rows
+                if not (r.get('outcome') == 'pending_expert'
+                        and r.get('basename') in fresh
+                        and r.get('label') not in fresh[r.get('basename')])]
+        if len(kept) == len(rows):
+            return False
+        # Unique tmp name (same rationale as _save): concurrent refreshes must not
+        # consume each other's tmp file mid-replace.
+        fd, tmp = tempfile.mkstemp(dir=export_dir,
+                                   prefix='label_provenance.csv.', suffix='.tmp')
         try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    return True
+            with os.fdopen(fd, 'w', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=header)
+                writer.writeheader()
+                for r in kept:
+                    writer.writerow({k: r.get(k, '') for k in header})
+            _replace_preserving_mode(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        return True
 
 
 def _refresh_provenance_ledgers(paths, reviewer='', log_fn=None):

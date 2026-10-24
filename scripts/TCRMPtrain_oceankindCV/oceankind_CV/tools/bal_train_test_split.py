@@ -16,6 +16,13 @@ import argparse
 import numpy as np
 import yaml
 from statistics import mode
+
+# Images are never deleted: a previous split folder that holds any is moved to
+# <out>/_superseded/<stamp>/ (scripts/_superseded.py; detect_dataset.py has the check).
+_TRAIN_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+sys.path.insert(0, os.path.join(_TRAIN_ROOT, "src"))
+from detect_dataset import set_aside_images  # noqa: E402
+from _superseded import stamp_now  # noqa: E402
 from sklearn.model_selection import StratifiedShuffleSplit
 
 random.seed(1)
@@ -48,7 +55,7 @@ def arg_parse():
     parser.add_argument("--yes", "-y", dest = "assume_yes", action = "store_true",
             help = "Skip the interactive overwrite prompt (for non-TTY callers "
                    "like the orchestrator). Existing train/valid/test dirs will "
-                   "be deleted without asking.")
+                   "be moved to _superseded/ without asking.")
 
     return parser.parse_args()
 
@@ -224,15 +231,17 @@ def main():
             sys.exit()
         else:
             print("✅ CONTINUING...\n")
-        # Delete existing output dirs so the subsequent makedirs() succeeds.
+        # Move existing output dirs aside so the subsequent makedirs() succeeds.
         # This runs for BOTH --yes and interactive-yes paths; previously it
         # was nested under the interactive branch only, which produced
-        # "[Errno 17] File exists" under --yes.
+        # "[Errno 17] File exists" under --yes. Image copies are never
+        # deleted: they go to <out>/_superseded/<stamp>/.
         try:
+            _stamp = stamp_now()
             for _d in (train_out_dir, valid_out_dir, test_out_dir):
                 if os.path.exists(_d):
-                    shutil.rmtree(_d)
-                    print(f"🗑️  Removed existing {_d}")
+                    set_aside_images(_d, base_dir=out_dir, stamp=_stamp)
+                    print(f"📦 Set aside existing {_d}")
         except OSError as error:
             print(f"❌ Error: {error}")
             sys.exit()

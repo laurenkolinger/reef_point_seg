@@ -25,6 +25,7 @@ pipeline's step-6 project folder instead of next to cwd (upstream hardcodes
 
 import argparse
 import os
+import re
 import sys
 
 from ultralytics import YOLO
@@ -32,6 +33,86 @@ from ultralytics import YOLO
 # What ultralytics calls each task, keyed by every spelling this platform uses.
 _TASKS = {'segment': 'segment', 'seg': 'segment', 'segmentation': 'segment',
           'detect': 'detect', 'detection': 'detect', 'bbox': 'detect'}
+
+# GPU traffic (docs/superpowers/specs/2026-09-28-gpu-traffic-design.md,
+# section 7): when VICARIUS starts this training under the "vega" GPU
+# right-of-way tier, stage_runner.py sets this environment variable to the
+# CUDA device string for the card(s) it assigned, in place of --device
+# (including a DDP device list such as "0,1"), because Ultralytics is the
+# thing that reads CUDA_VISIBLE_DEVICES from its own --device string, and
+# VICARIUS's per-card assignment may span both cards without ever setting
+# that variable itself. Unset or empty (every run before this variable
+# existed, and any run a build that predates it still launches): this script
+# behaves exactly as it did before, training on --device as given.
+GPU_DEVICE_ENV = 'VICARIUS_GPU_DEVICE'
+
+# A CUDA device string: one or more non-negative whole numbers, comma
+# separated (Ultralytics' own --device grammar: "0" for one card, "0,1" for
+# DDP across two). Anything else is a malformed assignment and is refused
+# rather than silently ignored or passed through to a training run that
+# would then pick its own card.
+# Matched with fullmatch(), never match(): match() alone would accept a
+# trailing newline ("1\n"), which fullmatch refuses along with anything
+# else the pattern does not account for.
+_DEVICE_STRING_RE = re.compile(r'\d+(,\d+)*')
+
+
+def resolve_device_override(cli_device, env_value):
+    """The --device value to train with, honoring a VICARIUS GPU traffic override.
+
+    Parameters:
+        cli_device: the value --device was parsed to (or its default).
+        env_value: os.environ.get(GPU_DEVICE_ENV), VICARIUS's per-card
+            assignment for this run, or '' / None when it was not set.
+
+    Returns:
+        cli_device unchanged when env_value is falsy (unset or empty): this
+        is the only path a run started before GPU_DEVICE_ENV existed takes,
+        so its behaviour never changes. Otherwise env_value itself, once
+        validated as a CUDA device string.
+
+    Raises:
+        ValueError naming GPU_DEVICE_ENV and the bad value when env_value is
+        set to something that is not a comma-separated list of non-negative
+        whole numbers: a typo'd assignment must fail loudly rather than
+        quietly train on the wrong card, on no card restriction at all, or
+        crash deep inside Ultralytics with a confusing message.
+    """
+    if not env_value:
+        return cli_device
+    if not _DEVICE_STRING_RE.fullmatch(env_value):
+        raise ValueError(
+            f'{GPU_DEVICE_ENV}={env_value!r} is not a valid CUDA device string '
+            "(expected whole numbers separated by commas, e.g. '0' or '0,1'); "
+            'refusing to guess which card to train on')
+    return env_value
+
+
+def apply_gpu_device_override(args):
+    """Replace args.device with VICARIUS's per-card assignment, when given.
+
+    Reads GPU_DEVICE_ENV once and mutates args.device in place; prints one
+    line naming the override when it applies. Unset or empty, this makes no
+    change and prints nothing, so a run with no such variable set is
+    byte-for-byte the run this script made before GPU_DEVICE_ENV existed.
+
+    Parameters:
+        args: the parsed command line (argparse.Namespace); args.device may
+            be replaced.
+
+    Returns:
+        None.
+
+    Raises:
+        ValueError: see resolve_device_override.
+    """
+    env_device = os.environ.get(GPU_DEVICE_ENV, '')
+    if not env_device:
+        return
+    original = args.device
+    args.device = resolve_device_override(args.device, env_device)
+    print(f'[train] {GPU_DEVICE_ENV} overrides --device: training on '
+          f'device={args.device} (was {original})')
 
 
 def yolo_task(task):
@@ -239,6 +320,7 @@ def build_train_kwargs(args):
 
 def main():
     args = arg_parse()
+    apply_gpu_device_override(args)
     if not os.path.isfile(args.src):
         print(f'ERROR: data yaml not found: {args.src}', file=sys.stderr)
         sys.exit(1)

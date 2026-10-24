@@ -160,6 +160,30 @@ def _token_url(remote_url, token):
     return remote_url
 
 
+def _holding_root():
+    """Where retracted review items are kept: the expert library folder
+    (TCRMP_EXPERT_LIBRARY_DIR, else inprocess/_expert_id_library), never the
+    public site's working tree."""
+    from . import library
+    return os.environ.get('TCRMP_EXPERT_LIBRARY_DIR') or library.default_dir()
+
+
+def _set_aside(path, base_dir):
+    """Move an item folder to <expert library>/_superseded/<stamp>/review_items/
+    <uid> instead of deleting it: the crops and masks inside are images, and
+    images are never deleted. The site folder is a git working tree that
+    commit_push publishes whole, so the holding folder lives outside it."""
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import _superseded
+    holding = os.path.abspath(_holding_root())
+    site = os.path.abspath(base_dir)
+    if holding == site or holding.startswith(site + os.sep):
+        raise ValueError(f"the holding folder {holding} must be outside the review site {site}")
+    _superseded.supersede(path, base_dir=base_dir, holding_root=holding,
+                          rel_name=os.path.join('review_items', os.path.basename(path)))
+
+
 class ReviewRepo:
     def __init__(self, root, remote_url='', master_codes_path=None,
                  site_codes_path=None, log_fn=None):
@@ -247,9 +271,11 @@ class ReviewRepo:
             # Re-assert unconditionally so a tree that predates this logic (no
             # .gitignore) is healed before any `git add -A` can stage the lock.
             gi = os.path.join(self.root, '.gitignore')
-            want = '.reefreview.lock\n*.tmp\n'
-            if not os.path.exists(gi) or '.reefreview.lock' not in open(gi).read():
-                _atomic_write(gi, want)
+            want_lines = ['.reefreview.lock', '*.tmp', '_superseded/']
+            have = open(gi).read().splitlines() if os.path.exists(gi) else []
+            missing = [ln for ln in want_lines if ln not in have]
+            if missing:
+                _atomic_write(gi, '\n'.join(have + missing) + '\n')
             self._copy_viewer()
             self._write_readme()
             # Seed codes.json always (atomic); seed an empty manifest only if
@@ -426,7 +452,7 @@ class ReviewRepo:
             self._write_manifest_obj(obj)
             dest = os.path.join(self.items_dir, uid)
             if os.path.isdir(dest):
-                shutil.rmtree(dest, ignore_errors=True)
+                _set_aside(dest, self.root)
             return before - len(obj['items'])
 
     def remove_project(self, project_id):
@@ -453,7 +479,7 @@ class ReviewRepo:
                     continue
                 dest = os.path.join(self.items_dir, uid)
                 if os.path.isdir(dest):
-                    shutil.rmtree(dest, ignore_errors=True)
+                    _set_aside(dest, self.root)
             return {'removed': len(dropped), 'uids': uids}
 
     # ── per-reviewer accumulation + acceptance (CONTRACTS §2,§5,§6) ───

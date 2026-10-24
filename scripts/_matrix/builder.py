@@ -23,6 +23,8 @@ _PKG_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PKG_SCRIPTS not in sys.path:
     sys.path.insert(0, _PKG_SCRIPTS)
 
+from _reefreview.manual_sources import MANUAL_SOURCE_TYPES  # noqa: E402
+from _superseded import is_superseded_path  # noqa: E402
 from _reefreview.mask_registry import MaskRegistry  # noqa: E402
 # The one list of project.json project_type values that mean "trains from a
 # prepared source, holds no annotation work". Imported rather than copied so a
@@ -43,8 +45,9 @@ _OUTCOME_STRENGTH = {
     "not_found": 0,
 }
 
-# Mask source_types that count as a hand-drawn (manual) annotation.
-_MANUAL_SOURCE_TYPES = {"manual_box", "manual_click"}
+# Mask source_types that count as a hand-made (manual) annotation: the one
+# shared list, `merged` included (see _reefreview/manual_sources.py).
+_MANUAL_SOURCE_TYPES = MANUAL_SOURCE_TYPES
 
 # project.json project_type of a run dir minted from a prepared training
 # source. Two kinds exist and both are skipped here:
@@ -222,8 +225,9 @@ def scan_projects(inprocess_root):
 
 def _ledger_files(project_dir):
     """Every label_provenance.csv under a project, sorted."""
-    return sorted(glob.glob(
-        os.path.join(project_dir, "**", "label_provenance.csv"), recursive=True))
+    return sorted(p for p in glob.glob(
+        os.path.join(project_dir, "**", "label_provenance.csv"), recursive=True)
+        if not is_superseded_path(p, root=project_dir))
 
 
 def _ledger_dirs(project_dir):
@@ -303,7 +307,8 @@ def _legacy_rows(project_dir, target_species, skip_dirs=None):
     """
     flat = glob.glob(os.path.join(project_dir, "**", "segmentations", "segmentations.json"), recursive=True)
     nested = glob.glob(os.path.join(project_dir, "**", "segmentations", "*", "segmentations.json"), recursive=True)
-    files = sorted(set(flat) | set(nested))
+    files = sorted(p for p in set(flat) | set(nested)
+                   if not is_superseded_path(p, root=project_dir))
     skip_dirs = set(skip_dirs or ())
     rows = []
     for fpath in files:

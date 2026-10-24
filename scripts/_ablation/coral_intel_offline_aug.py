@@ -57,6 +57,11 @@ import numpy as np
 import yaml
 from PIL import Image, ImageOps
 
+# Images are never deleted: --force moves the previous images/ folder to
+# <out>/_superseded/<stamp>/ (scripts/_superseded.py, one folder up).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _superseded as _sup  # noqa: E402
+
 AST = timezone(timedelta(hours=-4))
 
 REPO_DIR = Path(__file__).resolve().parents[2]
@@ -793,17 +798,19 @@ def build_variants_for_stem(
 # ── output-directory management ─────────────────────────────────────────────
 
 def clear_managed_outputs(out_dir: Path, label_dir_name: str) -> None:
-    """Remove exactly the entries this tool writes under ``out_dir``.
+    """Clear exactly the entries this tool writes under ``out_dir``.
 
     Nothing outside ``MANAGED_OUTPUT_ENTRIES``, ``VEGA_LABEL_DIRS`` and
-    ``label_dir_name``, and nothing outside ``out_dir``, is touched.
+    ``label_dir_name``, and nothing outside ``out_dir``, is touched. An entry
+    that holds real image files (the previous ``images/`` folder) is moved to
+    ``<out_dir>/_superseded/<stamp>/<name>``, never deleted; label folders,
+    metadata files and folders of symlinks hold no image bytes and are removed.
     """
+    stamp = _sup.stamp_now()
     for name in dict.fromkeys((*MANAGED_OUTPUT_ENTRIES, *VEGA_LABEL_DIRS, label_dir_name)):
         target = out_dir / name
-        if target.is_dir():
-            shutil.rmtree(target)
-        elif target.exists():
-            target.unlink()
+        if target.is_symlink() or target.exists():
+            _sup.supersede_if_images(str(target), base_dir=str(out_dir), stamp=stamp)
 
 
 def write_json(path: Path, doc: Mapping[str, Any]) -> None:

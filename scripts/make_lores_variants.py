@@ -10,12 +10,17 @@ re-run when new 4K data lands. Idempotent.
 import argparse
 import csv
 import os
+import tempfile
 from PIL import Image
+
+import _superseded as _sup
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_CLIP = os.path.join(_REPO, "supporting_data", "TCRMP_clip")
 DEFAULT_LORES = os.path.join(_REPO, "supporting_data", "TCRMP_clip_lores")
 LONG_EDGE = 1920
+JPEG_QUALITY = 92
+TEMP_PREFIX = ".lores_"   # hidden, so the clip index and the walks never list it
 MANIFEST_FIELDS = ["basename", "source_path", "lores_path", "orig_width",
                    "orig_height", "lores_width", "lores_height", "scale"]
 
@@ -42,7 +47,8 @@ def _all_files(clip_root):
     except Exception:
         paths = []
         for root, dirs, files in os.walk(clip_root):
-            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            dirs[:] = [d for d in dirs
+                       if not d.startswith(".") and d != _sup.SUPERSEDED_DIR_NAME]
             for fn in files:
                 if not fn.startswith("."):
                     paths.append(os.path.join(root, fn))
@@ -63,11 +69,49 @@ def _iter_images(clip_root):
         yield path
 
 
+def _write_lores(src, lores_path, size, lores_root, stamp, log=print):
+    """Write the low-res copy of src to lores_path without losing an old copy.
+
+    The new JPEG is written to a hidden temp file in the same folder first, so
+    a failed write never truncates the copy already there. An existing copy is
+    then moved to <lores_root>/_superseded/<stamp>/<relative path> (images are
+    never deleted) and the temp file is renamed into place.
+
+    Parameters:
+        src: the full-size source frame.
+        lores_path: where the low-res copy belongs, inside lores_root.
+        size: (width, height) of the copy.
+        lores_root: the mirror tree the holding folder hangs from.
+        stamp: YYYYMMDD-HHMMSS shared by every move in one run.
+        log: a callable taking one line.
+    Raises:
+        OSError: the temp file could not be written or moved; any old copy
+            is still at lores_path or in the holding folder.
+    """
+    folder = os.path.dirname(lores_path)
+    os.makedirs(folder, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=TEMP_PREFIX, suffix=".jpg", dir=folder)
+    os.close(fd)
+    try:
+        with Image.open(src) as im:
+            im = im.convert("RGB").resize(size, Image.LANCZOS)
+            im.save(tmp_path, "JPEG", quality=JPEG_QUALITY)
+        if os.path.lexists(lores_path):
+            _sup.supersede(lores_path, base_dir=lores_root, stamp=stamp, log=log)
+        os.replace(tmp_path, lores_path)
+    except BaseException:
+        # tmp_path is the half-written file this call made, never a copy anyone relies on
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
 def generate(clip_root, lores_root, long_edge=LONG_EDGE, force=False,
              dry_run=False, log=print):
     stats = {"scanned": 0, "generated": 0, "skipped_small": 0, "up_to_date": 0,
               "manifest_rows": 0}
     manifest_rows = []
+    stamp = _sup.stamp_now()
     for src in _iter_images(clip_root):
         stats["scanned"] += 1
         try:
@@ -99,10 +143,7 @@ def generate(clip_root, lores_root, long_edge=LONG_EDGE, force=False,
             log(f"[dry-run] would write {lores_path} ({lw}x{lh})")
             stats["generated"] += 1
             continue
-        os.makedirs(os.path.dirname(lores_path), exist_ok=True)
-        with Image.open(src) as im:
-            im = im.convert("RGB").resize((lw, lh), Image.LANCZOS)
-            im.save(lores_path, "JPEG", quality=92)
+        _write_lores(src, lores_path, (lw, lh), lores_root, stamp, log)
         stats["generated"] += 1
         log(f"wrote {lores_path} ({lw}x{lh})")
 

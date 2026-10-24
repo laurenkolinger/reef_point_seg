@@ -12,16 +12,29 @@ Restructures CVAT bounding box annotations into standardized YOLO format:
 
 import os
 import shutil
+import sys
 import argparse
 import re
 from pathlib import Path
 from coco_to_yolo_format import COCO2YOLOBB
 from PIL import Image
 
+# Images are never deleted: an image removed here is moved to
+# <dataset>/_superseded/<stamp>/ (scripts/_superseded.py, three folders up).
+_SCRIPTS_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
+sys.path.insert(0, _SCRIPTS_DIR)
+import _superseded as _sup  # noqa: E402
+sys.path.insert(0, os.path.join(_SCRIPTS_DIR, "TCRMPtrain_oceankindCV", "src"))
+from detect_dataset import set_aside_images  # noqa: E402
+
 def clean_directory(directory):
-    """Remove directory and its contents if it exists"""
-    if os.path.exists(directory):
-        shutil.rmtree(directory)
+    """Empty ``directory`` and recreate it.
+
+    A previous folder that holds any image is moved to
+    <parent>/_superseded/<stamp>/<name> instead of being removed.
+    """
+    directory = os.path.abspath(directory)
+    set_aside_images(directory, base_dir=os.path.dirname(directory))
     os.makedirs(directory)
 
 def create_directory_structure(base_path):
@@ -133,7 +146,14 @@ def validate_dataset(images_dir, labels_dir):
     return images_without_labels, labels_without_images
 
 def handle_mismatches(images_dir, labels_dir, images_without_labels, labels_without_images):
-    """Handle mismatched files with user interaction"""
+    """Handle mismatched files with user interaction.
+
+    Images the user agrees to remove are moved to
+    <dataset>/_superseded/<stamp>/all_images/ (never deleted); unmatched label
+    files are text and are still removed.
+    """
+    dataset_dir = os.path.dirname(os.path.abspath(images_dir))
+    stamp = _sup.stamp_now()
     if not images_without_labels and not labels_without_images:
         print("\nValidation successful! All images have corresponding labels and vice versa.")
         return
@@ -145,14 +165,14 @@ def handle_mismatches(images_dir, labels_dir, images_without_labels, labels_with
         for img in sorted(images_without_labels):
             print(f"  - {img}")
         
-        response = input("\nWould you like to remove these images without labels? (y/n): ").lower()
+        response = input("\nWould you like to move these images without labels to _superseded? (y/n): ").lower()
         if response == 'y':
             for img in images_without_labels:
                 for ext in ['.png', '.jpg', '.jpeg', '.webp', '.jfif']:
                     img_path = os.path.join(images_dir, f"{img}{ext}")
                     if os.path.exists(img_path):
-                        os.remove(img_path)
-                        print(f"Removed: {img_path}")
+                        _sup.supersede(img_path, base_dir=dataset_dir, stamp=stamp)
+                        print(f"Set aside (moved to _superseded): {img_path}")
                         break
     
     if labels_without_images:

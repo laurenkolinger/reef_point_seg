@@ -45,9 +45,15 @@ Stdlib + PIL only. No pytest; tests/test_custom_imports.py drives this.
 import json
 import os
 import shutil
+import sys
 from datetime import datetime, timedelta, timezone
 
 from PIL import Image, ImageOps
+
+# Images are never deleted: an upload that cannot be read as an image is moved
+# to custom_imports/_superseded/<stamp>/ (scripts/_superseded.py, two folders up).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import _superseded as _sup  # noqa: E402
 
 LORES_LONG_EDGE = 1920           # same long edge as make_lores_variants.py
 ALLOWED_EXTS = {'.jpg', '.jpeg', '.png'}
@@ -136,6 +142,7 @@ def ingest_files(export_dir, items, taken_names=None, long_edge=LORES_LONG_EDGE,
     taken = set(taken_names or [])
     taken.update(e.get('filename', '') for e in existing)
 
+    import_stamp = _sup.stamp_now()
     orig_dir = os.path.join(imports_dir(export_dir), 'originals')
     raw_dir = os.path.join(imports_dir(export_dir), 'raw')
 
@@ -189,9 +196,11 @@ def ingest_files(export_dir, items, taken_names=None, long_edge=LORES_LONG_EDGE,
         except Exception as e:
             skipped.append((str(orig_name), f'not a readable image: {e}'))
             try:
-                os.remove(original_path)
-            except OSError:
-                pass
+                _sup.supersede(original_path, base_dir=imports_dir(export_dir),
+                               stamp=import_stamp, log=log)
+            except (OSError, ValueError) as move_error:
+                skipped.append((str(orig_name),
+                                f'could not set the unreadable upload aside: {move_error}'))
             continue
 
         taken.add(delivered_name)

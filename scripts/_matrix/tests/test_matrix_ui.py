@@ -18,6 +18,18 @@ Exits nonzero on any failed assertion. Uses a throwaway registry dir that is
 removed at exit (never the real inprocess/_mask_registry).
 """
 
+# Keep this suite off the live mask registry, expert library and clip index
+# when it is run alone: scripts/tests/_isolation.py sets the isolating
+# variables to temp dirs and blocks any write to the live stores.
+import os as _iso_os
+import sys as _iso_sys
+_iso_dir = _iso_os.path.dirname(_iso_os.path.abspath(__file__))
+while _iso_os.path.basename(_iso_dir) != 'scripts' and _iso_dir != _iso_os.path.dirname(_iso_dir):
+    _iso_dir = _iso_os.path.dirname(_iso_dir)
+_iso_sys.path.insert(0, _iso_os.path.join(_iso_dir, 'tests'))
+import _isolation
+_isolation.install()
+
 import atexit
 import json
 import os
@@ -497,8 +509,8 @@ def test_quality_sweep_task5():
     for val in ("all", "hand", "hand_model"):
         check(f'value="{val}"' in training_section, f"provenance radio {val} present")
     check("SOURCE_TYPE_MAP" in stats, "matrix_stats.js maps the radio value to a source_types list")
-    check("['manual_box', 'manual_click', 'edit']" in stats, "hand-drawn-only source_types list matches the pin")
-    check("['manual_box', 'manual_click', 'edit', 'model']" in stats, "hand-drawn+model source_types list matches the pin")
+    check("['manual_box', 'manual_click', 'merged', 'edit']" in stats, "hand-drawn-only source_types list matches the pin")
+    check("['manual_box', 'manual_click', 'merged', 'edit', 'model']" in stats, "hand-drawn+model source_types list matches the pin")
     check("source_types: selectedSourceType()" in stats, "build posts source_types")
     # Rebuild-existing-name checkbox.
     check('id="mx-composite-rebuild"' in html, "Rebuild existing name checkbox present")
